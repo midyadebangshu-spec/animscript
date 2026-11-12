@@ -195,6 +195,7 @@ pub struct Joint {
     upper_imp: f64,
     motor_imp: f64,
     perp: Vec2,
+    limit_block_imp: f64,
 }
 
 fn solve22(k11: f64, k12: f64, k22: f64, b: Vec2) -> Vec2 {
@@ -204,6 +205,25 @@ fn solve22(k11: f64, k12: f64, k22: f64, b: Vec2) -> Vec2 {
     }
     let inv = 1.0 / det;
     v2(inv * (k22 * b.x - k12 * b.y), inv * (k11 * b.y - k12 * b.x))
+}
+
+fn solve33(k: &[[f64; 3]; 3], b: [f64; 3]) -> [f64; 3] {
+    let det = k[0][0] * (k[1][1] * k[2][2] - k[1][2] * k[2][1])
+        - k[0][1] * (k[1][0] * k[2][2] - k[1][2] * k[2][0])
+        + k[0][2] * (k[1][0] * k[2][1] - k[1][1] * k[2][0]);
+    if det.abs() < 1e-300 {
+        return [0.0; 3];
+    }
+    let d = |c: usize| {
+        let mut m = *k;
+        for r in 0..3 {
+            m[r][c] = b[r];
+        }
+        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+            - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+    };
+    [d(0) / det, d(1) / det, d(2) / det]
 }
 
 fn rel_angle(ba: &Body, bb: &Body, ref_q: Rot) -> f64 {
@@ -273,6 +293,7 @@ impl Joint {
             upper_imp: 0.0,
             motor_imp: 0.0,
             perp: Vec2::ZERO,
+            limit_block_imp: 0.0,
         }
     }
 
@@ -370,6 +391,16 @@ impl Joint {
         }
         if self.enable_limit && axial_mass > 0.0 {
             let angle = rel_angle(ba, bb, self.ref_q);
+            // an engaged limit is solved together with the point constraint (a 3x3 block), so it holds
+            // even a body whose own inertia is tiny compared with its swing about the anchor
+            let (cl, cu) = (angle - self.lower, self.upper - angle);
+            let w_rel = bb.w - ba.w;
+            let low = cl + ctx.h * w_rel <= 0.0;
+            let up = cu - ctx.h * w_rel <= 0.0;
+            if low != up {
+                self.solve_limit_block(ba, bb, ctx, low, if low { cl } else { cu });
+                return;
+            }
             let (bias, ms, is) = ctx.limit(angle - self.lower);
             let cdot = bb.w - ba.w;
             let new =
@@ -388,6 +419,60 @@ impl Joint {
             ba.w += ia * impulse;
             bb.w -= ib * impulse;
         }
+    }
+
+    /// Point constraint plus one angular limit, solved as a 3x3 block (Box2D v2.4 style).
+    fn solve_limit_block(&mut self, ba: &mut Body, bb: &mut Body, ctx: &Ctx, lower: bool, c: f64) {
+        let (ma, ia, mb, ib) = (ba.inv_mass, ba.inv_i, bb.inv_mass, bb.inv_i);
+        let ra = ba.q.rotate(self.la - ba.local_center);
+        let rb = bb.q.rotate(self.lb - bb.local_center);
+        let sign = if lower { 1.0 } else { -1.0 };
+        let cdot_pt = (bb.v + cross_sv(bb.w, rb)) - (ba.v + cross_sv(ba.w, ra));
+        let cdot_l = sign * (bb.w - ba.w);
+        let pos_err = (bb.c + rb) - (ba.c + ra);
+        let (bias_pt, bias_l) = if ctx.use_bias {
+            (
+                pos_err * ctx.soft.bias_rate,
+                if c > 0.0 {
+                    c * ctx.inv_h
+                } else {
+                    c * ctx.soft.bias_rate
+                },
+            )
+        } else {
+            (Vec2::ZERO, if c > 0.0 { c * ctx.inv_h } else { 0.0 })
+        };
+        let k11 = ma + mb + ra.y * ra.y * ia + rb.y * rb.y * ib;
+        let k12 = -ra.y * ra.x * ia - rb.y * rb.x * ib;
+        let k22 = ma + mb + ra.x * ra.x * ia + rb.x * rb.x * ib;
+        let k13 = sign * (-ra.y * ia - rb.y * ib);
+        let k23 = sign * (ra.x * ia + rb.x * ib);
+        let k33 = ia + ib;
+        let rhs = [
+            -(cdot_pt.x + bias_pt.x),
+            -(cdot_pt.y + bias_pt.y),
+            -(cdot_l + bias_l),
+        ];
+        let k = [[k11, k12, k13], [k12, k22, k23], [k13, k23, k33]];
+        let sol = solve33(&k, rhs);
+        let new_l = self.limit_block_imp + sol[2];
+        let (p, l) = if new_l >= 0.0 {
+            (v2(sol[0], sol[1]), sol[2])
+        } else {
+            // the limit would pull: release it and solve the point alone with the old limit impulse removed
+            let r = [
+                rhs[0] + self.limit_block_imp * k13,
+                rhs[1] + self.limit_block_imp * k23,
+            ];
+            let q = solve22(k11, k12, k22, v2(-r[0], -r[1]));
+            (v2(-q.x, -q.y), -self.limit_block_imp)
+        };
+        self.limit_block_imp = (self.limit_block_imp + l).max(0.0);
+        self.lin += p;
+        ba.v -= p * ma;
+        ba.w -= ia * (ra.cross(p) + sign * l);
+        bb.v += p * mb;
+        bb.w += ib * (rb.cross(p) + sign * l);
     }
 
     fn solve_weld(&mut self, ba: &mut Body, bb: &mut Body, ctx: &Ctx) {

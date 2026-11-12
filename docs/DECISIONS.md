@@ -422,9 +422,10 @@ judgement calls I expect you to want to look at.
 93. **Arguments.** Tuples with named fields are not in the language yet, so `spring` and `motor` are positional
     pairs. The names `static`, `dynamic` and `kinematic` stand for themselves in `kind:` like `x` and `y` do.
     Tuples gained `.x` and `.y`.
-94. **An angle limit needs inertia.** The limit constrains only the relative angular velocity, so it cannot hold
-    a point mass on a long arm (its own inertia is almost zero), exactly as in Box2D. Limbs should be shapes with
-    area along the arm. The engine test uses a rod for this reason.
+94. **Angle limits.** An engaged revolute limit is solved together with the joint's point constraint as a 3x3
+    block (as Box2D v2.4 does), so it holds even a point mass on a long arm, whose own inertia is tiny. (The
+    first version solved them separately and leaked by about 0.18 rad on such a body.) Engaged means the limit
+    would be violated within the substep; the block impulse is not warm started.
 95. **Sleeping.** A body sleeps when its island (bodies linked by touching contacts and joints, never through
     static bodies) has stayed under 0.05 m/s and 2 deg/s for 0.5 s; touching a moving body, an impulse or a
     velocity change wakes the whole island. A moving kinematic body keeps what touches it awake.

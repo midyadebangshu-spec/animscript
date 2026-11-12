@@ -140,14 +140,7 @@ fn a_rope_goes_slack_but_never_stretches() {
 fn a_revolute_limit_stops_the_swing() {
     let mut w = world();
     let pivot = anchor_body(&mut w, v2(0.0, 0.0));
-    // a horizontal rod hinged at one end: gravity swings it down and the limit stops it. (A point
-    // mass has almost no rotational inertia, so an angle limit cannot hold it; real limbs are rods.)
-    let bob = w.create_body(&BodyDef {
-        kind: BodyKind::Dynamic,
-        position: v2(0.5, 0.0),
-        ..BodyDef::default()
-    });
-    w.add_fixture(bob, &FixtureDef::new(Shape::boxed(0.5, 0.05)));
+    let bob = ball(&mut w, v2(1.0, 0.0)); // a point mass on a 1 m arm: tiny inertia, the hard case
     w.create_joint(&JointDef::revolute(pivot, bob, v2(0.0, 0.0)).limits(-0.5, 0.5));
     let mut max_angle: f64 = 0.0;
     for _ in 0..(3.0 / DT) as usize {

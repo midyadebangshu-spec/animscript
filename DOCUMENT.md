@@ -1372,7 +1372,6 @@ f.set_target((100, 100))
   centres (`anchor_a:`, `anchor_b:` choose other points); a `distance` without `spring` is a rigid rod.
 - Joined bodies do not collide with each other unless you add `collide: true`.
 - An angle `limits` needs angles (`60.deg`); `motor` is `(speed, torque)` with the speed an angle per second.
-- A limit holds a body that has some length along the joint (a limb), not a tiny weight on a long arm.
 - `distance(a, b)` with two *shapes* is the joint; with two points it is still the distance between points.
 
 ### Looking at what the engine does
