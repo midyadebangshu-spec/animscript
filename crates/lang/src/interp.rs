@@ -1,0 +1,1321 @@
+//! Expression evaluation, statement execution (as resumable tasks) and the shape methods.
+use crate::ast::*;
+use crate::value::*;
+use animscript_core::*;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::rc::Rc;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Mode {
+    /// Top level and `shape` build blocks.
+    Build,
+    /// A scene's `setup:` block.
+    Setup,
+    /// `main:`, rules, and everything started from them.
+    Run,
+}
+
+#[derive(Clone, Default, Debug)]
+pub struct Vars {
+    pub scopes: Vec<HashMap<String, Value>>,
+}
+impl Vars {
+    pub fn new() -> Vars {
+        Vars { scopes: vec![HashMap::new()] }
+    }
+    pub fn get(&self, n: &str) -> Option<&Value> {
+        self.scopes.iter().rev().find_map(|s| s.get(n))
+    }
+    pub fn define(&mut self, n: &str, v: Value) {
+        self.scopes.last_mut().unwrap().insert(n.to_string(), v);
+    }
+    pub fn push(&mut self) {
+        self.scopes.push(HashMap::new());
+    }
+    pub fn pop(&mut self) {
+        self.scopes.pop();
+    }
+    pub fn flatten(&self) -> Vars {
+        let mut m = HashMap::new();
+        for s in &self.scopes {
+            for (k, v) in s {
+                m.insert(k.clone(), v.clone());
+            }
+        }
+        Vars { scopes: vec![m] }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Entity {
+    pub states: Vec<String>,
+    pub flags: BTreeMap<String, bool>,
+}
+
+/// A zero-time effect that is applied at the end of the delta (spec §6.3).
+#[derive(Clone, Debug)]
+pub enum Staged {
+    Flag { entity: String, flag: String, value: bool },
+    Move { shape: String, r: ElemRef, x: f64, y: f64, by: bool },
+    Style { shape: String, prop: String, value: Value },
+}
+
+#[derive(Clone, Debug)]
+pub enum Req {
+    Wait(i64),
+    Act(ActionReq),
+    Together(Vec<Block>),
+}
+pub enum Step {
+    Done,
+    Blocked(Req),
+}
+
+pub enum Frame {
+    Block { stmts: Block, idx: usize, scope: bool },
+    Repeat { body: Block, left: i64 },
+    For { var: String, items: Vec<Value>, idx: usize, body: Block },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TaskState {
+    Ready,
+    Waiting,
+    BlockedAct,
+    BlockedKids,
+}
+
+pub struct Task {
+    pub id: u32,
+    pub frames: Vec<Frame>,
+    pub vars: Vars,
+    pub mode: Mode,
+    pub priority: i64,
+    pub parent: Option<u32>,
+    pub pending: u32,
+    pub state: TaskState,
+    pub wake: i64,
+    pub rule: Option<usize>,
+}
+impl Task {
+    pub fn new(id: u32, block: Block, mut vars: Vars, mode: Mode, scope: bool) -> Task {
+        if scope {
+            vars.push();
+        }
+        Task {
+            id,
+            frames: vec![Frame::Block { stmts: block, idx: 0, scope }],
+            vars,
+            mode,
+            priority: 0,
+            parent: None,
+            pending: 0,
+            state: TaskState::Ready,
+            wake: 0,
+            rule: None,
+        }
+    }
+    fn push_block(&mut self, b: Block, bind: Vec<(String, Value)>) {
+        self.vars.push();
+        for (k, v) in bind {
+            self.vars.define(&k, v);
+        }
+        self.frames.push(Frame::Block { stmts: b, idx: 0, scope: true });
+    }
+}
+
+pub struct Interp {
+    pub src: String,
+    pub program: Program,
+    pub shapes: BTreeMap<String, Shape>,
+    pub shape_order: Vec<String>,
+    pub entities: BTreeMap<String, Entity>,
+    pub entity_order: Vec<String>,
+    pub globals: HashMap<String, Value>,
+    /// Warnings collected while evaluating.
+    pub diagnostics: Vec<Diagnostic>,
+    pub fps: Rat,
+    pub canvas: (u32, u32),
+    pub background: Option<[u8; 4]>,
+    pub tick: i64,
+    pub delta: u32,
+    pub events: BTreeSet<String>,
+    pub staged: Vec<Staged>,
+    pub trace_on: bool,
+    pub trace: Vec<String>,
+}
+
+pub const TOPOLOGY_METHODS: &[&str] =
+    &["subdivide", "extrude", "bevel", "round", "smooth", "merge", "delete", "bend", "set_handle", "set_handles", "straighten", "copy"];
+
+fn parse_elem_name(n: &str) -> Option<(Kind, u32)> {
+    let mut ch = n.chars();
+    let kind = Kind::from_letter(ch.next()?)?;
+    let rest: String = ch.collect();
+    if rest.is_empty() || rest.starts_with('0') || !rest.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some((kind, rest.parse().ok()?))
+}
+
+fn type_err(msg: impl Into<String>) -> Diagnostic {
+    Diagnostic::new("E-TYP-001", msg)
+}
+
+impl Interp {
+    pub fn new(src: &str, program: Program) -> Res<Interp> {
+        let mut it = Interp {
+            src: src.to_string(),
+            fps: Rat::int(24),
+            canvas: (1280, 720),
+            background: None,
+            shapes: BTreeMap::new(),
+            shape_order: vec![],
+            entities: BTreeMap::new(),
+            entity_order: vec![],
+            globals: HashMap::new(),
+            diagnostics: vec![],
+            tick: 0,
+            delta: 0,
+            events: BTreeSet::new(),
+            staged: vec![],
+            trace_on: false,
+            trace: vec![],
+            program: Program::default(),
+        };
+        if let Some(p) = &program.project {
+            if p.anim_version.is_none() {
+                return Err(Diagnostic::new("E-PRJ-001", "project is missing `anim_version`")
+                    .at(p.span)
+                    .help("add `anim_version: \"0.1\"` so a future compiler can refuse files it does not understand"));
+            }
+            it.fps = Rat::new(p.fps.0 as i128, p.fps.1 as i128);
+            it.canvas = p.canvas;
+            it.background = p.background;
+        }
+        for e in &program.entities {
+            if it.entities.contains_key(&e.name) {
+                return Err(Diagnostic::new("E-NAM-002", format!("duplicate declaration `{}`", e.name)).at(e.span));
+            }
+            let flags = e.states.iter().map(|s| (s.clone(), false)).collect();
+            it.entities.insert(e.name.clone(), Entity { states: e.states.clone(), flags });
+            it.entity_order.push(e.name.clone());
+        }
+        it.program = program;
+        Ok(it)
+    }
+
+    /// Run the top-level statements (the build phase) and publish their `let` bindings as globals.
+    pub fn build(&mut self) -> Res<()> {
+        let block: Block = Rc::new(self.program.top.clone());
+        let mut t = Task::new(0, block, Vars::new(), Mode::Build, false);
+        self.run_sync(&mut t)?;
+        self.globals = t.vars.scopes[0].clone();
+        Ok(())
+    }
+
+    /// Run a task that must not block (build and setup code) to completion.
+    pub fn run_sync(&mut self, t: &mut Task) -> Res<()> {
+        while let Step::Blocked(_) = self.step(t)? {}
+        Ok(())
+    }
+
+    pub fn trace_line(&mut self, kind: &str, detail: &str) {
+        if self.trace_on {
+            let l = format!("tick {:03} d{} {:<7} {}", self.tick, self.delta, kind, detail);
+            self.trace.push(l);
+        }
+    }
+
+    pub fn span_text(&self, sp: Span) -> String {
+        self.src
+            .lines()
+            .nth(sp.line as usize - 1)
+            .map(|l| l.chars().skip(sp.col as usize - 1).take((sp.end_col - sp.col) as usize).collect())
+            .unwrap_or_default()
+    }
+
+    // ---- task stepping -----------------------------------------------------------------
+
+    pub fn step(&mut self, t: &mut Task) -> Res<Step> {
+        let mut budget = 5_000_000u32;
+        loop {
+            budget -= 1;
+            if budget == 0 {
+                return Err(Diagnostic::new("E-STM-003", "a loop that never blocks ran for too long")
+                    .help("a loop body in `main:` or a rule must contain a `wait` or a timed action"));
+            }
+            let Some(top) = t.frames.last_mut() else { return Ok(Step::Done) };
+            match top {
+                Frame::Block { stmts, idx, scope } => {
+                    if *idx >= stmts.len() {
+                        let sc = *scope;
+                        t.frames.pop();
+                        if sc {
+                            t.vars.pop();
+                        }
+                        continue;
+                    }
+                    let stmts = Rc::clone(stmts);
+                    let i = *idx;
+                    *idx += 1;
+                    let st = &stmts[i];
+                    if let Some(req) = self.exec(st, t).map_err(|d| d.or_at(st.span))? {
+                        if t.mode != Mode::Run {
+                            return Err(Diagnostic::new("E-STM-001", "blocking statement outside a running scene")
+                                .at(st.span)
+                                .help("build blocks and `setup:` may contain only zero-time statements; move this to `main:` or a rule"));
+                        }
+                        return Ok(Step::Blocked(req));
+                    }
+                }
+                Frame::Repeat { body, left } => {
+                    if *left <= 0 {
+                        t.frames.pop();
+                        continue;
+                    }
+                    *left -= 1;
+                    let b = Rc::clone(body);
+                    t.push_block(b, vec![]);
+                }
+                Frame::For { var, items, idx, body } => {
+                    if *idx >= items.len() {
+                        t.frames.pop();
+                        continue;
+                    }
+                    let v = items[*idx].clone();
+                    let var = var.clone();
+                    *idx += 1;
+                    let b = Rc::clone(body);
+                    t.push_block(b, vec![(var, v)]);
+                }
+            }
+        }
+    }
+
+    fn exec(&mut self, st: &Stmt, t: &mut Task) -> Res<Option<Req>> {
+        let mode = t.mode;
+        match &st.kind {
+            StmtKind::Pass => {}
+            StmtKind::Let(name, e) => {
+                let v = self.eval(e, &t.vars, mode)?;
+                if matches!(v, Value::Fresh(_)) {
+                    return Err(type_err("a new shape must be declared with `shape name = ...`").help("`let` cannot bind a freshly created shape"));
+                }
+                t.vars.define(name, v);
+            }
+            StmtKind::ShapeDecl { name, expr, body } => {
+                if mode == Mode::Run {
+                    return Err(Diagnostic::new("E-SHP-003", "shapes cannot be created while the scene is running")
+                        .help("declare shapes at the top level or in `setup:`"));
+                }
+                let v = self.eval(expr, &t.vars, mode)?;
+                let Value::Fresh(mut sh) = v else {
+                    return Err(type_err(format!("`shape {name} = ...` needs a new shape, found {}", v.type_name()))
+                        .help("create one with `square`, `rectangle`, `triangle`, `circle`, `polygon`, `line` or `.copy()`"));
+                };
+                if self.shapes.contains_key(name) || self.entities.contains_key(name) || t.vars.get(name).is_some() {
+                    return Err(Diagnostic::new("E-NAM-002", format!("duplicate declaration `{name}`")));
+                }
+                sh.name = name.clone();
+                self.shapes.insert(name.clone(), *sh);
+                self.shape_order.push(name.clone());
+                if let Some(b) = body {
+                    t.push_block(Rc::clone(b), vec![]);
+                }
+            }
+            StmtKind::Assign(target, e) => {
+                let v = self.eval(e, &t.vars, mode)?;
+                self.assign(target, v, &t.vars, mode)?;
+            }
+            StmtKind::Expr { expr, over, ease } => {
+                let extra = {
+                    let mut x = vec![];
+                    if let Some(o) = over {
+                        x.push((Some("over".to_string()), self.eval(o, &t.vars, mode)?));
+                    }
+                    if let Some(o) = ease {
+                        x.push((Some("ease".to_string()), self.eval(o, &t.vars, mode)?));
+                    }
+                    x
+                };
+                let v = if extra.is_empty() {
+                    self.eval(expr, &t.vars, mode)?
+                } else if let ExprKind::Call(f, args) = &expr.kind {
+                    self.eval_call(expr, f, args, extra, &t.vars, mode)?
+                } else {
+                    return Err(Diagnostic::new("E-SYN-001", "`over` / `ease` can only follow a call").at(expr.span));
+                };
+                match v {
+                    Value::Pending(req) => return Ok(Some(Req::Act(*req))),
+                    Value::Fresh(_) => return Err(type_err("a new shape must be declared with `shape name = ...`")),
+                    _ => {}
+                }
+            }
+            StmtKind::For { var, iter, body } => {
+                let items = match self.eval(iter, &t.vars, mode)? {
+                    Value::List(l) => l,
+                    other => return Err(type_err(format!("cannot loop over a {}", other.type_name())).help("loop over a range `1..4` or a list")),
+                };
+                t.frames.push(Frame::For { var: var.clone(), items, idx: 0, body: Rc::clone(body) });
+            }
+            StmtKind::If { cond, then, else_ } => {
+                let c = match self.eval(cond, &t.vars, mode)? {
+                    Value::Bool(b) => b,
+                    other => return Err(type_err(format!("`if` needs a Bool, found {}", other.type_name()))),
+                };
+                if c {
+                    t.push_block(Rc::clone(then), vec![]);
+                } else if let Some(e) = else_ {
+                    t.push_block(Rc::clone(e), vec![]);
+                }
+            }
+            StmtKind::Repeat { count, body } => match self.eval(count, &t.vars, mode)? {
+                Value::Int(n) if n >= 0 => t.frames.push(Frame::Repeat { body: Rc::clone(body), left: n }),
+                other => return Err(type_err(format!("`repeat` needs a non-negative Int, found {}", other.type_name()))),
+            },
+            StmtKind::Wait(e) => {
+                let v = self.eval(e, &t.vars, mode)?;
+                let n = self.frames_of(&v, e.span)?;
+                return Ok(Some(Req::Wait(n)));
+            }
+            StmtKind::Together(body) => {
+                let kids: Vec<Block> = body.iter().map(|s| Rc::new(vec![s.clone()])).collect();
+                return Ok(Some(Req::Together(kids)));
+            }
+            StmtKind::Become { target, flag, set } => {
+                let ent = self.entities.get(target).ok_or_else(|| {
+                    Diagnostic::new("E-NAM-001", format!("unknown entity `{target}`")).help("declare it with `prop name:` and `states: ...`")
+                })?;
+                if !ent.states.contains(flag) {
+                    return Err(Diagnostic::new("E-NAM-003", format!("`{target}` has no authored flag `{flag}`"))
+                        .help(format!("declared flags: {}", ent.states.join(", "))));
+                }
+                let (entity, flag) = (target.clone(), flag.clone());
+                self.apply_or_stage(Staged::Flag { entity, flag, value: *set }, mode)?;
+            }
+            StmtKind::Note(s) => {
+                self.trace_line("NOTE", s);
+            }
+            StmtKind::Assert(e) => match self.eval(e, &t.vars, mode)? {
+                Value::Bool(true) => {}
+                Value::Bool(false) => {
+                    return Err(Diagnostic::new("E-RUN-004", "assertion failed").label("this condition is false"));
+                }
+                other => return Err(type_err(format!("`assert` needs a Bool, found {}", other.type_name()))),
+            },
+        }
+        Ok(None)
+    }
+
+    pub fn apply_or_stage(&mut self, s: Staged, mode: Mode) -> Res<()> {
+        if mode == Mode::Run {
+            self.staged.push(s);
+            Ok(())
+        } else {
+            self.apply_staged_one(s)
+        }
+    }
+
+    /// Apply every staged effect together at the end of a delta. Returns how many there were.
+    pub fn apply_staged(&mut self) -> Res<usize> {
+        let all = std::mem::take(&mut self.staged);
+        let n = all.len();
+        for s in all {
+            self.apply_staged_one(s)?;
+        }
+        Ok(n)
+    }
+
+    fn apply_staged_one(&mut self, s: Staged) -> Res<()> {
+        match s {
+            Staged::Flag { entity, flag, value } => {
+                if let Some(e) = self.entities.get_mut(&entity) {
+                    e.flags.insert(flag, value);
+                }
+            }
+            Staged::Move { shape, r, x, y, by } => {
+                let sh = self.shapes.get_mut(&shape).unwrap();
+                sh.warn_on_edit = false;
+                if by {
+                    sh.move_by(r, x, y)?;
+                } else {
+                    sh.move_to(r, x, y)?;
+                }
+            }
+            Staged::Style { shape, prop, value } => self.set_style(&shape, &prop, value)?,
+        }
+        Ok(())
+    }
+
+    fn set_style(&mut self, shape: &str, prop: &str, value: Value) -> Res<()> {
+        let sh = self.shapes.get_mut(shape).unwrap();
+        match (prop, &value) {
+            ("fill", Value::Color(c)) => sh.fill = Some(*c),
+            ("fill", Value::None) => sh.fill = None,
+            ("stroke", Value::Color(c)) => sh.stroke = Some(*c),
+            ("stroke", Value::None) => sh.stroke = None,
+            ("stroke_width", v) if v.as_f64().is_some() => sh.stroke_width = v.as_f64().unwrap(),
+            ("z", Value::Int(i)) => sh.z = *i,
+            ("visible", Value::Bool(b)) => sh.visible = *b,
+            _ => {
+                return Err(type_err(format!("cannot set `{prop}` to a {}", value.type_name()))
+                    .help("fill/stroke take a colour like #f0a, stroke_width a number, z an Int, visible a Bool"))
+            }
+        }
+        Ok(())
+    }
+
+    fn assign(&mut self, target: &Expr, v: Value, vars: &Vars, mode: Mode) -> Res<()> {
+        let ExprKind::Member(obj, attr) = &target.kind else {
+            return Err(Diagnostic::new("E-SYN-001", "only members can be assigned").at(target.span).help("use `let x = ...` to bind a name"));
+        };
+        match self.eval(obj, vars, mode)? {
+            Value::Shape(sn) => {
+                if !matches!(attr.as_str(), "fill" | "stroke" | "stroke_width" | "z" | "visible") {
+                    return Err(Diagnostic::new("E-NAM-003", format!("cannot assign to `{sn}.{attr}`"))
+                        .help("assignable members: fill, stroke, stroke_width, z, visible"));
+                }
+                self.apply_or_stage(Staged::Style { shape: sn, prop: attr.clone(), value: v }, mode)
+            }
+            Value::Elem(sn, r) if attr == "name" => {
+                let Value::Str(name) = v else { return Err(type_err("a semantic name must be a string")) };
+                if mode == Mode::Run {
+                    return self.guard_topology(mode, "name");
+                }
+                self.with_shape(&sn, mode, target.span, |sh| sh.set_alias(r, &name))
+            }
+            other => Err(type_err(format!("cannot assign to a member of {}", other.type_name()))),
+        }
+    }
+
+    // ---- helpers -----------------------------------------------------------------------
+
+    fn guard_topology(&self, mode: Mode, name: &str) -> Res<()> {
+        if mode == Mode::Run {
+            return Err(Diagnostic::new("E-SHP-003", format!("`{name}` changes topology and is not allowed while the scene is running"))
+                .help("topology edits (subdivide, extrude, bevel, round, smooth, merge, delete, bend) run in `setup:` or a `shape` build block")
+                .help("at runtime only vertex positions animate: `shape.v[2].move_by(0, 10) over 0.3.seconds`"));
+        }
+        Ok(())
+    }
+
+    fn with_shape<R>(&mut self, sn: &str, mode: Mode, span: Span, f: impl FnOnce(&mut Shape) -> Res<R>) -> Res<R> {
+        let sh = self.shapes.get_mut(sn).expect("shape registered");
+        sh.warn_on_edit = mode != Mode::Run;
+        let r = f(sh);
+        for w in std::mem::take(&mut sh.warnings) {
+            self.diagnostics.push(w.or_at(span));
+        }
+        r
+    }
+
+    fn to_dur(&self, v: &Value) -> Option<Rat> {
+        match v {
+            Value::Dur(r) => Some(*r),
+            Value::Frames(n) => Rat::int(*n).div(self.fps),
+            _ => None,
+        }
+    }
+
+    /// Duration -> whole ticks, rounding half to even; a positive duration never becomes 0 (W-TIM-001).
+    pub fn frames_of(&mut self, v: &Value, span: Span) -> Res<i64> {
+        match v {
+            Value::Frames(n) if *n >= 0 => Ok(*n),
+            Value::Dur(r) if r.n >= 0 => {
+                let mut n = r.mul(self.fps).round_half_even() as i64;
+                if r.n > 0 && n == 0 {
+                    n = 1;
+                    self.diagnostics.push(
+                        Diagnostic::new("W-TIM-001", "sub-frame duration raised to one frame")
+                            .at(span)
+                            .help("durations are whole ticks; use a duration of at least one frame"),
+                    );
+                }
+                Ok(n)
+            }
+            Value::Dur(_) | Value::Frames(_) => Err(type_err("a duration cannot be negative")),
+            Value::Int(_) | Value::Num(_) => Err(Diagnostic::new("E-TYP-002", "expected a Duration, found a bare number")
+                .help("a bare number has no unit; write `2.seconds` or `12.frames`")),
+            other => Err(type_err(format!("expected a Duration, found {}", other.type_name()))),
+        }
+    }
+
+    fn num(&self, v: &Value, what: &str) -> Res<f64> {
+        match v {
+            Value::Int(i) => Ok(*i as f64),
+            Value::Num(n) => Ok(*n),
+            Value::Dur(_) | Value::Frames(_) | Value::Angle(_) => Err(Diagnostic::new("E-TYP-002", format!("{what} must be a plain number, found {}", v.type_name()))),
+            other => Err(type_err(format!("{what} must be a number, found {}", other.type_name()))),
+        }
+    }
+    fn int(&self, v: &Value, what: &str) -> Res<i64> {
+        match v {
+            Value::Int(i) => Ok(*i),
+            other => Err(type_err(format!("{what} must be an Int, found {}", other.type_name()))),
+        }
+    }
+    fn angle(&self, v: &Value, what: &str) -> Res<f64> {
+        match v {
+            Value::Angle(t) => Ok(*t),
+            Value::Int(_) | Value::Num(_) => Err(Diagnostic::new("E-TYP-002", format!("{what} needs an Angle, found a bare number"))
+                .help("a bare number has no unit; write `20.degrees`")),
+            other => Err(type_err(format!("{what} must be an Angle, found {}", other.type_name()))),
+        }
+    }
+    fn point(&self, v: &Value, what: &str) -> Res<[f64; 2]> {
+        match v {
+            Value::Tuple(t) if t.len() == 2 => Ok([self.num(&t[0], what)?, self.num(&t[1], what)?]),
+            Value::Elem(sn, r) if r.kind == Kind::V => {
+                let sh = &self.shapes[sn];
+                sh.require_live(*r, Some(Kind::V), what)?;
+                Ok(sh.pos(r.id))
+            }
+            other => Err(type_err(format!("{what} must be a point like `(10, 20)`, found {}", other.type_name()))),
+        }
+    }
+
+    fn bind(&self, fname: &str, args: Vec<(Option<String>, Value)>, params: &[&'static str], required: &[&str]) -> Res<HashMap<&'static str, Value>> {
+        let mut out: HashMap<&'static str, Value> = HashMap::new();
+        let mut pos = 0usize;
+        for (name, v) in args {
+            match name {
+                None => {
+                    if pos >= params.len() {
+                        return Err(Diagnostic::new("E-TYP-003", format!("too many arguments to `{fname}`")).help(format!("`{fname}` takes: {}", params.join(", "))));
+                    }
+                    out.insert(params[pos], v);
+                    pos += 1;
+                }
+                Some(n) => {
+                    let Some(p) = params.iter().find(|p| **p == n) else {
+                        return Err(Diagnostic::new("E-TYP-003", format!("`{fname}` has no argument named `{n}`")).help(format!("`{fname}` takes: {}", params.join(", "))));
+                    };
+                    if out.insert(p, v).is_some() {
+                        return Err(Diagnostic::new("E-TYP-003", format!("argument `{n}` given twice to `{fname}`")));
+                    }
+                }
+            }
+        }
+        for r in required {
+            if !out.contains_key(r) {
+                return Err(Diagnostic::new("E-TYP-003", format!("`{fname}` is missing the argument `{r}`")).help(format!("`{fname}` takes: {}", params.join(", "))));
+            }
+        }
+        Ok(out)
+    }
+
+    // ---- expressions -------------------------------------------------------------------
+
+    pub fn eval(&mut self, e: &Expr, vars: &Vars, mode: Mode) -> Res<Value> {
+        self.eval_inner(e, vars, mode).map_err(|d| d.or_at(e.span))
+    }
+
+    fn eval_inner(&mut self, e: &Expr, vars: &Vars, mode: Mode) -> Res<Value> {
+        match &e.kind {
+            ExprKind::Num(t) => {
+                if t.chars().all(|c| c.is_ascii_digit()) {
+                    t.parse::<i64>().map(Value::Int).map_err(|_| type_err("integer literal too large"))
+                } else {
+                    t.parse::<f64>().map(Value::Num).map_err(|_| type_err(format!("bad number `{t}`")))
+                }
+            }
+            ExprKind::Unit { num, unit } => self.unit_value(num, unit),
+            ExprKind::Str(s) => Ok(Value::Str(s.clone())),
+            ExprKind::Bool(b) => Ok(Value::Bool(*b)),
+            ExprKind::Color(c) => Ok(Value::Color(*c)),
+            ExprKind::Name(n) => self.lookup(n, vars),
+            ExprKind::Member(o, n) => {
+                let ov = self.eval(o, vars, mode)?;
+                self.get_attr(ov, n)
+            }
+            ExprKind::Index(o, i) => {
+                let ov = self.eval(o, vars, mode)?;
+                let iv = self.eval(i, vars, mode)?;
+                self.index(ov, iv)
+            }
+            ExprKind::Call(f, args) => self.eval_call(e, f, args, vec![], vars, mode),
+            ExprKind::Unary(op, x) => {
+                let v = self.eval(x, vars, mode)?;
+                match (*op, v) {
+                    ("-", Value::Int(i)) => Ok(Value::Int(-i)),
+                    ("-", Value::Num(n)) => Ok(Value::Num(-n)),
+                    ("-", Value::Angle(a)) => Ok(Value::Angle(-a)),
+                    ("-", Value::Dur(r)) => Ok(Value::Dur(Rat::new(-r.n, r.d))),
+                    ("-", Value::Tuple(t)) => Ok(Value::Tuple(t.into_iter().map(|x| self.binop("*", x, Value::Int(-1))).collect::<Res<_>>()?)),
+                    ("not", Value::Bool(b)) => Ok(Value::Bool(!b)),
+                    (o, v) => Err(type_err(format!("cannot apply `{o}` to {}", v.type_name()))),
+                }
+            }
+            ExprKind::Binary(op, a, b) => {
+                if *op == "and" || *op == "or" {
+                    let av = self.eval(a, vars, mode)?;
+                    let Value::Bool(ab) = av else { return Err(type_err(format!("`{op}` needs Bool operands, found {}", av.type_name()))) };
+                    if (*op == "and" && !ab) || (*op == "or" && ab) {
+                        return Ok(Value::Bool(ab));
+                    }
+                    let bv = self.eval(b, vars, mode)?;
+                    return match bv {
+                        Value::Bool(x) => Ok(Value::Bool(x)),
+                        other => Err(type_err(format!("`{op}` needs Bool operands, found {}", other.type_name()))),
+                    };
+                }
+                let av = self.eval(a, vars, mode)?;
+                if *op == "??" {
+                    return if matches!(av, Value::None) { self.eval(b, vars, mode) } else { Ok(av) };
+                }
+                let bv = self.eval(b, vars, mode)?;
+                self.binop(op, av, bv)
+            }
+            ExprKind::Tuple(items) => Ok(Value::Tuple(items.iter().map(|x| self.eval(x, vars, mode)).collect::<Res<_>>()?)),
+            ExprKind::List(items) => Ok(Value::List(items.iter().map(|x| self.eval(x, vars, mode)).collect::<Res<_>>()?)),
+            ExprKind::Range(a, b) => {
+                let (av, bv) = (self.eval(a, vars, mode)?, self.eval(b, vars, mode)?);
+                let (lo, hi) = (self.int(&av, "a range bound")?, self.int(&bv, "a range bound")?);
+                Ok(Value::List((lo..=hi).map(Value::Int).collect()))
+            }
+        }
+    }
+
+    fn unit_value(&self, num: &str, unit: &str) -> Res<Value> {
+        let rat = || Rat::parse_decimal(num).ok_or_else(|| type_err(format!("`{num}` cannot be used with a unit")));
+        let f = || num.parse::<f64>().map_err(|_| type_err(format!("bad number `{num}`")));
+        Ok(match unit {
+            "seconds" | "second" | "s" => Value::Dur(rat()?),
+            "ms" => Value::Dur(rat()?.mul(Rat::new(1, 1000))),
+            "frames" | "frame" | "f" => Value::Frames(num.parse::<i64>().map_err(|_| type_err("frame counts are whole numbers").help("`36f` is exact; fractions of a frame do not exist"))?),
+            "degrees" | "degree" | "deg" => Value::Angle(f()? / 360.0),
+            "turns" | "turn" => Value::Angle(f()?),
+            "rad" | "radians" => Value::Angle(f()? / std::f64::consts::TAU),
+            "px" => Value::Num(f()?),
+            _ => return Err(Diagnostic::new("E-LEX-004", format!("unknown unit suffix `{unit}`"))),
+        })
+    }
+
+    fn lookup(&mut self, n: &str, vars: &Vars) -> Res<Value> {
+        if let Some(v) = vars.get(n) {
+            return Ok(v.clone());
+        }
+        if let Some(v) = self.globals.get(n) {
+            return Ok(v.clone());
+        }
+        if self.shapes.contains_key(n) {
+            return Ok(Value::Shape(n.to_string()));
+        }
+        if self.entities.contains_key(n) {
+            return Ok(Value::Entity(n.to_string()));
+        }
+        if let Some(e) = Ease::from_name(n) {
+            return Ok(Value::Ease(e));
+        }
+        if n == "scene" {
+            return Ok(Value::SceneObj);
+        }
+        let mut d = Diagnostic::new("E-NAM-001", format!("unknown name `{n}`"));
+        if !self.shape_order.is_empty() {
+            d = d.help(format!("shapes in scope: {}", self.shape_order.join(", ")));
+        }
+        Err(d)
+    }
+
+    fn elem_list(&self, sn: &str, kind: Kind, ids: &[u32]) -> Value {
+        Value::List(ids.iter().map(|i| Value::Elem(sn.to_string(), ElemRef { kind, id: *i })).collect())
+    }
+
+    fn get_attr(&mut self, obj: Value, name: &str) -> Res<Value> {
+        match obj {
+            Value::Shape(sn) => {
+                let sh = &self.shapes[&sn];
+                if let Some((k, id)) = parse_elem_name(name) {
+                    return Ok(Value::Elem(sn.clone(), sh.get_ref(k, id)?));
+                }
+                if let Some(r) = sh.resolve_name(name) {
+                    return Ok(Value::Elem(sn.clone(), r));
+                }
+                Ok(match name {
+                    "v" => Value::Index(sn, Kind::V),
+                    "e" => Value::Index(sn, Kind::E),
+                    "f" => Value::Index(sn, Kind::F),
+                    "vertices" => self.elem_list(&sn, Kind::V, &sh.live_ids(Kind::V)),
+                    "edges" => self.elem_list(&sn, Kind::E, &sh.live_ids(Kind::E)),
+                    "faces" => self.elem_list(&sn, Kind::F, &sh.live_ids(Kind::F)),
+                    "name" => Value::Str(sn.clone()),
+                    "z" => Value::Int(sh.z),
+                    "visible" => Value::Bool(sh.visible),
+                    "stroke_width" => Value::Num(sh.stroke_width),
+                    "fill" => sh.fill.map(Value::Color).unwrap_or(Value::None),
+                    "stroke" => sh.stroke.map(Value::Color).unwrap_or(Value::None),
+                    _ => {
+                        return Err(Diagnostic::new("E-NAM-003", format!("`{sn}` has no member `{name}`"))
+                            .help("elements are written `v1`, `e2`, `f1` or indexed `v[n]`; semantic names are set with `names:` in `subdivide`"))
+                    }
+                })
+            }
+            Value::Elem(sn, r) => {
+                let sh = &self.shapes[&sn];
+                let meta = sh.meta(r).expect("allocated");
+                let same = |ids: &[u32]| self.elem_list(&sn, r.kind, ids);
+                match name {
+                    "children" => return Ok(same(&meta.children)),
+                    "parent" => return Ok(meta.parent.map(|p| Value::Elem(sn.clone(), p)).unwrap_or(Value::None)),
+                    "created" => return Ok(Value::List(meta.created.iter().map(|c| Value::Elem(sn.clone(), *c)).collect())),
+                    "alive" => return Ok(Value::Bool(meta.state == State::Live)),
+                    "name" => return Ok(meta.alias.clone().map(Value::Str).unwrap_or(Value::None)),
+                    _ => {}
+                }
+                sh.require_live(r, None, name)?;
+                match (r.kind, name) {
+                    (Kind::V, "x") => Ok(Value::Num(sh.pos(r.id)[0])),
+                    (Kind::V, "y") => Ok(Value::Num(sh.pos(r.id)[1])),
+                    (Kind::V, "position") => {
+                        let p = sh.pos(r.id);
+                        Ok(Value::Tuple(vec![Value::Num(p[0]), Value::Num(p[1])]))
+                    }
+                    (Kind::E, "vertices") => {
+                        let ed = &sh.edges[&r.id];
+                        Ok(self.elem_list(&sn, Kind::V, &[ed.a, ed.b]))
+                    }
+                    (Kind::E, "curve") => Ok(Value::Str(
+                        match sh.edges[&r.id].curve {
+                            Curve::Straight => "straight",
+                            Curve::Quad(_) => "quadratic",
+                            Curve::Cubic(..) => "cubic",
+                        }
+                        .into(),
+                    )),
+                    (Kind::F, "vertices") => Ok(self.elem_list(&sn, Kind::V, &sh.face_vertex_ids(r.id))),
+                    (Kind::F, "edges") => {
+                        let ids: Vec<u32> = sh.faces[&r.id].loop_.iter().map(|x| x.0).collect();
+                        Ok(self.elem_list(&sn, Kind::E, &ids))
+                    }
+                    (Kind::F, "area") => Ok(Value::Num(sh.face_area(r.id).abs())),
+                    _ => Err(Diagnostic::new("E-NAM-003", format!("{} `{}` has no member `{name}`", r.kind.name(), sh.label(r)))
+                        .help("members: children, parent, created, alive, name, plus x/y/position (vertex), vertices/curve (edge), vertices/edges/area (face)")),
+                }
+            }
+            Value::Entity(en) => {
+                let ent = &self.entities[&en];
+                match ent.flags.get(name) {
+                    Some(b) => Ok(Value::Bool(*b)),
+                    None => Err(Diagnostic::new("E-NAM-003", format!("`{en}` has no flag `{name}`")).help(format!("declared flags: {}", ent.states.join(", ")))),
+                }
+            }
+            Value::SceneObj => match name {
+                "starts" => Ok(Value::Bool(self.events.contains("scene.starts"))),
+                _ => Err(Diagnostic::new("E-NAM-003", format!("`scene` has no event `{name}`")).help("this build supports `scene.starts`")),
+            },
+            other => Err(type_err(format!("a {} has no members", other.type_name()))),
+        }
+    }
+
+    fn index(&self, obj: Value, idx: Value) -> Res<Value> {
+        match obj {
+            Value::Index(sn, kind) => {
+                let i = self.int(&idx, "an element index")?;
+                let id = if i < 1 { 0 } else { i as u32 };
+                Ok(Value::Elem(sn.clone(), self.shapes[&sn].get_ref(kind, id)?))
+            }
+            Value::List(items) | Value::Tuple(items) => {
+                let i = self.int(&idx, "a list index")?;
+                items.get(usize::try_from(i).unwrap_or(usize::MAX)).cloned().ok_or_else(|| {
+                    Diagnostic::new("E-TYP-001", format!("index {i} is out of range for a list of {}", items.len())).help("lists are indexed from 0")
+                })
+            }
+            other => Err(type_err(format!("a {} cannot be indexed", other.type_name()))),
+        }
+    }
+
+    // ---- operators ---------------------------------------------------------------------
+
+    fn mismatch(&self, verb: &str, a: &Value, b: &Value) -> Diagnostic {
+        let mut d = Diagnostic::new("E-TYP-002", format!("cannot {verb} `{}` and `{}`", a.type_name(), b.type_name()));
+        let bare = |v: &Value| matches!(v, Value::Int(_) | Value::Num(_));
+        let unit = |v: &Value| matches!(v, Value::Dur(_) | Value::Frames(_) | Value::Angle(_));
+        if (bare(a) && unit(b)) || (unit(a) && bare(b)) {
+            d = d.help("a bare number has no unit; write `2.seconds` or `20.degrees`");
+        }
+        d
+    }
+
+    pub fn values_eq(&self, a: &Value, b: &Value) -> bool {
+        use Value::*;
+        match (a, b) {
+            (None, None) => true,
+            (Bool(x), Bool(y)) => x == y,
+            (Int(x), Int(y)) => x == y,
+            (Str(x), Str(y)) => x == y,
+            (Angle(x), Angle(y)) => (x - y).abs() < 1e-12,
+            (Color(x), Color(y)) => x == y,
+            (Shape(x), Shape(y)) => x == y,
+            (Elem(s1, r1), Elem(s2, r2)) => s1 == s2 && r1 == r2,
+            (Entity(x), Entity(y)) => x == y,
+            (List(x), List(y)) | (Tuple(x), Tuple(y)) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| self.values_eq(p, q)),
+            _ => {
+                if let (Some(x), Some(y)) = (a.as_f64(), b.as_f64()) {
+                    return x == y;
+                }
+                if let (Some(x), Some(y)) = (self.to_dur(a), self.to_dur(b)) {
+                    return x == y;
+                }
+                false
+            }
+        }
+    }
+
+    pub fn binop(&self, op: &str, a: Value, b: Value) -> Res<Value> {
+        use Value::*;
+        if op == "==" || op == "!=" {
+            return Ok(Bool(self.values_eq(&a, &b) == (op == "==")));
+        }
+        if let (Some(x), Some(y)) = (self.to_dur(&a), self.to_dur(&b)) {
+            match op {
+                "+" => return Ok(Dur(x.add(y))),
+                "-" => return Ok(Dur(x.sub(y))),
+                "/" => return x.div(y).map(|r| Num(r.to_f64())).ok_or_else(|| Diagnostic::new("E-RUN-005", "division by zero")),
+                "<" | "<=" | ">" | ">=" => {
+                    let o = x.cmp(y);
+                    return Ok(Bool(match op {
+                        "<" => o.is_lt(),
+                        "<=" => o.is_le(),
+                        ">" => o.is_gt(),
+                        _ => o.is_ge(),
+                    }));
+                }
+                _ => {}
+            }
+        }
+        let verb = match op {
+            "+" => "add",
+            "-" => "subtract",
+            "*" => "multiply",
+            "/" => "divide",
+            "%" => "take the remainder of",
+            _ => "compare",
+        };
+        match (&a, &b) {
+            (Int(x), Int(y)) => {
+                return Ok(match op {
+                    "+" => Int(x.wrapping_add(*y)),
+                    "-" => Int(x.wrapping_sub(*y)),
+                    "*" => Int(x.wrapping_mul(*y)),
+                    "/" | "%" if *y == 0 => return Err(Diagnostic::new("E-RUN-005", "division by zero")),
+                    "/" => Num(*x as f64 / *y as f64),
+                    "%" => Int(x.rem_euclid(*y)),
+                    "<" => Bool(x < y),
+                    "<=" => Bool(x <= y),
+                    ">" => Bool(x > y),
+                    ">=" => Bool(x >= y),
+                    _ => return Err(self.mismatch(verb, &a, &b)),
+                })
+            }
+            (Str(x), Str(y)) if op == "+" => return Ok(Str(format!("{x}{y}"))),
+            _ => {}
+        }
+        if let (Some(x), Some(y)) = (a.as_f64(), b.as_f64()) {
+            return Ok(match op {
+                "+" => Num(x + y),
+                "-" => Num(x - y),
+                "*" => Num(x * y),
+                "/" if y == 0.0 => return Err(Diagnostic::new("E-RUN-005", "division by zero")),
+                "/" => Num(x / y),
+                "%" if y == 0.0 => return Err(Diagnostic::new("E-RUN-005", "division by zero")),
+                "%" => Num(x.rem_euclid(y)),
+                "<" => Bool(x < y),
+                "<=" => Bool(x <= y),
+                ">" => Bool(x > y),
+                ">=" => Bool(x >= y),
+                _ => return Err(self.mismatch(verb, &a, &b)),
+            });
+        }
+        match (&a, &b) {
+            (Angle(x), Angle(y)) => match op {
+                "+" => Ok(Angle(x + y)),
+                "-" => Ok(Angle(x - y)),
+                "<" => Ok(Bool(x < y)),
+                "<=" => Ok(Bool(x <= y)),
+                ">" => Ok(Bool(x > y)),
+                ">=" => Ok(Bool(x >= y)),
+                _ => Err(self.mismatch(verb, &a, &b)),
+            },
+            (Angle(x), n) | (n, Angle(x)) if n.as_f64().is_some() && (op == "*" || (op == "/" && matches!(a, Angle(_)))) => {
+                let k = n.as_f64().unwrap();
+                Ok(Angle(if op == "*" { x * k } else { x / k }))
+            }
+            (d, n) | (n, d) if self.to_dur(d).is_some() && n.as_f64().is_some() && (op == "*" || (op == "/" && self.to_dur(&a).is_some())) => {
+                let k = Rat::from_f64(n.as_f64().unwrap()).ok_or_else(|| type_err("cannot scale a duration by that number"))?;
+                let x = self.to_dur(d).unwrap();
+                if op == "*" {
+                    Ok(Dur(x.mul(k)))
+                } else {
+                    x.div(k).map(Dur).ok_or_else(|| Diagnostic::new("E-RUN-005", "division by zero"))
+                }
+            }
+            (Tuple(x), Tuple(y)) if (op == "+" || op == "-") && x.len() == y.len() => {
+                Ok(Tuple(x.iter().zip(y).map(|(p, q)| self.binop(op, p.clone(), q.clone())).collect::<Res<_>>()?))
+            }
+            (Tuple(x), n) if n.as_f64().is_some() && (op == "*" || op == "/") => {
+                Ok(Tuple(x.iter().map(|p| self.binop(op, p.clone(), n.clone())).collect::<Res<_>>()?))
+            }
+            (n, Tuple(x)) if n.as_f64().is_some() && op == "*" => Ok(Tuple(x.iter().map(|p| self.binop(op, n.clone(), p.clone())).collect::<Res<_>>()?)),
+            _ => Err(self.mismatch(verb, &a, &b)),
+        }
+    }
+
+    // ---- calls -------------------------------------------------------------------------
+
+    pub fn eval_call(&mut self, call: &Expr, f: &Expr, args: &[Arg], extra: Vec<(Option<String>, Value)>, vars: &Vars, mode: Mode) -> Res<Value> {
+        let mut vals: Vec<(Option<String>, Value)> = vec![];
+        let callee = match &f.kind {
+            ExprKind::Member(o, name) => Some((self.eval(o, vars, mode)?, name.clone())),
+            _ => None,
+        };
+        for a in args {
+            vals.push((a.name.clone(), self.eval(&a.value, vars, mode)?));
+        }
+        vals.extend(extra);
+        match (&f.kind, callee) {
+            (_, Some((obj, name))) => self.call_method(obj, &name, vals, call.span, mode),
+            (ExprKind::Name(n), None) => self.call_function(n, vals, mode),
+            _ => Err(type_err("this expression cannot be called")),
+        }
+    }
+
+    fn call_function(&mut self, name: &str, args: Vec<(Option<String>, Value)>, _mode: Mode) -> Res<Value> {
+        let at_default = |m: &HashMap<&'static str, Value>, s: &Interp| -> Res<[f64; 2]> {
+            m.get("at").map(|v| s.point(v, "`at`")).unwrap_or(Ok([0.0, 0.0]))
+        };
+        match name {
+            "square" => {
+                let m = self.bind(name, args, &["size", "at"], &[])?;
+                let size = m.get("size").map(|v| self.num(v, "`size`")).unwrap_or(Ok(100.0))?;
+                Ok(Value::Fresh(Box::new(square(size, at_default(&m, self)?))))
+            }
+            "rectangle" => {
+                let m = self.bind(name, args, &["width", "height", "at"], &["width", "height"])?;
+                Ok(Value::Fresh(Box::new(rectangle(self.num(&m["width"], "`width`")?, self.num(&m["height"], "`height`")?, at_default(&m, self)?))))
+            }
+            "triangle" => {
+                let m = self.bind(name, args, &["size", "at"], &[])?;
+                let size = m.get("size").map(|v| self.num(v, "`size`")).unwrap_or(Ok(100.0))?;
+                Ok(Value::Fresh(Box::new(triangle(size, at_default(&m, self)?))))
+            }
+            "circle" => {
+                let m = self.bind(name, args, &["n", "radius", "at"], &["n"])?;
+                let n = self.int(&m["n"], "`n`")?.max(0) as usize;
+                let r = m.get("radius").map(|v| self.num(v, "`radius`")).unwrap_or(Ok(50.0))?;
+                Ok(Value::Fresh(Box::new(circle(n, r, at_default(&m, self)?)?)))
+            }
+            "polygon" => {
+                let m = self.bind(name, args, &["points"], &["points"])?;
+                let Value::List(items) = &m["points"] else { return Err(type_err("`points` must be a list of points")) };
+                let pts: Vec<[f64; 2]> = items.iter().map(|p| self.point(p, "a polygon point")).collect::<Res<_>>()?;
+                Ok(Value::Fresh(Box::new(polygon(&pts)?)))
+            }
+            "line" => {
+                let m = self.bind(name, args, &["a", "b"], &["a", "b"])?;
+                Ok(Value::Fresh(Box::new(line(self.point(&m["a"], "`a`")?, self.point(&m["b"], "`b`")?))))
+            }
+            "distance" => {
+                let m = self.bind(name, args, &["a", "b"], &["a", "b"])?;
+                let (a, b) = (self.point(&m["a"], "`a`")?, self.point(&m["b"], "`b`")?);
+                Ok(Value::Num(((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()))
+            }
+            "direction_to" => {
+                let m = self.bind(name, args, &["a", "b"], &["a", "b"])?;
+                let (a, b) = (self.point(&m["a"], "`a`")?, self.point(&m["b"], "`b`")?);
+                Ok(Value::Angle((b[1] - a[1]).atan2(b[0] - a[0]) / std::f64::consts::TAU))
+            }
+            "unit_vector" => {
+                let m = self.bind(name, args, &["angle"], &["angle"])?;
+                let t = self.angle(&m["angle"], "`angle`")? * std::f64::consts::TAU;
+                Ok(Value::Tuple(vec![Value::Num(t.cos()), Value::Num(t.sin())]))
+            }
+            "center" => {
+                let m = self.bind(name, args, &["of"], &["of"])?;
+                match &m["of"] {
+                    Value::Shape(sn) => {
+                        let c = self.shapes[sn].bbox_center();
+                        Ok(Value::Tuple(vec![Value::Num(c[0]), Value::Num(c[1])]))
+                    }
+                    Value::Elem(sn, r) => {
+                        let c = self.shapes[sn].move_anchor(*r);
+                        Ok(Value::Tuple(vec![Value::Num(c[0]), Value::Num(c[1])]))
+                    }
+                    other => Err(type_err(format!("`center` needs a shape or element, found {}", other.type_name()))),
+                }
+            }
+            "min" | "max" => {
+                let m = self.bind(name, args, &["a", "b"], &["a", "b"])?;
+                let less = self.binop("<", m["a"].clone(), m["b"].clone())?;
+                let Value::Bool(l) = less else { unreachable!() };
+                Ok(if (name == "min") == l { m["a"].clone() } else { m["b"].clone() })
+            }
+            "abs" | "floor" | "ceil" | "round" | "sqrt" | "sin" | "cos" => {
+                let m = self.bind(name, args, &["x"], &["x"])?;
+                if let (Value::Int(i), "abs") = (&m["x"], name) {
+                    return Ok(Value::Int(i.abs()));
+                }
+                let x = match (&m["x"], name) {
+                    (Value::Angle(t), "sin" | "cos") => t * std::f64::consts::TAU,
+                    (v, _) => self.num(v, "the argument")?,
+                };
+                Ok(match name {
+                    "abs" => Value::Num(x.abs()),
+                    "floor" => Value::Int(x.floor() as i64),
+                    "ceil" => Value::Int(x.ceil() as i64),
+                    "round" => Value::Int(x.round_ties_even() as i64),
+                    "sqrt" => Value::Num(x.sqrt()),
+                    "sin" => Value::Num(x.sin()),
+                    _ => Value::Num(x.cos()),
+                })
+            }
+            "clamp" => {
+                let m = self.bind(name, args, &["x", "lo", "hi"], &["x", "lo", "hi"])?;
+                let (x, lo, hi) = (self.num(&m["x"], "`x`")?, self.num(&m["lo"], "`lo`")?, self.num(&m["hi"], "`hi`")?);
+                Ok(Value::Num(x.max(lo).min(hi)))
+            }
+            "lerp" => {
+                let m = self.bind(name, args, &["a", "b", "t"], &["a", "b", "t"])?;
+                let (a, b, t) = (self.num(&m["a"], "`a`")?, self.num(&m["b"], "`b`")?, self.num(&m["t"], "`t`")?);
+                Ok(Value::Num(a + (b - a) * t))
+            }
+            "frames" => {
+                let m = self.bind(name, args, &["d"], &["d"])?;
+                let n = self.frames_of(&m["d"].clone(), Span::new(1, 1, 1))?;
+                Ok(Value::Int(n))
+            }
+            "len" => {
+                let m = self.bind(name, args, &["of"], &["of"])?;
+                match &m["of"] {
+                    Value::List(l) | Value::Tuple(l) => Ok(Value::Int(l.len() as i64)),
+                    Value::Str(s) => Ok(Value::Int(s.chars().count() as i64)),
+                    other => Err(type_err(format!("`len` needs a list, found {}", other.type_name()))),
+                }
+            }
+            _ => Err(Diagnostic::new("E-NAM-001", format!("unknown function `{name}`"))
+                .help("shapes: square, rectangle, triangle, circle, polygon, line; maths: distance, direction_to, unit_vector, center, min, max, abs, clamp, lerp, floor, ceil, round, sqrt, sin, cos, frames, len")),
+        }
+    }
+
+    fn over_frames(&mut self, m: &HashMap<&'static str, Value>, mode: Mode, span: Span) -> Res<Option<(i64, Ease)>> {
+        let Some(o) = m.get("over") else {
+            if m.contains_key("ease") {
+                return Err(Diagnostic::new("E-TYP-003", "`ease` needs `over`").help("add a duration: `... over 0.3.seconds ease ease_out`"));
+            }
+            return Ok(None);
+        };
+        if mode != Mode::Run {
+            return Err(Diagnostic::new("E-SHP-005", "`over` needs a running scene")
+                .help("build blocks and `setup:` apply edits instantly; remove `over`, or move this into `main:` or a rule"));
+        }
+        let n = self.frames_of(&o.clone(), span)?;
+        let ease = match m.get("ease") {
+            Some(Value::Ease(e)) => *e,
+            Some(other) => return Err(type_err(format!("`ease` must be an easing such as `ease_out`, found {}", other.type_name()))),
+            None => Ease::InOut,
+        };
+        Ok(if n == 0 { None } else { Some((n, ease)) })
+    }
+
+    fn call_method(&mut self, obj: Value, name: &str, args: Vec<(Option<String>, Value)>, span: Span, mode: Mode) -> Res<Value> {
+        if TOPOLOGY_METHODS.contains(&name) {
+            self.guard_topology(mode, name)?;
+        }
+        match obj {
+            Value::Shape(sn) => self.shape_method(&sn, name, args, span, mode),
+            Value::Elem(sn, r) => self.elem_method(&sn, r, name, args, span, mode),
+            other => Err(Diagnostic::new("E-NAM-003", format!("a {} has no operation `{name}`", other.type_name()))),
+        }
+    }
+
+    fn elem_ref(&self, v: &Value, sn: &str, kind: Kind, what: &str) -> Res<ElemRef> {
+        match v {
+            Value::Elem(s, r) if s == sn && r.kind == kind => Ok(*r),
+            Value::Elem(s, r) if s != sn => Err(type_err(format!("`{}` belongs to another shape, not `{sn}`", self.shapes[s].label(*r)))),
+            other => Err(type_err(format!("{what} must be a {}, found {}", kind.name(), other.type_name()))),
+        }
+    }
+
+    fn shape_method(&mut self, sn: &str, name: &str, args: Vec<(Option<String>, Value)>, span: Span, mode: Mode) -> Res<Value> {
+        match name {
+            "smooth" => {
+                let m = self.bind(name, args, &["levels"], &[])?;
+                let n = m.get("levels").map(|v| self.int(v, "`levels`")).unwrap_or(Ok(1))?;
+                self.with_shape(sn, mode, span, |sh| sh.smooth(n.max(0) as u32))?;
+                Ok(Value::None)
+            }
+            "merge" => {
+                let m = self.bind(name, args, &["a", "b", "at"], &["a", "b"])?;
+                let (a, b) = (self.elem_ref(&m["a"], sn, Kind::V, "`a`")?, self.elem_ref(&m["b"], sn, Kind::V, "`b`")?);
+                let at = self.merge_at(m.get("at"))?;
+                self.with_shape(sn, mode, span, |sh| sh.merge(a, b, at))?;
+                Ok(Value::None)
+            }
+            "delete" => {
+                let m = self.bind(name, args, &["element"], &["element"])?;
+                let Value::Elem(s, r) = &m["element"] else { return Err(type_err("`delete` needs a vertex, edge or face")) };
+                if s != sn {
+                    return Err(type_err(format!("`{}` belongs to another shape", self.shapes[s].label(*r))));
+                }
+                let r = *r;
+                self.with_shape(sn, mode, span, |sh| sh.delete(r))?;
+                Ok(Value::None)
+            }
+            "extrude" => {
+                let m = self.bind(name, args, &["edge", "by"], &["edge", "by"])?;
+                let r = self.elem_ref(&m["edge"], sn, Kind::E, "`edge`")?;
+                let by = self.num(&m["by"], "`by`")?;
+                self.with_shape(sn, mode, span, |sh| sh.extrude(r, by))?;
+                Ok(Value::None)
+            }
+            "copy" => {
+                self.bind(name, args, &[], &[])?;
+                Ok(Value::Fresh(Box::new(self.shapes[sn].clone())))
+            }
+            "morph_to" => {
+                let m = self.bind(name, args, &["other", "over", "ease"], &["other"])?;
+                let Value::Shape(other) = &m["other"] else { return Err(type_err("`morph_to` needs a shape")) };
+                self.shapes[sn].check_morph(&self.shapes[other])?;
+                let mine = self.shapes[sn].live_ids(Kind::V);
+                let theirs = self.shapes[other].live_ids(Kind::V);
+                let targets: Vec<(u32, [f64; 2])> = mine.iter().zip(&theirs).map(|(a, b)| (*a, self.shapes[other].pos(*b))).collect();
+                match self.over_frames(&m, mode, span)? {
+                    Some((frames, ease)) => Ok(Value::Pending(Box::new(ActionReq {
+                        shape: sn.to_string(),
+                        label: format!("{sn}.morph_to({other})"),
+                        frames,
+                        ease,
+                        items: targets.into_iter().map(|(id, p)| (id, Target::To(p))).collect(),
+                    }))),
+                    None => {
+                        for (id, p) in targets {
+                            self.apply_or_stage(Staged::Move { shape: sn.to_string(), r: v(id), x: p[0], y: p[1], by: false }, mode)?;
+                        }
+                        Ok(Value::None)
+                    }
+                }
+            }
+            _ => Err(Diagnostic::new("E-NAM-003", format!("shape `{sn}` has no operation `{name}`"))
+                .help("shape operations: smooth, merge, delete, extrude, morph_to, copy; element operations are called on `v1`, `e1`, `f1`")),
+        }
+    }
+
+    fn merge_at(&self, v: Option<&Value>) -> Res<MergeAt> {
+        match v {
+            None => Ok(MergeAt::Center),
+            Some(Value::Str(s)) => match s.as_str() {
+                "center" => Ok(MergeAt::Center),
+                "first" => Ok(MergeAt::First),
+                "last" => Ok(MergeAt::Last),
+                _ => Err(type_err("`at` must be \"center\", \"first\" or \"last\"")),
+            },
+            Some(o) => Err(type_err(format!("`at` must be a string, found {}", o.type_name()))),
+        }
+    }
+
+    fn xy(&self, m: &HashMap<&'static str, Value>) -> Res<[f64; 2]> {
+        match (m.get("x"), m.get("y")) {
+            (Some(p @ Value::Tuple(_)), None) => self.point(p, "the target"),
+            (Some(x), Some(y)) => Ok([self.num(x, "`x`")?, self.num(y, "`y`")?]),
+            _ => Err(Diagnostic::new("E-TYP-003", "this operation needs two numbers or one point").help("write `move_to(10, 20)` or `move_to((10, 20))`")),
+        }
+    }
+
+    fn elem_method(&mut self, sn: &str, r: ElemRef, name: &str, args: Vec<(Option<String>, Value)>, span: Span, mode: Mode) -> Res<Value> {
+        match name {
+            "move_to" | "move_by" => {
+                let m = self.bind(name, args, &["x", "y", "over", "ease"], &["x"])?;
+                let p = self.xy(&m)?;
+                let by = name == "move_by";
+                let sh = &self.shapes[sn];
+                sh.require_live(r, None, name)?;
+                match self.over_frames(&m, mode, span)? {
+                    Some((frames, ease)) => {
+                        let sh = &self.shapes[sn];
+                        let delta = if by { p } else { let a = sh.move_anchor(r); [p[0] - a[0], p[1] - a[1]] };
+                        let items = sh
+                            .element_vertices(r)
+                            .into_iter()
+                            .map(|id| (id, if by { Target::By(p) } else { let q = sh.pos(id); Target::To([q[0] + delta[0], q[1] + delta[1]]) }))
+                            .collect();
+                        Ok(Value::Pending(Box::new(ActionReq { shape: sn.to_string(), label: format!("{}.{name}", sh.label(r)), frames, ease, items })))
+                    }
+                    None => {
+                        if mode == Mode::Run {
+                            self.staged.push(Staged::Move { shape: sn.to_string(), r, x: p[0], y: p[1], by });
+                        } else {
+                            self.with_shape(sn, mode, span, |sh| if by { sh.move_by(r, p[0], p[1]) } else { sh.move_to(r, p[0], p[1]) })?;
+                        }
+                        Ok(Value::None)
+                    }
+                }
+            }
+            "subdivide" => {
+                let m = self.bind(name, args, &["into", "names"], &["into"])?;
+                let n = self.int(&m["into"], "`into`")?;
+                let names: Vec<String> = match m.get("names") {
+                    None => vec![],
+                    Some(Value::List(l)) => l
+                        .iter()
+                        .map(|x| match x {
+                            Value::Str(s) => Ok(s.clone()),
+                            o => Err(type_err(format!("names must be strings, found {}", o.type_name()))),
+                        })
+                        .collect::<Res<_>>()?,
+                    Some(o) => return Err(type_err(format!("`names` must be a list of strings, found {}", o.type_name()))),
+                };
+                self.with_shape(sn, mode, span, |sh| sh.subdivide(r, n.max(0) as usize, &names))?;
+                Ok(Value::None)
+            }
+            "extrude" => {
+                let m = self.bind(name, args, &["by"], &["by"])?;
+                let by = self.num(&m["by"], "`by`")?;
+                self.with_shape(sn, mode, span, |sh| sh.extrude(r, by))?;
+                Ok(Value::None)
+            }
+            "bevel" | "round" => {
+                let m = self.bind(name, args, &["radius"], &["radius"])?;
+                let rad = self.num(&m["radius"], "`radius`")?;
+                self.with_shape(sn, mode, span, |sh| if name == "bevel" { sh.bevel(r, rad) } else { sh.round(r, rad) })?;
+                Ok(Value::None)
+            }
+            "merge" => {
+                let m = self.bind(name, args, &["other", "at"], &["other"])?;
+                let other = self.elem_ref(&m["other"], sn, Kind::V, "`other`")?;
+                let at = self.merge_at(m.get("at"))?;
+                self.with_shape(sn, mode, span, |sh| sh.merge(r, other, at))?;
+                Ok(Value::None)
+            }
+            "delete" => {
+                self.bind(name, args, &[], &[])?;
+                self.with_shape(sn, mode, span, |sh| sh.delete(r))?;
+                Ok(Value::None)
+            }
+            "bend" => {
+                let m = self.bind(name, args, &["angle"], &["angle"])?;
+                let a = self.angle(&m["angle"], "`bend`")?;
+                self.with_shape(sn, mode, span, |sh| sh.bend(r, a))?;
+                Ok(Value::None)
+            }
+            "set_handle" => {
+                let m = self.bind(name, args, &["x", "y"], &["x"])?;
+                let p = self.xy(&m)?;
+                self.with_shape(sn, mode, span, |sh| sh.set_handle(r, p[0], p[1]))?;
+                Ok(Value::None)
+            }
+            "set_handles" => {
+                let m = self.bind(name, args, &["h1", "h2"], &["h1", "h2"])?;
+                let (a, b) = (self.point(&m["h1"], "`h1`")?, self.point(&m["h2"], "`h2`")?);
+                self.with_shape(sn, mode, span, |sh| sh.set_handles(r, a, b))?;
+                Ok(Value::None)
+            }
+            "straighten" => {
+                self.bind(name, args, &[], &[])?;
+                self.with_shape(sn, mode, span, |sh| sh.straighten(r))?;
+                Ok(Value::None)
+            }
+            _ => Err(Diagnostic::new("E-NAM-003", format!("{} `{}` has no operation `{name}`", r.kind.name(), self.shapes[sn].label(r)))
+                .help("element operations: move_to, move_by, subdivide, extrude, bevel, round, merge, delete, bend, set_handle, set_handles, straighten")),
+        }
+    }
+}

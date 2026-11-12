@@ -618,7 +618,8 @@ impl Shape {
             }
         }
     }
-    fn element_vertices(&self, r: ElemRef) -> Vec<u32> {
+    /// The distinct vertices an element is made of (a vertex, an edge's two ends, a face's loop).
+    pub fn element_vertices(&self, r: ElemRef) -> Vec<u32> {
         match r.kind {
             Kind::V => vec![r.id],
             Kind::E => {
@@ -638,21 +639,16 @@ impl Shape {
     pub fn move_to(&mut self, r: ElemRef, x: f64, y: f64) -> Res<()> {
         self.require_live(r, None, "move_to")?;
         let ids = self.element_vertices(r);
-        let (cx, cy) = match r.kind {
-            Kind::V => (self.pos(r.id)[0], self.pos(r.id)[1]),
-            Kind::E => {
-                let ed = &self.edges[&r.id];
-                let (p, q) = (self.pos(ed.a), self.pos(ed.b));
-                ((p[0] + q[0]) / 2.0, (p[1] + q[1]) / 2.0)
-            }
-            Kind::F => {
-                let n = ids.len() as f64;
-                (ids.iter().map(|i| self.pos(*i)[0]).sum::<f64>() / n, ids.iter().map(|i| self.pos(*i)[1]).sum::<f64>() / n)
-            }
-        };
+        let [cx, cy] = self.move_anchor(r);
         self.shift(&ids, x - cx, y - cy);
         self.post_edit("move_to");
         Ok(())
+    }
+    /// The point `move_to` places at the target: a vertex itself, an edge's midpoint, a face's centroid.
+    pub fn move_anchor(&self, r: ElemRef) -> P {
+        let ids = self.element_vertices(r);
+        let n = ids.len().max(1) as f64;
+        [ids.iter().map(|i| self.pos(*i)[0]).sum::<f64>() / n, ids.iter().map(|i| self.pos(*i)[1]).sum::<f64>() / n]
     }
     pub fn move_by(&mut self, r: ElemRef, dx: f64, dy: f64) -> Res<()> {
         self.require_live(r, None, "move_by")?;
