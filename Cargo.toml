@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/lang", "crates/render", "crates/anim"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+animscript-core = { path = "crates/core" }
+animscript-lang = { path = "crates/lang" }
+animscript-render = { path = "crates/render" }
+serde_json = "1"
+tiny-skia = "0.11"
+clap = { version = "4", features = ["derive"] }

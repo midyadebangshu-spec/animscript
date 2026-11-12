@@ -1,0 +1,8 @@
+[package]
+name = "animscript-render"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+tiny-skia.workspace = true
