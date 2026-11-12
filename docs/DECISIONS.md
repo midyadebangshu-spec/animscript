@@ -748,6 +748,12 @@ judgement calls I expect you to want to look at.
     files are included once (cycles are harmless), paths are relative to the importing file's folder, and a
     missing file or library is `E-AST-001`. An imported file should contain only definitions (it is parsed as
     part of the program, so its errors report line numbers after the end of your file).
-163. **New builtin and the limits.** `atan2(y, x)` returns an Angle. A definition cannot yet read the current animated
-    value of a property mid-action (expressions see rest values), so an action cannot "track" a moving target
-    frame by frame; named reusable clips, generics and closures are not implemented.
+163. **New builtin and the limits.** `atan2(y, x)` returns an Angle. Named reusable clips, generics and closures are
+    not implemented. (The earlier limit that expressions only see rest values is lifted by 164.)
+164. **Live reads.** Expressions see the state the layer stack resolved on the *previous* tick: `shape.position`,
+    `.scale`, `.rotation` and `center(shape)` return the live transform (so an action can track a moving target
+    with `while`/`wait 1.frame`), and a read is at most one frame behind. `center(shape)` is the world centre,
+    i.e. the shape's own transform applied to its bounding-box centre. Bone pseudo-shapes expose `head`, `tip`
+    (world px) and `angle` (Angle) from the last solved pose, or the rest pose before the first tick. Live state is
+    cleared at the end of every scene, so a new scene reads rest values again. Only transforms are live; colours,
+    opacity and vertex positions still read rest values.

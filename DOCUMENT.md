@@ -132,6 +132,18 @@ There is **no assignment expression**. Assignment is a statement.
 `on_screen(e)`, `min`, `max`, `clamp`, `lerp`, `abs`, `round`, `floor`, `ceil`, `frames(d)`,
 `unit_vector(angle)`, `left_of(e)`, `noise(seed_name, t)`, `random(seed_name)`.
 
+**Reading the current state.** `shape.position`, `.scale`, `.rotation` and `center(shape)` return the *current*
+animated transform (as resolved on the previous frame), so an action can follow a moving target:
+
+    action follow(self: Shape, target: Shape, n: Int):
+        let i = 0
+        while i < n:
+            self.move_to(center(target))
+            wait 1.frame
+            i += 1
+
+A bone also has `head`, `tip` (points) and `angle`: `probe.move_to(hero.forearm.tip)`.
+
 Functions that read the world see the **last committed frame**, never a half-updated world.
 
 ---

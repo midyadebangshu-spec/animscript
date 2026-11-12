@@ -388,6 +388,29 @@ impl Interp {
         .help(format!("it has: {}", all.join(", "))))
     }
 
+    /// `head`, `tip` (world px) and `angle` of a bone pseudo-shape: the last solved pose, or the rest pose.
+    pub fn bone_attr(&self, key: &str, name: &str) -> Option<Value> {
+        if !matches!(name, "head" | "tip" | "angle") {
+            return None;
+        }
+        let (arm, bi) = self.bone_of(key)?;
+        let (head, tip, angle) = match self.rig_live.get(key) {
+            Some(v) => *v,
+            None => {
+                let sk = &self.rigs[&arm].sk;
+                let rest = sk.pose(&vec![0.0; self.rigs[&arm].bones.len()], Vec2::ZERO);
+                let (h, t) = (rest[bi].head, sk.tip(&rest, bi));
+                ([h.x, h.y], [t.x, t.y], rest[bi].angle / TAU)
+            }
+        };
+        let pt = |p: P| Value::Tuple(vec![Value::Num(p[0]), Value::Num(p[1])]);
+        Some(match name {
+            "head" => pt(head),
+            "tip" => pt(tip),
+            _ => Value::Angle(angle),
+        })
+    }
+
     /// `(armature, bone index)` when `key` names a bone pseudo-shape.
     fn bone_of(&self, key: &str) -> Option<(String, usize)> {
         let (arm, bone) = key.split_once('.')?;
@@ -755,6 +778,10 @@ impl Interp {
             let bone_snap: Vec<J> = (0..n)
                 .map(|i| {
                     let tip = sk.tip(&pose, i);
+                    self.rig_live.insert(
+                        format!("{name}.{}", bone_names[i]),
+                        ([pose[i].head.x, pose[i].head.y], [tip.x, tip.y], pose[i].angle / TAU),
+                    );
                     json!({"name": bone_names[i], "head": [pose[i].head.x, pose[i].head.y], "tip": [tip.x, tip.y], "angle": pose[i].angle / TAU})
                 })
                 .collect();

@@ -267,3 +267,18 @@ fn bad_armatures_are_rejected() {
         "E-NAM-003"
     );
 }
+
+#[test]
+fn bone_head_tip_and_angle_can_be_read() {
+    let r = go(&format!("{ARM}shape probe = square(size: 10, at: (0, 0))\naction watch():\n    wait 2.frames\n    probe.move_to(a.lower.tip)\n\nscene \"s\" for 6.frames:\n    main:\n        a.upper.rotate_to(90.deg) over 1.frame\n        watch()\n        wait 3.frames\n"));
+    let c = centre(r.snapshots.last().unwrap(), 0);
+    near(c.0, 200.0, 1e-6); // the forearm's tip after the upper arm turned down
+    near(c.1, 500.0, 1e-6);
+    let at_rest = go(&format!(
+        "{ARM}shape probe = square(size: 10, at: (0, 0))\nprobe.move_to(a.upper.head)\n{}",
+        scene("", 2)
+    ));
+    let c = centre(&at_rest.snapshots[0], 0);
+    near(c.0, 200.0, 1e-6);
+    near(c.1, 300.0, 1e-6);
+}

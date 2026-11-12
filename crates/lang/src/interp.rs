@@ -240,6 +240,10 @@ pub struct Interp {
     pub base_dir: std::path::PathBuf,
     pub rigs: BTreeMap<String, crate::rig::RigDef>,
     pub rig_sim: Option<crate::rig::RigSim>,
+    /// The transforms the layer stack resolved on the last tick; what expressions read as "now".
+    pub live_tf: BTreeMap<String, Transform>,
+    /// Last solved bone poses `(head, tip, angle)` keyed `armature.bone`.
+    pub rig_live: BTreeMap<String, (P, P, f64)>,
     /// User-defined `action`s and `fn`s by name.
     pub defs: BTreeMap<String, Rc<Def>>,
     /// The value of the last executed `return`.
@@ -318,6 +322,8 @@ impl Interp {
             base_dir: std::path::PathBuf::from("."),
             rigs: BTreeMap::new(),
             rig_sim: None,
+            live_tf: BTreeMap::new(),
+            rig_live: BTreeMap::new(),
             defs: BTreeMap::new(),
             ret: None,
             call_depth: 0,
@@ -1449,6 +1455,10 @@ impl Interp {
                 if let Some(v) = self.phys_attr(&sn, name) {
                     return v;
                 }
+                if let Some(v) = self.bone_attr(&sn, name) {
+                    return Ok(v);
+                }
+                let live = self.live_tf.get(&sn).copied();
                 let sh = &self.shapes[&sn];
                 if let Some((k, id)) = parse_elem_name(name) {
                     return Ok(Value::Elem(sn.clone(), sh.get_ref(k, id)?));
@@ -1467,9 +1477,15 @@ impl Interp {
                     "z" => Value::Int(sh.z),
                     "visible" => Value::Bool(sh.visible),
                     "stroke_width" => Value::Num(sh.stroke_width),
-                    "position" => Value::Tuple(vec![Value::Num(sh.position[0]), Value::Num(sh.position[1])]),
-                    "scale" => Value::Tuple(vec![Value::Num(sh.scale[0]), Value::Num(sh.scale[1])]),
-                    "rotation" => Value::Angle(sh.rotation),
+                    "position" => {
+                        let p = live.map_or(sh.position, |t| t.position);
+                        Value::Tuple(vec![Value::Num(p[0]), Value::Num(p[1])])
+                    }
+                    "scale" => {
+                        let p = live.map_or(sh.scale, |t| t.scale);
+                        Value::Tuple(vec![Value::Num(p[0]), Value::Num(p[1])])
+                    }
+                    "rotation" => Value::Angle(live.map_or(sh.rotation, |t| t.rotation)),
                     "opacity" => Value::Num(sh.opacity),
                     "tint" => Value::Color(sh.tint),
                     "pivot" => {
@@ -1896,7 +1912,9 @@ impl Interp {
                 let m = self.bind(name, args, &["of"], &["of"])?;
                 match &m["of"] {
                     Value::Shape(sn) => {
-                        let c = self.shapes[sn].bbox_center();
+                        let sh = &self.shapes[sn];
+                        let t = self.live_tf.get(sn).copied().unwrap_or_else(|| sh.transform());
+                        let c = t.apply(sh.bbox_center());
                         Ok(Value::Tuple(vec![Value::Num(c[0]), Value::Num(c[1])]))
                     }
                     Value::Elem(sn, r) => {
