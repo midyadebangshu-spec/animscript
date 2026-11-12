@@ -179,6 +179,10 @@ impl Parser {
                         span: start,
                     });
                 }
+                T::Ident(s) if s == "armature" && matches!(&self.peek_at(1).t, T::Ident(_)) => {
+                    let a = self.armature()?;
+                    prog.armatures.push(a);
+                }
                 T::Ident(s) if s == "prop" || s == "character" => {
                     let e = self.entity()?;
                     prog.entities.push(e);
@@ -362,6 +366,65 @@ impl Parser {
             Ok(())
         })?;
         Ok(w)
+    }
+
+    /// `armature name:` then indented `bone name: key: value, key: value` and `ik name: ...` lines.
+    fn armature(&mut self) -> Res<ArmatureDecl> {
+        let start = self.next().span;
+        let name = self.ident("an armature name")?;
+        self.expect_op(":")?;
+        if !matches!(self.peek().t, T::Newline) {
+            return self.err("expected an indented block of `bone` and `ik` lines");
+        }
+        self.next();
+        if !matches!(self.peek().t, T::Indent) {
+            return self.err("expected an indented block");
+        }
+        self.next();
+        let mut items = vec![];
+        loop {
+            self.skip_newlines();
+            if matches!(self.peek().t, T::Dedent | T::Eof) {
+                break;
+            }
+            let span = self.peek().span;
+            let kind = self.ident("`bone` or `ik`")?;
+            if kind != "bone" && kind != "ik" {
+                return Err(Diagnostic::new(
+                    "E-SYN-001",
+                    format!("an armature has `bone` and `ik` lines, not `{kind}`"),
+                )
+                .at(span));
+            }
+            let iname = self.ident("a name")?;
+            self.expect_op(":")?;
+            let mut attrs = vec![];
+            loop {
+                let aspan = self.peek().span;
+                let key = self.ident("a setting name")?;
+                self.expect_op(":")?;
+                let e = self.expr()?;
+                attrs.push((key, e, aspan));
+                if !self.eat_op(",") {
+                    break;
+                }
+            }
+            self.end_stmt()?;
+            items.push(ArmItem {
+                kind,
+                name: iname,
+                attrs,
+                span,
+            });
+        }
+        if matches!(self.peek().t, T::Dedent) {
+            self.next();
+        }
+        Ok(ArmatureDecl {
+            name,
+            items,
+            span: start,
+        })
     }
 
     fn entity(&mut self) -> Res<EntityDecl> {

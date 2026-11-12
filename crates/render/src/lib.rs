@@ -372,7 +372,7 @@ fn draw_fluids(pm: &mut Pixmap, fluids: &Value, scale: f32, behind: bool) {
 
 /// Draw the physics section of a snapshot: contact points with their normals (red) and joints as
 /// lines between their anchors (blue). Only what the snapshot says; no simulation happens here.
-fn draw_physics(pm: &mut Pixmap, phys: &Value, soft: &Value, tf: Transform) {
+fn draw_physics(pm: &mut Pixmap, phys: &Value, soft: &Value, rigs: &Value, tf: Transform) {
     let xy = |v: &Value| {
         (
             v[0].as_f64().unwrap_or(0.0) as f32,
@@ -408,6 +408,47 @@ fn draw_physics(pm: &mut Pixmap, phys: &Value, soft: &Value, tf: Transform) {
             );
             if let Some(path) = pb.finish() {
                 pm.stroke_path(&path, &blue, &line, tf, None);
+            }
+        }
+    }
+    // armatures: bones are green lines with a circle at the head; ik targets are orange rings
+    let mut green = Paint {
+        anti_alias: true,
+        ..Paint::default()
+    };
+    green.set_color(Color::from_rgba8(0x20, 0xb0, 0x40, 255));
+    let thick = Stroke {
+        width: 3.0,
+        ..Stroke::default()
+    };
+    for arm in rigs.as_array().into_iter().flatten() {
+        for b in arm["bones"].as_array().into_iter().flatten() {
+            let ((hx, hy), (tx, ty)) = (xy(&b["head"]), xy(&b["tip"]));
+            let mut pb = PathBuilder::new();
+            pb.move_to(hx, hy);
+            pb.line_to(tx, ty);
+            if let Some(p) = pb.finish() {
+                pm.stroke_path(&p, &green, &thick, tf, None);
+            }
+            if let Some(c) = PathBuilder::from_circle(hx, hy, 4.0) {
+                pm.stroke_path(&c, &green, &line, tf, None);
+            }
+        }
+        let mut orange = Paint {
+            anti_alias: true,
+            ..Paint::default()
+        };
+        orange.set_color(Color::from_rgba8(0xf0, 0x90, 0x20, 255));
+        for k in arm["ik"].as_array().into_iter().flatten() {
+            if k["weight"].as_f64().unwrap_or(0.0) <= 0.0 {
+                continue;
+            }
+            let (x, y) = xy(&k["target"]);
+            if let Some(c) = PathBuilder::from_circle(x, y, 6.0) {
+                pm.stroke_path(&c, &orange, &line, tf, None);
+            }
+            if let Some(c) = PathBuilder::from_circle(x, y, 1.5) {
+                pm.fill_path(&c, &orange, FillRule::Winding, tf, None);
             }
         }
     }
@@ -548,7 +589,13 @@ pub fn render_assets(
         }
     }
     if debug_physics {
-        draw_physics(&mut pm, &snapshot["physics"], &snapshot["soft"], tf);
+        draw_physics(
+            &mut pm,
+            &snapshot["physics"],
+            &snapshot["soft"],
+            &snapshot["rigs"],
+            tf,
+        );
     }
     Ok(pm)
 }

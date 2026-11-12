@@ -12,6 +12,7 @@ pub mod parser;
 pub mod particles;
 pub mod phys;
 pub mod procedural;
+pub mod rig;
 pub mod runtime;
 pub mod snapshot;
 pub mod soft;

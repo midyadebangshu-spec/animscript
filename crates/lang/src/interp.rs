@@ -217,6 +217,8 @@ pub struct Interp {
     pub fluid: Option<crate::fluid::FluidSim>,
     /// Where the program lives: relative asset paths (images) are resolved from here.
     pub base_dir: std::path::PathBuf,
+    pub rigs: BTreeMap<String, crate::rig::RigDef>,
+    pub rig_sim: Option<crate::rig::RigSim>,
 }
 
 pub const TOPOLOGY_METHODS: &[&str] = &[
@@ -288,6 +290,8 @@ impl Interp {
             fluid_cfg: BTreeMap::new(),
             fluid: None,
             base_dir: std::path::PathBuf::from("."),
+            rigs: BTreeMap::new(),
+            rig_sim: None,
             program: Program::default(),
         };
         if let Some(p) = &program.project {
@@ -326,6 +330,7 @@ impl Interp {
     /// Run the top-level statements (the build phase) and publish their `let` bindings as globals.
     pub fn build(&mut self) -> Res<()> {
         self.eval_world()?;
+        self.eval_armatures()?; // before the top-level code, which binds shapes to bones
         let block: Block = Rc::new(self.program.top.clone());
         let mut t = Task::new(0, block, Vars::new(), Mode::Build, false);
         self.run_sync(&mut t)?;
@@ -1070,7 +1075,7 @@ impl Interp {
             ))),
         }
     }
-    fn angle(&self, v: &Value, what: &str) -> Res<f64> {
+    pub(crate) fn angle(&self, v: &Value, what: &str) -> Res<f64> {
         match v {
             Value::Angle(t) => Ok(*t),
             Value::Int(_) | Value::Num(_) => Err(Diagnostic::new(
@@ -1308,6 +1313,9 @@ impl Interp {
         if self.fluid_cfg.contains_key(n) {
             return Ok(Value::Fluid(n.to_string()));
         }
+        if self.rigs.contains_key(n) {
+            return Ok(Value::Armature(n.to_string()));
+        }
         if let Some(e) = Ease::from_name(n) {
             return Ok(Value::Ease(e));
         }
@@ -1469,6 +1477,7 @@ impl Interp {
                         .help("this build supports `scene.starts`"),
                 ),
             },
+            Value::Armature(arm) => self.armature_member(&arm, name),
             Value::Fluid(fname) if name == "count" => {
                 Ok(Value::Int(self.fluid_count(&fname) as i64))
             }
@@ -1886,7 +1895,7 @@ impl Interp {
         }
     }
 
-    fn over_frames(
+    pub(crate) fn over_frames(
         &mut self,
         m: &HashMap<&'static str, Value>,
         mode: Mode,
@@ -1935,6 +1944,10 @@ impl Interp {
         if let (Value::Shape(sn), true) = (&obj, Interp::is_soft_method(name)) {
             let sn = sn.clone();
             return self.soft_method(&sn, name, args, mode);
+        }
+        if let (Value::Shape(sn), true) = (&obj, Interp::is_rig_method(name)) {
+            let sn = sn.clone();
+            return self.rig_method(&sn, name, args, mode, span);
         }
         if let Value::Fluid(fname) = &obj {
             let fname = fname.clone();
@@ -2555,7 +2568,7 @@ impl Interp {
         }
     }
 
-    fn shape_transform(
+    pub(crate) fn shape_transform(
         &mut self,
         sn: &str,
         label: &str,

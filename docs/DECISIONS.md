@@ -660,3 +660,49 @@ judgement calls I expect you to want to look at.
 144. **Limits.** The picture is stretched over the bounding box (no aspect-preserving fit option yet); a
     bend inside one quad is shown as two flat triangles (subdivide for smoother curves); curved edges of a
     face are ignored by the texture (the straight vertex polygon is used); the image `tint` is not applied.
+
+## Round 9, sub-round A: armatures, FK, IK, binding and skinning
+
+145. **Bones are nodes.** `armature name:` is a top-level block of `bone` and `ik` lines (`bone arm: parent:
+    torso, at: 0.9, length: 60, angle: 90.deg, limits: (-30.deg, 120.deg)`). A root bone has `at: (x, y)`
+    (its head, px) and an absolute `angle` (clockwise from +x, as everywhere); a child has `parent`, `at` (a
+    fraction along its parent, default 1 = the tip) and an `angle` *relative to the parent's direction* (default
+    0, so it continues straight). `length` is positive px. Parents must be listed before children.
+    `limits` are the allowed pose rotation relative to the rest direction. Armatures are built at the very
+    start of the build phase (before top-level code, so shapes can `bind` to them); their expressions may
+    not use program variables. Not drawn; the debug overlay shows them.
+146. **Pseudo-shapes.** Each bone and each `ik` line is a hidden shape named `armature.bone` (a line from head
+    to tip; invisible, kept out of the snapshot's `shapes`), reached as `armature.bone`. So `rotate_to`,
+    `rotate_by`, `keyframes`, `timeline:`, `wobble`/`noise`, easing, `start`/`cancel`/`await`, the layer fold
+    and scene commits work on bones unchanged. Meaning of the properties: a bone's `rotation` is its pose
+    rotation relative to rest and to its parent (turns), the root bone's `position` offsets the whole
+    skeleton, and an IK handle's `position` is its target relative to the rest tip and its `opacity` is the IK
+    weight (0 = off). A clip is therefore just a `keyframes` block on bones; reusable named clips wait for
+    user-defined actions.
+147. **FK, limits.** The pose is the usual chain: a child's head is on its parent at `at`, its direction is the
+    parent's plus its rest angle plus its pose rotation. A pose rotation beyond `limits` is clamped, with
+    `W-RIG-001` once per bone and scene.
+148. **IK.** `hand.reach((x, y)) over d ease e` moves the target and sets the weight to 1 (its starting target
+    is wherever the chain's tip is), `hand.release() over d` fades the weight back to 0; blending is per bone,
+    along the shortest angle, so IK and animation mix smoothly. The solver is exact for a two-bone chain (law
+    of cosines; `bend: positive|negative` picks the elbow side, `positive` = clockwise of the line to the
+    target, and the other side is used automatically when limits make the requested one miss) and FABRIK for
+    longer chains (at most 24 passes, limits applied in each pass). An unreachable target stretches the chain
+    straight at it. A chain must be connected tip to head (`E-RIG-002`).
+149. **Binding.** `art.bind(bone)` attaches a whole shape to one bone: the shape's own transform is baked into
+    its vertices at the start of each scene, its pivot is the bone's rest head, and each tick the rig writes
+    `position` and `rotation` as layer-2 overrides (so keyframes on the art still win). `art.skin(armature,
+    blend: 20, bones: [...])` makes every vertex follow several bones by linear blend skinning with automatic
+    weights (inverse-exponential falloff of the distance to each bone segment relative to the nearest, `blend` px;
+    weights sum to 1) and writes `v.x`/`v.y` overrides; `art.set_weight(vertices, bone, w)` paints weights by
+    selection (the others are rescaled). The art must be drawn in the bind pose, i.e. matching the bones at
+    rest. A shape is bound or skinned once, and cannot also be a rigid or soft body (`E-RIG-003`); `bind`/`skin`
+    are build or `setup:` only (`E-SHP-003`).
+150. **Output.** The snapshot has `rigs`: per armature the bones (`head`, `tip` in px, world `angle` in turns)
+    and the IK targets with weights, included in the hash; absent when no armature exists.
+    `--debug-physics` draws bones as green lines with a circle at the head and active IK targets as orange rings.
+151. **Determinism note.** The rig maths uses `sin`, `cos`, `acos` and `atan2` (unlike the physics hot path, which
+    is limited to exactly rounded operations), so results can differ in the last bits between platforms; the
+    hash quantises to 1e-6, which hides it.
+152. **Not yet.** Named reusable clips (they come with user actions), mirroring/flipping a rig, bone length
+    animation, per-bone translation of non-root bones, and physical bones (sub-round B).

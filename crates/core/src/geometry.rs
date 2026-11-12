@@ -451,6 +451,24 @@ impl Shape {
         self.image = Some(img);
     }
 
+    /// Apply the shape's own position, scale and rotation to its vertices and reset them, so the
+    /// local coordinates are the world coordinates (needed before a rig takes over the transform).
+    pub fn bake_transform(&mut self) {
+        let t = self.transform();
+        if t.is_identity() {
+            return;
+        }
+        for v in self.verts.values_mut() {
+            let p = t.apply([v.x, v.y]);
+            v.x = p[0];
+            v.y = p[1];
+        }
+        self.position = [0.0, 0.0];
+        self.scale = [1.0, 1.0];
+        self.rotation = 0.0;
+        self.pivot = None;
+    }
+
     /// The texture coordinate of a vertex: its stored one, else linear in its rest position.
     pub fn uv_of(&self, vid: u32) -> [f64; 2] {
         if let Some(uv) = self.uv.get(&vid) {

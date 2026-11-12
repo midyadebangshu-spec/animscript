@@ -449,6 +449,8 @@ pub enum Value {
     Fluid(String),
     /// A loaded picture, for `shape.fill = image("file.png")`.
     Image(ImageFill),
+    /// An armature, by name; its bones and IK handles are members.
+    Armature(String),
 }
 
 /// A lambda with the variables visible where it was written (captured by value).
@@ -491,6 +493,7 @@ impl Value {
             Value::Emitter(_) => "Emitter",
             Value::Fluid(_) => "Fluid",
             Value::Image(_) => "Image",
+            Value::Armature(_) => "Armature",
         }
     }
     pub fn as_f64(&self) -> Option<f64> {

@@ -226,6 +226,7 @@ impl Runtime {
                 self.it.build_physics()?; // the world starts from the shapes' poses after setup
                 self.it.build_soft()?;
                 self.it.fill_fluids()?;
+                self.it.build_rigs()?;
                 self.register_timeline(sc)?;
                 if let Some(main) = &sc.main {
                     let id = self.new_task_id();
@@ -1040,8 +1041,53 @@ impl Runtime {
             soft_snap = self.it.soft_snapshot();
             fluid_snap = self.it.fluid_snapshot();
         }
+        let mut rigs_snap = None;
+        if self.it.has_rigs() {
+            // read the pose of every bone and ik handle as the layer stack resolved it, solve, and
+            // write the bound and skinned shapes as layer-2 overrides
+            let (bone_keys, ik_keys) = self.it.rig_keys();
+            let mut bones = BTreeMap::new();
+            for key in bone_keys {
+                let mut get = |p: PropId| {
+                    let rest = self.rest_value(&key, p);
+                    by_prop
+                        .get_mut(&(key.clone(), p))
+                        .map_or(rest, |c| fold(rest, c))
+                };
+                let v = [get(PropId::Rot), get(PropId::PosX), get(PropId::PosY)];
+                bones.insert(key, v);
+            }
+            let mut iks = BTreeMap::new();
+            for key in ik_keys {
+                let mut get = |p: PropId| {
+                    let rest = self.rest_value(&key, p);
+                    by_prop
+                        .get_mut(&(key.clone(), p))
+                        .map_or(rest, |c| fold(rest, c))
+                };
+                let v = [get(PropId::PosX), get(PropId::PosY), get(PropId::Opacity)];
+                iks.insert(key, v);
+            }
+            let out = self.it.rig_tick(&bones, &iks);
+            for (k, (shape, prop, value)) in out.overrides.into_iter().enumerate() {
+                by_prop
+                    .entry((shape, prop))
+                    .or_default()
+                    .push(Contribution {
+                        layer: 2,
+                        mode: BlendMode::Override,
+                        weight: 1.0,
+                        priority: 0,
+                        start: 0,
+                        id: 0x7000_0000 + k as u32,
+                        value,
+                    });
+            }
+            rigs_snap = Some(out.snapshot);
+        }
         let mut resolved = Resolved {
             physics,
+            rigs: rigs_snap,
             soft: soft_snap,
             fluids: fluid_snap,
             ..Resolved::default()

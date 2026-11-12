@@ -9,6 +9,7 @@ mod fluid;
 mod joint;
 mod math;
 mod particles;
+mod rig;
 mod shape;
 mod soft;
 mod world;
@@ -18,6 +19,7 @@ pub use fluid::{Fluid, FluidParams, Foam};
 pub use joint::{Joint, JointDef, JointKind};
 pub use math::{cross_sv, v2, Rot, Vec2, Xf};
 pub use particles::{Emitter, EmitterDef, Particle};
+pub use rig::{auto_weights, skin_point, solve_ik, wrap_angle, Bend, BoneDef, BonePose, Skeleton};
 pub use shape::{decompose, find_pairs, Aabb, MassData, Polygon, Shape};
 pub use soft::{coupled_step, soft_step, SoftBody, SoftParams};
 pub use world::{

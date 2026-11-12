@@ -108,6 +108,8 @@ pub struct Decls {
     pub joints: Vec<(bool, JointDecl)>,
     pub ops: Vec<(bool, InitOp)>,
     pub soft: Vec<(bool, crate::soft::SoftDecl)>,
+    pub binds: Vec<(bool, crate::rig::BindDecl)>,
+    pub skins: Vec<(bool, crate::rig::SkinDecl)>,
 }
 
 impl Decls {
@@ -116,6 +118,8 @@ impl Decls {
         self.joints.retain(|b| !b.0);
         self.ops.retain(|b| !b.0);
         self.soft.retain(|b| !b.0);
+        self.binds.retain(|b| !b.0);
+        self.skins.retain(|b| !b.0);
     }
     pub fn is_empty(&self) -> bool {
         self.bodies.is_empty()
@@ -259,6 +263,17 @@ impl Interp {
         match name {
             "body" => {
                 self.guard_build(mode, "body")?;
+                if sn.contains('.') {
+                    return Err(Diagnostic::new(
+                        "E-RIG-003",
+                        "a bone cannot be a physics body (yet)",
+                    ));
+                }
+                if self.decls.binds.iter().any(|d| d.1.shape == sn)
+                    || self.decls.skins.iter().any(|d| d.1.shape == sn)
+                {
+                    return Err(Diagnostic::new("E-RIG-003", format!("`{sn}` is driven by a rig; a shape is driven by a rig or by physics, not both (yet)")));
+                }
                 let m = self.bind(
                     name,
                     args,

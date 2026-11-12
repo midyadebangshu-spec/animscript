@@ -1570,6 +1570,53 @@ face.body(restitution: 0.75)
 - Not yet: fitting without stretching, tiling, a separate UV editor, and per-face pictures.
 - Worked example: `examples/sprite.anim`.
 
+## 13g. Armatures: bones, poses, IK and skinning
+
+An **armature** is a skeleton of bones. Bones are invisible nodes; you attach art (shapes or pictures) to
+them, and animating the bones moves the art.
+
+```anim
+armature hero:
+    bone torso:    at: (400, 400), length: 120, angle: -90.deg              # the root: a point and a direction
+    bone head:     parent: torso, length: 36, limits: (-40.deg, 40.deg)     # hangs off the torso's tip
+    bone arm_up:   parent: torso, at: 0.92, length: 70, angle: 90.deg       # 92% up the torso, sticking out right
+    bone arm_lo:   parent: arm_up, length: 62, limits: (-150.deg, 0.deg)
+    ik reach: chain: [arm_up, arm_lo]                                       # an IK chain (two or more bones)
+
+body.bind(hero.torso)                          # the whole shape follows a bone
+arm.f1.subdivide(4)
+arm.skin(hero, bones: [hero.arm_up, hero.arm_lo], blend: 10)    # every vertex follows several bones
+
+scene "s" for 4.seconds:
+    main:
+        hero.head.rotate_to(25.deg) over 0.5.seconds       # a bone angle, like any rotation
+        hero.reach.reach((505, 215)) over 1.second          # IK: the hand goes to a point
+        hero.reach.release() over 0.5.seconds               # IK off: back to the bone angles
+        hero.arm_up.keyframes over 1.second:                # a clip is keyframes on bones
+            at 0.s: rotation = 0.deg
+            at 0.5.s: rotation = -60.deg
+        hero.torso.move_by(120, 0) over 1.5.seconds          # moving the root moves the whole skeleton
+```
+
+- **Bones:** the root has `at: (x, y)` and an absolute `angle` (clockwise from +x); every other bone has a
+  `parent`, `at` (0 to 1 along the parent, default the tip) and an `angle` relative to the parent (default 0,
+  continuing straight). `length` is in px. List parents before their children. `limits` bound the pose
+  rotation; going past them is clamped (warning `W-RIG-001`).
+- **`hero.bone` is a shape-like handle:** `rotate_to`, `rotate_by`, `keyframes`, `timeline:`, `wobble`, easing
+  and `start`/`await` all work on it. Its `rotation` is relative to its rest pose and its parent.
+- **IK:** `chain.reach(point)` aims the end of the chain at a point (`over`, `ease` work); `release()` hands the
+  bones back to their angles. Two-bone chains are solved exactly (`bend: positive|negative` picks the elbow
+  side, and the other side is used when a limit blocks it); longer chains (tails, spines) use FABRIK. A point
+  out of reach stretches the chain toward it.
+- **`bind` and `skin`:** draw the art matching the bones at rest. `bind` makes a shape follow one bone;
+  `skin` blends each vertex between bones by distance (`blend` px of falloff); `art.set_weight(vertices, bone,
+  w)` paints. More vertices (`subdivide`, `grid`) bend more smoothly. A rig-driven shape cannot also be a
+  physics body (`E-RIG-003`). Pictures work too: skin a `fill = image(...)` mesh to bend a sprite.
+- Keyframes on the art itself still win over the rig. Scene end keeps the final bone pose as the next scene's
+  start.
+- Errors: `E-RIG-001` (bad bone or armature), `E-RIG-002` (bad limits or IK chain), `E-RIG-003` (bad bind).
+  `--debug-physics` draws the bones. Worked example: `examples/rig.anim`.
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,

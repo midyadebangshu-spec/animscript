@@ -163,6 +163,22 @@ pub struct EmitterDecl {
     pub span: Span,
 }
 
+/// One line of an `armature` block: `bone name: key: value, ...` or `ik name: key: value, ...`.
+#[derive(Clone, Debug)]
+pub struct ArmItem {
+    pub kind: String,
+    pub name: String,
+    pub attrs: Vec<(String, Expr, Span)>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct ArmatureDecl {
+    pub name: String,
+    pub items: Vec<ArmItem>,
+    pub span: Span,
+}
+
 #[derive(Clone, Debug)]
 pub struct EntityDecl {
     pub kind: String,
@@ -210,6 +226,7 @@ pub struct Program {
     pub world: Option<WorldDecl>,
     pub emitters: Vec<EmitterDecl>,
     pub fluids: Vec<EmitterDecl>,
+    pub armatures: Vec<ArmatureDecl>,
     pub entities: Vec<EntityDecl>,
     pub top: Vec<Stmt>,
     pub scenes: Vec<Rc<Scene>>,
