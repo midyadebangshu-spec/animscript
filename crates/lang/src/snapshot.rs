@@ -19,7 +19,13 @@ fn pt(p: &P) -> J {
 
 /// The complete description of one tick. Vertex positions and curve handles are fully resolved here,
 /// so a renderer only fills faces and strokes edges: it contains no shape logic.
-pub fn build_snapshot(it: &Interp, scene: &str, tick: i64, project_tick: i64, resolved: &BTreeMap<String, BTreeMap<u32, P>>) -> J {
+pub fn build_snapshot(
+    it: &Interp,
+    scene: &str,
+    tick: i64,
+    project_tick: i64,
+    resolved: &BTreeMap<String, BTreeMap<u32, P>>,
+) -> J {
     let mut order: Vec<&String> = it.shape_order.iter().collect();
     order.sort_by_key(|n| it.shapes[*n].z); // stable: declaration order breaks ties
     let shapes: Vec<J> = order
@@ -68,7 +74,11 @@ pub fn build_snapshot(it: &Interp, scene: &str, tick: i64, project_tick: i64, re
         .entity_order
         .iter()
         .map(|n| {
-            let flags: Map<String, J> = it.entities[n].flags.iter().map(|(k, v)| (k.clone(), J::Bool(*v))).collect();
+            let flags: Map<String, J> = it.entities[n]
+                .flags
+                .iter()
+                .map(|(k, v)| (k.clone(), J::Bool(*v)))
+                .collect();
             json!({"id": n, "flags": flags})
         })
         .collect();

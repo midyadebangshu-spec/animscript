@@ -73,8 +73,11 @@ pub struct Runtime {
 pub fn run(src: &str, opts: &RunOptions) -> Res<RunResult> {
     let program = parse(src)?;
     if program.project.is_none() {
-        return Err(Diagnostic::new("E-PRJ-001", "a runnable program needs a `project` block")
-            .help("start the file with `project \"name\":` giving `anim_version`, `canvas` and `fps`"));
+        return Err(
+            Diagnostic::new("E-PRJ-001", "a runnable program needs a `project` block").help(
+                "start the file with `project \"name\":` giving `anim_version`, `canvas` and `fps`",
+            ),
+        );
     }
     let mut it = Interp::new(src, program)?;
     it.trace_on = opts.trace;
@@ -84,7 +87,12 @@ pub fn run(src: &str, opts: &RunOptions) -> Res<RunResult> {
     for sc in &scenes {
         rt.run_scene(sc)?;
     }
-    Ok(RunResult { snapshots: rt.snapshots, hashes: rt.hashes, diagnostics: rt.it.diagnostics, trace: rt.it.trace })
+    Ok(RunResult {
+        snapshots: rt.snapshots,
+        hashes: rt.hashes,
+        diagnostics: rt.it.diagnostics,
+        trace: rt.it.trace,
+    })
 }
 
 impl Runtime {
@@ -110,14 +118,20 @@ impl Runtime {
     }
 
     fn base_vars(&self) -> Vars {
-        Vars { scopes: vec![self.it.globals.clone()] }
+        Vars {
+            scopes: vec![self.it.globals.clone()],
+        }
     }
 
     fn run_scene(&mut self, sc: &Rc<Scene>) -> Res<()> {
         let frames: Option<i64> = match &sc.length {
             SceneLen::Auto => {
                 if sc.main.is_none() {
-                    return Err(Diagnostic::new("E-SCN-001", "`for auto` needs a `main:` block to know when the scene ends").at(sc.span));
+                    return Err(Diagnostic::new(
+                        "E-SCN-001",
+                        "`for auto` needs a `main:` block to know when the scene ends",
+                    )
+                    .at(sc.span));
                 }
                 None
             }
@@ -175,7 +189,13 @@ impl Runtime {
                 }
             }
             self.advance_actions();
-            let snap = build_snapshot(&self.it, &self.scene_name, n, self.project_tick, &self.resolved);
+            let snap = build_snapshot(
+                &self.it,
+                &self.scene_name,
+                n,
+                self.project_tick,
+                &self.resolved,
+            );
             self.hashes.push(snapshot_hash(&snap));
             self.snapshots.push(snap);
             self.project_tick += 1;
@@ -195,18 +215,26 @@ impl Runtime {
     }
 
     fn key_free(&self, req: &ActionReq) -> bool {
-        req.items.iter().all(|(vid, _)| !self.channels.contains_key(&(req.shape.clone(), *vid)))
+        req.items
+            .iter()
+            .all(|(vid, _)| !self.channels.contains_key(&(req.shape.clone(), *vid)))
     }
 
     // ---- phase 2 -----------------------------------------------------------------------
 
     fn ingest(&mut self) {
         let tick = self.it.tick;
-        let done: Vec<u32> = self.acts.values().filter(|a| a.end <= tick).map(|a| a.id).collect();
+        let done: Vec<u32> = self
+            .acts
+            .values()
+            .filter(|a| a.end <= tick)
+            .map(|a| a.id)
+            .collect();
         for id in done {
             let a = self.acts.remove(&id).unwrap();
             self.commit(&a, false);
-            self.it.trace_line("ACT-", &format!("{} {}", a.shape, a.items.len()));
+            self.it
+                .trace_line("ACT-", &format!("{} {}", a.shape, a.items.len()));
             if let Some(t) = self.tasks.get_mut(&a.task) {
                 t.state = TaskState::Ready;
             }
@@ -232,8 +260,17 @@ impl Runtime {
     /// the last sampled value when it was cut off.
     fn commit(&mut self, a: &Act, interrupted: bool) {
         for item in &a.items {
-            let p = if interrupted { a.last.get(&item.vid).copied().unwrap_or(item.from) } else { item.to };
-            if let Some(v) = self.it.shapes.get_mut(&a.shape).and_then(|s| s.verts.get_mut(&item.vid)) {
+            let p = if interrupted {
+                a.last.get(&item.vid).copied().unwrap_or(item.from)
+            } else {
+                item.to
+            };
+            if let Some(v) = self
+                .it
+                .shapes
+                .get_mut(&a.shape)
+                .and_then(|s| s.verts.get_mut(&item.vid))
+            {
                 v.x = p[0];
                 v.y = p[1];
             }
@@ -254,7 +291,11 @@ impl Runtime {
                     Target::To(q) => *q,
                     Target::By(d) => [from[0] + d[0], from[1] + d[1]],
                 };
-                ActItem { vid: *vid, from, to }
+                ActItem {
+                    vid: *vid,
+                    from,
+                    to,
+                }
             })
             .collect();
         let id = self.next_act;
@@ -263,8 +304,23 @@ impl Runtime {
             self.channels.insert((p.req.shape.clone(), it.vid), id);
         }
         let end = tick + p.req.frames;
-        self.it.trace_line("ACT+", &format!("T{} {} [{} -> {}]", p.task, p.req.label, tick, end));
-        self.acts.insert(id, Act { id, task: p.task, shape: p.req.shape, items, start: tick, end, ease: p.req.ease, last: BTreeMap::new() });
+        self.it.trace_line(
+            "ACT+",
+            &format!("T{} {} [{} -> {}]", p.task, p.req.label, tick, end),
+        );
+        self.acts.insert(
+            id,
+            Act {
+                id,
+                task: p.task,
+                shape: p.req.shape,
+                items,
+                start: tick,
+                end,
+                ease: p.req.ease,
+                last: BTreeMap::new(),
+            },
+        );
     }
 
     // ---- phases 3-5 --------------------------------------------------------------------
@@ -276,23 +332,41 @@ impl Runtime {
             let now = match self.it.eval(&rule.trigger, &vars, Mode::Run)? {
                 Value::Bool(b) => b,
                 other => {
-                    return Err(Diagnostic::new("E-TRG-001", format!("a trigger must be a flag, predicate or event, found {}", other.type_name()))
-                        .at(rule.trigger.span))
+                    return Err(Diagnostic::new(
+                        "E-TRG-001",
+                        format!(
+                            "a trigger must be a flag, predicate or event, found {}",
+                            other.type_name()
+                        ),
+                    )
+                    .at(rule.trigger.span))
                 }
             };
-            let (prev, spent, running) = (self.rules[i].prev, self.rules[i].spent, self.rules[i].running);
+            let (prev, spent, running) = (
+                self.rules[i].prev,
+                self.rules[i].spent,
+                self.rules[i].running,
+            );
             self.rules[i].prev = now;
             if !now || prev {
                 continue; // only rising edges fire
             }
-            if (rule.kind == RuleKind::When && spent) || (rule.kind == RuleKind::Whenever && running.is_some()) {
+            if (rule.kind == RuleKind::When && spent)
+                || (rule.kind == RuleKind::Whenever && running.is_some())
+            {
                 continue;
             }
             if let Some(g) = &rule.guard {
                 match self.it.eval(g, &vars, Mode::Run)? {
                     Value::Bool(true) => {}
                     Value::Bool(false) => continue, // the occurrence is dropped, not remembered (spec §6.4)
-                    other => return Err(Diagnostic::new("E-TYP-001", format!("a guard must be a Bool, found {}", other.type_name())).at(g.span)),
+                    other => {
+                        return Err(Diagnostic::new(
+                            "E-TYP-001",
+                            format!("a guard must be a Bool, found {}", other.type_name()),
+                        )
+                        .at(g.span))
+                    }
                 }
             }
             if rule.kind == RuleKind::When {
@@ -304,13 +378,24 @@ impl Runtime {
         fired.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
         for (prio, i) in fired {
             let id = self.new_task_id();
-            let mut t = Task::new(id, Rc::clone(&sc.rules[i].body), self.base_vars(), Mode::Run, true);
+            let mut t = Task::new(
+                id,
+                Rc::clone(&sc.rules[i].body),
+                self.base_vars(),
+                Mode::Run,
+                true,
+            );
             t.priority = prio;
             t.rule = Some(i);
             self.rules[i].running = Some(id);
             let label = self.it.span_text(sc.rules[i].trigger.span);
-            let kind = if sc.rules[i].kind == RuleKind::When { "when" } else { "whenever" };
-            self.it.trace_line("FIRE", &format!("R{} {kind} {label} -> T{id}", i + 1));
+            let kind = if sc.rules[i].kind == RuleKind::When {
+                "when"
+            } else {
+                "whenever"
+            };
+            self.it
+                .trace_line("FIRE", &format!("R{} {kind} {label} -> T{id}", i + 1));
             self.tasks.insert(id, t);
         }
         Ok(())
@@ -318,7 +403,12 @@ impl Runtime {
 
     fn step_tasks(&mut self) -> Res<()> {
         let tick = self.it.tick;
-        while let Some(id) = self.tasks.iter().find(|(_, t)| t.state == TaskState::Ready).map(|(i, _)| *i) {
+        while let Some(id) = self
+            .tasks
+            .iter()
+            .find(|(_, t)| t.state == TaskState::Ready)
+            .map(|(i, _)| *i)
+        {
             let mut t = self.tasks.remove(&id).unwrap();
             match self.it.step(&mut t)? {
                 Step::Done => self.finish_task(t),
@@ -333,7 +423,12 @@ impl Runtime {
                 }
                 Step::Blocked(Req::Act(req)) => {
                     t.state = TaskState::BlockedAct;
-                    let p = PendingAct { req, task: id, prio: t.priority, seq: self.seq };
+                    let p = PendingAct {
+                        req,
+                        task: id,
+                        prio: t.priority,
+                        seq: self.seq,
+                    };
                     self.seq += 1;
                     self.tasks.insert(id, t);
                     if self.key_free(&p.req) {
@@ -344,7 +439,11 @@ impl Runtime {
                 }
                 Step::Blocked(Req::Together(blocks)) => {
                     t.pending = blocks.len() as u32;
-                    t.state = if blocks.is_empty() { TaskState::Ready } else { TaskState::BlockedKids };
+                    t.state = if blocks.is_empty() {
+                        TaskState::Ready
+                    } else {
+                        TaskState::BlockedKids
+                    };
                     let (vars, prio) = (t.vars.flatten(), t.priority);
                     self.tasks.insert(id, t);
                     for b in blocks {
@@ -389,9 +488,15 @@ impl Runtime {
             let p = (tick - a.start) as f64 / (a.end - a.start) as f64;
             let e = a.ease.apply(p);
             for item in &a.items {
-                let q = [item.from[0] + (item.to[0] - item.from[0]) * e, item.from[1] + (item.to[1] - item.from[1]) * e];
+                let q = [
+                    item.from[0] + (item.to[0] - item.from[0]) * e,
+                    item.from[1] + (item.to[1] - item.from[1]) * e,
+                ];
                 a.last.insert(item.vid, q);
-                self.resolved.entry(a.shape.clone()).or_default().insert(item.vid, q);
+                self.resolved
+                    .entry(a.shape.clone())
+                    .or_default()
+                    .insert(item.vid, q);
             }
         }
     }

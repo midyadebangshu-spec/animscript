@@ -5,14 +5,20 @@ use animscript_lang::*;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-const PROJECT: &str = "project \"t\":\n    anim_version: \"0.1\"\n    canvas: 800x600\n    fps: 24\n";
+const PROJECT: &str =
+    "project \"t\":\n    anim_version: \"0.1\"\n    canvas: 800x600\n    fps: 24\n";
 
 fn vtx(snap: &Value, shape: usize) -> BTreeMap<u64, (f64, f64)> {
     snap["shapes"][shape]["vertices"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|v| (v[0].as_u64().unwrap(), (v[1].as_f64().unwrap(), v[2].as_f64().unwrap())))
+        .map(|v| {
+            (
+                v[0].as_u64().unwrap(),
+                (v[1].as_f64().unwrap(), v[2].as_f64().unwrap()),
+            )
+        })
         .collect()
 }
 fn load_err(src: &str) -> Diagnostic {
@@ -31,7 +37,11 @@ fn near(a: f64, b: f64) {
     assert!((a - b).abs() < 1e-9, "{a} != {b}");
 }
 fn errors(src: &str) -> Vec<String> {
-    check(src).into_iter().filter(|d| d.is_error()).map(|d| d.code).collect()
+    check(src)
+        .into_iter()
+        .filter(|d| d.is_error())
+        .map(|d| d.code)
+        .collect()
 }
 fn with_project(body: &str) -> String {
     format!("{PROJECT}\n{body}")
@@ -84,7 +94,10 @@ fn v1_dot_1_is_rejected_with_a_hint() {
 #[test]
 fn tabs_and_bad_dedent() {
     assert_eq!(load_err("for i in 1..2:\n\tpass\n").code, "E-LEX-001");
-    assert_eq!(load_err("for i in 1..2:\n    pass\n  pass\n").code, "E-LEX-002");
+    assert_eq!(
+        load_err("for i in 1..2:\n    pass\n  pass\n").code,
+        "E-LEX-002"
+    );
     assert_eq!(load_err("let a = \"abc\n").code, "E-LEX-003");
 }
 
@@ -113,7 +126,11 @@ fn unit_mismatch_is_e_typ_002() {
     assert_eq!(load_err("let a = 10.deg + 1.second\n").code, "E-TYP-002");
     let d = load_err("shape s = square(size: 10)\ns.e1.bend(20)\n");
     assert_eq!(d.code, "E-TYP-002");
-    assert!(d.helps.iter().any(|h| h.contains("degrees")), "{:?}", d.helps);
+    assert!(
+        d.helps.iter().any(|h| h.contains("degrees")),
+        "{:?}",
+        d.helps
+    );
 }
 
 #[test]
@@ -145,8 +162,14 @@ fn e_shp_002_has_span_help_and_renders() {
 
 #[test]
 fn unknown_id_and_unknown_member() {
-    assert_eq!(load_err("shape s = square(size: 10)\ns.v9.move_to(0, 0)\n").code, "E-SHP-002");
-    assert_eq!(load_err("shape s = square(size: 10)\ns.nope.move_to(0, 0)\n").code, "E-NAM-003");
+    assert_eq!(
+        load_err("shape s = square(size: 10)\ns.v9.move_to(0, 0)\n").code,
+        "E-SHP-002"
+    );
+    assert_eq!(
+        load_err("shape s = square(size: 10)\ns.nope.move_to(0, 0)\n").code,
+        "E-NAM-003"
+    );
     assert_eq!(load_err("let a = nothing\n").code, "E-NAM-001");
 }
 
@@ -165,12 +188,16 @@ fn semantic_names_resolve_in_the_language() {
          s.mid.bend(10.degrees)\n",
     )
     .unwrap();
-    assert!(matches!(it.shapes["s"].edges[&6].curve, animscript_core::Curve::Quad(_)));
+    assert!(matches!(
+        it.shapes["s"].edges[&6].curve,
+        animscript_core::Curve::Quad(_)
+    ));
 }
 
 #[test]
 fn w_shp_010_is_reported_with_a_span() {
-    let diags = check("shape s = square(size: 200)\ns.v3.move_to(100, -100)\ns.v4.move_to(100, 100)\n");
+    let diags =
+        check("shape s = square(size: 200)\ns.v3.move_to(100, -100)\ns.v4.move_to(100, 100)\n");
     let w: Vec<_> = diags.iter().filter(|d| d.code == "W-SHP-010").collect();
     assert!(!w.is_empty());
     assert_eq!(w[0].span.unwrap().line, 3);
@@ -198,7 +225,10 @@ fn children_parent_and_alive_are_visible_to_programs() {
 
 #[test]
 fn failed_assert_is_e_run_004() {
-    assert_eq!(load_err("shape s = square(size: 10)\nassert s.v1.x == 0\n").code, "E-RUN-004");
+    assert_eq!(
+        load_err("shape s = square(size: 10)\nassert s.v1.x == 0\n").code,
+        "E-RUN-004"
+    );
 }
 
 #[test]
@@ -212,7 +242,10 @@ fn primitives_accept_named_and_positional_arguments() {
     assert_eq!(it.shapes["d"].live_ids(Kind::V).len(), 12);
     assert_eq!(it.shapes["f"].live_ids(Kind::F).len(), 0);
     assert_eq!(it.shapes["b"].verts[&3].x, 30.0);
-    assert_eq!(load_err("shape a = square(size: 1)\nshape a = square(size: 2)\n").code, "E-NAM-002");
+    assert_eq!(
+        load_err("shape a = square(size: 1)\nshape a = square(size: 2)\n").code,
+        "E-NAM-002"
+    );
     assert_eq!(load_err("shape a = square(bogus: 1)\n").code, "E-TYP-003");
 }
 
@@ -223,7 +256,10 @@ fn e_shp_003_topology_change_at_runtime_static() {
     let src = with_project(
         "shape s = square(size: 100)\nscene \"x\" for 1.second:\n    when scene.starts:\n        s.e1.subdivide(2)\n",
     );
-    let d: Vec<_> = check(&src).into_iter().filter(|d| d.code == "E-SHP-003").collect();
+    let d: Vec<_> = check(&src)
+        .into_iter()
+        .filter(|d| d.code == "E-SHP-003")
+        .collect();
     assert_eq!(d.len(), 1);
     assert_eq!(d[0].span.unwrap().line, 9);
     assert!(!d[0].helps.is_empty());
@@ -252,9 +288,15 @@ fn e_shp_001_morph_mismatch_static_and_dynamic() {
         "shape a = square(size: 100)\nshape b = circle(12, radius: 50)\n\
          scene \"m\" for 1.second:\n    main:\n        a.morph_to(b) over 0.5.seconds\n",
     );
-    let d: Vec<_> = check(&src).into_iter().filter(|d| d.code == "E-SHP-001").collect();
+    let d: Vec<_> = check(&src)
+        .into_iter()
+        .filter(|d| d.code == "E-SHP-001")
+        .collect();
     assert_eq!(d.len(), 1);
-    assert_eq!(d[0].message, "cannot morph: 4 vs 12 vertices; subdivide `a` first");
+    assert_eq!(
+        d[0].message,
+        "cannot morph: 4 vs 12 vertices; subdivide `a` first"
+    );
     assert_eq!(d[0].span.unwrap().line, 10);
     assert_eq!(run_err(&src).code, "E-SHP-001");
 }
@@ -299,7 +341,12 @@ fn curve_handles_are_resolved_in_the_snapshot() {
     );
     let r = run(&src, &RunOptions::default()).unwrap();
     let sh = &r.snapshots[12]["shapes"][0];
-    let e1 = sh["edges"].as_array().unwrap().iter().find(|e| e["id"] == 1).unwrap();
+    let e1 = sh["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == 1)
+        .unwrap();
     assert_eq!(e1["kind"], "quadratic");
     assert_eq!(e1["pts"].as_array().unwrap().len(), 3);
     near(e1["pts"][0][1].as_f64().unwrap(), -100.0);
@@ -408,13 +455,20 @@ fn same_program_twice_gives_identical_snapshot_hashes() {
     let b = run(DET, &RunOptions::default()).unwrap();
     assert_eq!(a.hashes, b.hashes);
     assert_eq!(a.hashes.len(), 24);
-    assert_ne!(a.hashes[0], a.hashes[6], "the animation really changes the hash");
+    assert_ne!(
+        a.hashes[0], a.hashes[6],
+        "the animation really changes the hash"
+    );
 }
 
 #[test]
 fn vertex_positions_are_part_of_the_hash() {
     let a = run(DET, &RunOptions::default()).unwrap();
-    let b = run(&DET.replace("move_by(0, 10)", "move_by(0, 10.001)"), &RunOptions::default()).unwrap();
+    let b = run(
+        &DET.replace("move_by(0, 10)", "move_by(0, 10.001)"),
+        &RunOptions::default(),
+    )
+    .unwrap();
     assert_ne!(a.hashes.last(), b.hashes.last());
     assert_eq!(a.hashes[0], b.hashes[0]);
 }
@@ -424,5 +478,8 @@ fn quantisation_makes_tiny_float_noise_irrelevant() {
     let a = serde_json::json!({"x": 1.0000000001, "n": 3});
     let b = serde_json::json!({"x": 1.0, "n": 3});
     assert_eq!(snapshot_hash(&a), snapshot_hash(&b));
-    assert_ne!(snapshot_hash(&a), snapshot_hash(&serde_json::json!({"x": 1.001, "n": 3})));
+    assert_ne!(
+        snapshot_hash(&a),
+        snapshot_hash(&serde_json::json!({"x": 1.001, "n": 3}))
+    );
 }

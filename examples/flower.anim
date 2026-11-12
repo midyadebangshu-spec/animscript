@@ -1,0 +1,49 @@
+project "Flower":
+    anim_version: "0.1"
+    canvas: 800x600
+    fps: 24
+    seed: 7
+    background: #fdf6e3
+
+## A square becomes a flower in five steps.
+
+# 1. Start from a square (v1..v4, e1..e4, f1).
+shape flower = square(size: 200, at: (400, 300))
+
+# 2. Cut every side into four. IDs never change, so a loop over e1..e4 is safe.
+for i in 1..4:
+    flower.e[i].subdivide(4)
+
+# 3. Push the ring of 16 vertices out and in alternately.
+let c = (400, 300)
+let ring = flower.f1.vertices          # in loop order, starting at v1
+for i in 0..15:
+    let a = 225.degrees - i * 22.5.degrees
+    if i % 2 == 0:
+        ring[i].move_to(c + unit_vector(a) * 230)
+    else:
+        ring[i].move_to(c + unit_vector(a) * 110)
+
+# 4. Bevel the eight tips.
+for i in 0..15:
+    if i % 2 == 0:
+        ring[i].bevel(45)
+
+# 5. Round the whole outline (Chaikin subdivision, twice).
+flower.smooth(2)
+
+flower.fill = #f4a6c0
+flower.stroke = #b83a6b
+flower.stroke_width = 3
+
+# The middle: a 16-gon, smoothed once.
+shape heart = circle(16, radius: 55, at: (400, 300))
+heart.smooth(1)
+heart.fill = #f7c548
+heart.stroke = #c98a0a
+heart.stroke_width = 3
+heart.z = 1
+
+scene "Bloom" for 1.second:
+    main:
+        wait 1.second

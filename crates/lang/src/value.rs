@@ -21,7 +21,10 @@ impl Rat {
     pub fn new(n: i128, d: i128) -> Rat {
         let g = gcd(n, d).max(1);
         let s = if d < 0 { -1 } else { 1 };
-        Rat { n: s * n / g, d: s * d / g }
+        Rat {
+            n: s * n / g,
+            d: s * d / g,
+        }
     }
     pub fn int(n: i64) -> Rat {
         Rat { n: n as i128, d: 1 }
@@ -33,7 +36,10 @@ impl Rat {
             None => (false, s),
         };
         let (int, frac) = s.split_once('.').unwrap_or((s, ""));
-        if frac.len() > 30 || !int.chars().chain(frac.chars()).all(|c| c.is_ascii_digit()) || (int.is_empty() && frac.is_empty()) {
+        if frac.len() > 30
+            || !int.chars().chain(frac.chars()).all(|c| c.is_ascii_digit())
+            || (int.is_empty() && frac.is_empty())
+        {
             return None;
         }
         let n: i128 = format!("{int}{frac}").parse().ok()?;

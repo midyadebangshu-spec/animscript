@@ -25,7 +25,9 @@ pub struct Token {
 }
 
 const OPS2: &[&str] = &["==", "!=", "<=", ">=", "??", "..", "->"];
-const OPS1: &[&str] = &["+", "-", "*", "/", "%", "<", ">", "=", "(", ")", ",", ":", ".", "[", "]", "{", "}"];
+const OPS1: &[&str] = &[
+    "+", "-", "*", "/", "%", "<", ">", "=", "(", ")", ",", ":", ".", "[", "]", "{", "}",
+];
 
 fn color_len(c: &[char], i: usize) -> Option<usize> {
     let mut n = 0;
@@ -67,19 +69,34 @@ pub fn lex(src: &str) -> Res<Vec<Token>> {
             let cur = *indents.last().unwrap();
             if i > cur {
                 if i - cur != 4 {
-                    return Err(Diagnostic::new("E-LEX-002", "indentation must increase by exactly four spaces").at(sp(0, i)));
+                    return Err(Diagnostic::new(
+                        "E-LEX-002",
+                        "indentation must increase by exactly four spaces",
+                    )
+                    .at(sp(0, i)));
                 }
                 indents.push(i);
-                toks.push(Token { t: T::Indent, span: sp(0, i), adj: false });
+                toks.push(Token {
+                    t: T::Indent,
+                    span: sp(0, i),
+                    adj: false,
+                });
             } else if i < cur {
                 while *indents.last().unwrap() > i {
                     indents.pop();
-                    toks.push(Token { t: T::Dedent, span: sp(0, i), adj: false });
+                    toks.push(Token {
+                        t: T::Dedent,
+                        span: sp(0, i),
+                        adj: false,
+                    });
                 }
                 if *indents.last().unwrap() != i {
-                    return Err(Diagnostic::new("E-LEX-002", "dedent does not return to an enclosing indentation level")
-                        .at(sp(0, i))
-                        .help("each block level is four spaces"));
+                    return Err(Diagnostic::new(
+                        "E-LEX-002",
+                        "dedent does not return to an enclosing indentation level",
+                    )
+                    .at(sp(0, i))
+                    .help("each block level is four spaces"));
                 }
             }
         }
@@ -127,16 +144,28 @@ pub fn lex(src: &str) -> Res<Vec<Token>> {
                     }
                 }
                 if !closed {
-                    return Err(Diagnostic::new("E-LEX-003", "unterminated string").at(sp(start, c.len())).help("add a closing `\"`"));
+                    return Err(Diagnostic::new("E-LEX-003", "unterminated string")
+                        .at(sp(start, c.len()))
+                        .help("add a closing `\"`"));
                 }
                 tok = T::Str(s);
-            } else if ch.is_ascii_digit() || (ch == '.' && i + 1 < c.len() && c[i + 1].is_ascii_digit() && !(adj && prev_operand)) {
+            } else if ch.is_ascii_digit()
+                || (ch == '.'
+                    && i + 1 < c.len()
+                    && c[i + 1].is_ascii_digit()
+                    && !(adj && prev_operand))
+            {
                 // canvas size such as 1280x720
                 let mut j = i;
                 while j < c.len() && c[j].is_ascii_digit() {
                     j += 1;
                 }
-                if ch != '.' && j < c.len() && c[j] == 'x' && j + 1 < c.len() && c[j + 1].is_ascii_digit() {
+                if ch != '.'
+                    && j < c.len()
+                    && c[j] == 'x'
+                    && j + 1 < c.len()
+                    && c[j + 1].is_ascii_digit()
+                {
                     let mut k = j + 1;
                     while k < c.len() && c[k].is_ascii_digit() {
                         k += 1;
@@ -144,7 +173,11 @@ pub fn lex(src: &str) -> Res<Vec<Token>> {
                     if k >= c.len() || !(c[k].is_alphanumeric() || c[k] == '_') {
                         let w: String = c[i..j].iter().collect();
                         let h: String = c[j + 1..k].iter().collect();
-                        toks.push(Token { t: T::Canvas(w.parse().unwrap_or(0), h.parse().unwrap_or(0)), span: sp(start, k), adj });
+                        toks.push(Token {
+                            t: T::Canvas(w.parse().unwrap_or(0), h.parse().unwrap_or(0)),
+                            span: sp(start, k),
+                            adj,
+                        });
                         i = k;
                         last_end = k;
                         prev_operand = true;
@@ -196,15 +229,30 @@ pub fn lex(src: &str) -> Res<Vec<Token>> {
                     tok = T::Op(op);
                     i += 1;
                 } else {
-                    return Err(Diagnostic::new("E-SYN-001", format!("unexpected character `{ch}`")).at(sp(start, start + 1)));
+                    return Err(Diagnostic::new(
+                        "E-SYN-001",
+                        format!("unexpected character `{ch}`"),
+                    )
+                    .at(sp(start, start + 1)));
                 }
             }
-            prev_operand = matches!(tok, T::Num(_) | T::Ident(_) | T::Str(_) | T::Color(_) | T::Op(")") | T::Op("]"));
-            toks.push(Token { t: tok, span: sp(start, i), adj });
+            prev_operand = matches!(
+                tok,
+                T::Num(_) | T::Ident(_) | T::Str(_) | T::Color(_) | T::Op(")") | T::Op("]")
+            );
+            toks.push(Token {
+                t: tok,
+                span: sp(start, i),
+                adj,
+            });
             last_end = i;
         }
         if depth == 0 {
-            toks.push(Token { t: T::Newline, span: sp(c.len(), c.len() + 1), adj: false });
+            toks.push(Token {
+                t: T::Newline,
+                span: sp(c.len(), c.len() + 1),
+                adj: false,
+            });
         }
     }
     let end = Span::new(last_line, 1, 2);
@@ -213,8 +261,16 @@ pub fn lex(src: &str) -> Res<Vec<Token>> {
     }
     while indents.len() > 1 {
         indents.pop();
-        toks.push(Token { t: T::Dedent, span: end, adj: false });
+        toks.push(Token {
+            t: T::Dedent,
+            span: end,
+            adj: false,
+        });
     }
-    toks.push(Token { t: T::Eof, span: end, adj: false });
+    toks.push(Token {
+        t: T::Eof,
+        span: end,
+        adj: false,
+    });
     Ok(toks)
 }

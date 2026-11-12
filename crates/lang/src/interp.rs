@@ -21,7 +21,9 @@ pub struct Vars {
 }
 impl Vars {
     pub fn new() -> Vars {
-        Vars { scopes: vec![HashMap::new()] }
+        Vars {
+            scopes: vec![HashMap::new()],
+        }
     }
     pub fn get(&self, n: &str) -> Option<&Value> {
         self.scopes.iter().rev().find_map(|s| s.get(n))
@@ -55,9 +57,23 @@ pub struct Entity {
 /// A zero-time effect that is applied at the end of the delta (spec §6.3).
 #[derive(Clone, Debug)]
 pub enum Staged {
-    Flag { entity: String, flag: String, value: bool },
-    Move { shape: String, r: ElemRef, x: f64, y: f64, by: bool },
-    Style { shape: String, prop: String, value: Value },
+    Flag {
+        entity: String,
+        flag: String,
+        value: bool,
+    },
+    Move {
+        shape: String,
+        r: ElemRef,
+        x: f64,
+        y: f64,
+        by: bool,
+    },
+    Style {
+        shape: String,
+        prop: String,
+        value: Value,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -72,9 +88,21 @@ pub enum Step {
 }
 
 pub enum Frame {
-    Block { stmts: Block, idx: usize, scope: bool },
-    Repeat { body: Block, left: i64 },
-    For { var: String, items: Vec<Value>, idx: usize, body: Block },
+    Block {
+        stmts: Block,
+        idx: usize,
+        scope: bool,
+    },
+    Repeat {
+        body: Block,
+        left: i64,
+    },
+    For {
+        var: String,
+        items: Vec<Value>,
+        idx: usize,
+        body: Block,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -104,7 +132,11 @@ impl Task {
         }
         Task {
             id,
-            frames: vec![Frame::Block { stmts: block, idx: 0, scope }],
+            frames: vec![Frame::Block {
+                stmts: block,
+                idx: 0,
+                scope,
+            }],
             vars,
             mode,
             priority: 0,
@@ -120,7 +152,11 @@ impl Task {
         for (k, v) in bind {
             self.vars.define(&k, v);
         }
-        self.frames.push(Frame::Block { stmts: b, idx: 0, scope: true });
+        self.frames.push(Frame::Block {
+            stmts: b,
+            idx: 0,
+            scope: true,
+        });
     }
 }
 
@@ -145,8 +181,20 @@ pub struct Interp {
     pub trace: Vec<String>,
 }
 
-pub const TOPOLOGY_METHODS: &[&str] =
-    &["subdivide", "extrude", "bevel", "round", "smooth", "merge", "delete", "bend", "set_handle", "set_handles", "straighten", "copy"];
+pub const TOPOLOGY_METHODS: &[&str] = &[
+    "subdivide",
+    "extrude",
+    "bevel",
+    "round",
+    "smooth",
+    "merge",
+    "delete",
+    "bend",
+    "set_handle",
+    "set_handles",
+    "straighten",
+    "copy",
+];
 
 fn parse_elem_name(n: &str) -> Option<(Kind, u32)> {
     let mut ch = n.chars();
@@ -195,10 +243,20 @@ impl Interp {
         }
         for e in &program.entities {
             if it.entities.contains_key(&e.name) {
-                return Err(Diagnostic::new("E-NAM-002", format!("duplicate declaration `{}`", e.name)).at(e.span));
+                return Err(Diagnostic::new(
+                    "E-NAM-002",
+                    format!("duplicate declaration `{}`", e.name),
+                )
+                .at(e.span));
             }
             let flags = e.states.iter().map(|s| (s.clone(), false)).collect();
-            it.entities.insert(e.name.clone(), Entity { states: e.states.clone(), flags });
+            it.entities.insert(
+                e.name.clone(),
+                Entity {
+                    states: e.states.clone(),
+                    flags,
+                },
+            );
             it.entity_order.push(e.name.clone());
         }
         it.program = program;
@@ -222,7 +280,10 @@ impl Interp {
 
     pub fn trace_line(&mut self, kind: &str, detail: &str) {
         if self.trace_on {
-            let l = format!("tick {:03} d{} {:<7} {}", self.tick, self.delta, kind, detail);
+            let l = format!(
+                "tick {:03} d{} {:<7} {}",
+                self.tick, self.delta, kind, detail
+            );
             self.trace.push(l);
         }
     }
@@ -231,7 +292,12 @@ impl Interp {
         self.src
             .lines()
             .nth(sp.line as usize - 1)
-            .map(|l| l.chars().skip(sp.col as usize - 1).take((sp.end_col - sp.col) as usize).collect())
+            .map(|l| {
+                l.chars()
+                    .skip(sp.col as usize - 1)
+                    .take((sp.end_col - sp.col) as usize)
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -242,10 +308,15 @@ impl Interp {
         loop {
             budget -= 1;
             if budget == 0 {
-                return Err(Diagnostic::new("E-STM-003", "a loop that never blocks ran for too long")
-                    .help("a loop body in `main:` or a rule must contain a `wait` or a timed action"));
+                return Err(Diagnostic::new(
+                    "E-STM-003",
+                    "a loop that never blocks ran for too long",
+                )
+                .help("a loop body in `main:` or a rule must contain a `wait` or a timed action"));
             }
-            let Some(top) = t.frames.last_mut() else { return Ok(Step::Done) };
+            let Some(top) = t.frames.last_mut() else {
+                return Ok(Step::Done);
+            };
             match top {
                 Frame::Block { stmts, idx, scope } => {
                     if *idx >= stmts.len() {
@@ -278,7 +349,12 @@ impl Interp {
                     let b = Rc::clone(body);
                     t.push_block(b, vec![]);
                 }
-                Frame::For { var, items, idx, body } => {
+                Frame::For {
+                    var,
+                    items,
+                    idx,
+                    body,
+                } => {
                     if *idx >= items.len() {
                         t.frames.pop();
                         continue;
@@ -300,22 +376,34 @@ impl Interp {
             StmtKind::Let(name, e) => {
                 let v = self.eval(e, &t.vars, mode)?;
                 if matches!(v, Value::Fresh(_)) {
-                    return Err(type_err("a new shape must be declared with `shape name = ...`").help("`let` cannot bind a freshly created shape"));
+                    return Err(
+                        type_err("a new shape must be declared with `shape name = ...`")
+                            .help("`let` cannot bind a freshly created shape"),
+                    );
                 }
                 t.vars.define(name, v);
             }
             StmtKind::ShapeDecl { name, expr, body } => {
                 if mode == Mode::Run {
-                    return Err(Diagnostic::new("E-SHP-003", "shapes cannot be created while the scene is running")
-                        .help("declare shapes at the top level or in `setup:`"));
+                    return Err(Diagnostic::new(
+                        "E-SHP-003",
+                        "shapes cannot be created while the scene is running",
+                    )
+                    .help("declare shapes at the top level or in `setup:`"));
                 }
                 let v = self.eval(expr, &t.vars, mode)?;
                 let Value::Fresh(mut sh) = v else {
                     return Err(type_err(format!("`shape {name} = ...` needs a new shape, found {}", v.type_name()))
                         .help("create one with `square`, `rectangle`, `triangle`, `circle`, `polygon`, `line` or `.copy()`"));
                 };
-                if self.shapes.contains_key(name) || self.entities.contains_key(name) || t.vars.get(name).is_some() {
-                    return Err(Diagnostic::new("E-NAM-002", format!("duplicate declaration `{name}`")));
+                if self.shapes.contains_key(name)
+                    || self.entities.contains_key(name)
+                    || t.vars.get(name).is_some()
+                {
+                    return Err(Diagnostic::new(
+                        "E-NAM-002",
+                        format!("duplicate declaration `{name}`"),
+                    ));
                 }
                 sh.name = name.clone();
                 self.shapes.insert(name.clone(), *sh);
@@ -344,25 +432,48 @@ impl Interp {
                 } else if let ExprKind::Call(f, args) = &expr.kind {
                     self.eval_call(expr, f, args, extra, &t.vars, mode)?
                 } else {
-                    return Err(Diagnostic::new("E-SYN-001", "`over` / `ease` can only follow a call").at(expr.span));
+                    return Err(Diagnostic::new(
+                        "E-SYN-001",
+                        "`over` / `ease` can only follow a call",
+                    )
+                    .at(expr.span));
                 };
                 match v {
                     Value::Pending(req) => return Ok(Some(Req::Act(*req))),
-                    Value::Fresh(_) => return Err(type_err("a new shape must be declared with `shape name = ...`")),
+                    Value::Fresh(_) => {
+                        return Err(type_err(
+                            "a new shape must be declared with `shape name = ...`",
+                        ))
+                    }
                     _ => {}
                 }
             }
             StmtKind::For { var, iter, body } => {
                 let items = match self.eval(iter, &t.vars, mode)? {
                     Value::List(l) => l,
-                    other => return Err(type_err(format!("cannot loop over a {}", other.type_name())).help("loop over a range `1..4` or a list")),
+                    other => {
+                        return Err(
+                            type_err(format!("cannot loop over a {}", other.type_name()))
+                                .help("loop over a range `1..4` or a list"),
+                        )
+                    }
                 };
-                t.frames.push(Frame::For { var: var.clone(), items, idx: 0, body: Rc::clone(body) });
+                t.frames.push(Frame::For {
+                    var: var.clone(),
+                    items,
+                    idx: 0,
+                    body: Rc::clone(body),
+                });
             }
             StmtKind::If { cond, then, else_ } => {
                 let c = match self.eval(cond, &t.vars, mode)? {
                     Value::Bool(b) => b,
-                    other => return Err(type_err(format!("`if` needs a Bool, found {}", other.type_name()))),
+                    other => {
+                        return Err(type_err(format!(
+                            "`if` needs a Bool, found {}",
+                            other.type_name()
+                        )))
+                    }
                 };
                 if c {
                     t.push_block(Rc::clone(then), vec![]);
@@ -371,8 +482,16 @@ impl Interp {
                 }
             }
             StmtKind::Repeat { count, body } => match self.eval(count, &t.vars, mode)? {
-                Value::Int(n) if n >= 0 => t.frames.push(Frame::Repeat { body: Rc::clone(body), left: n }),
-                other => return Err(type_err(format!("`repeat` needs a non-negative Int, found {}", other.type_name()))),
+                Value::Int(n) if n >= 0 => t.frames.push(Frame::Repeat {
+                    body: Rc::clone(body),
+                    left: n,
+                }),
+                other => {
+                    return Err(type_err(format!(
+                        "`repeat` needs a non-negative Int, found {}",
+                        other.type_name()
+                    )))
+                }
             },
             StmtKind::Wait(e) => {
                 let v = self.eval(e, &t.vars, mode)?;
@@ -385,14 +504,25 @@ impl Interp {
             }
             StmtKind::Become { target, flag, set } => {
                 let ent = self.entities.get(target).ok_or_else(|| {
-                    Diagnostic::new("E-NAM-001", format!("unknown entity `{target}`")).help("declare it with `prop name:` and `states: ...`")
+                    Diagnostic::new("E-NAM-001", format!("unknown entity `{target}`"))
+                        .help("declare it with `prop name:` and `states: ...`")
                 })?;
                 if !ent.states.contains(flag) {
-                    return Err(Diagnostic::new("E-NAM-003", format!("`{target}` has no authored flag `{flag}`"))
-                        .help(format!("declared flags: {}", ent.states.join(", "))));
+                    return Err(Diagnostic::new(
+                        "E-NAM-003",
+                        format!("`{target}` has no authored flag `{flag}`"),
+                    )
+                    .help(format!("declared flags: {}", ent.states.join(", "))));
                 }
                 let (entity, flag) = (target.clone(), flag.clone());
-                self.apply_or_stage(Staged::Flag { entity, flag, value: *set }, mode)?;
+                self.apply_or_stage(
+                    Staged::Flag {
+                        entity,
+                        flag,
+                        value: *set,
+                    },
+                    mode,
+                )?;
             }
             StmtKind::Note(s) => {
                 self.trace_line("NOTE", s);
@@ -400,9 +530,15 @@ impl Interp {
             StmtKind::Assert(e) => match self.eval(e, &t.vars, mode)? {
                 Value::Bool(true) => {}
                 Value::Bool(false) => {
-                    return Err(Diagnostic::new("E-RUN-004", "assertion failed").label("this condition is false"));
+                    return Err(Diagnostic::new("E-RUN-004", "assertion failed")
+                        .label("this condition is false"));
                 }
-                other => return Err(type_err(format!("`assert` needs a Bool, found {}", other.type_name()))),
+                other => {
+                    return Err(type_err(format!(
+                        "`assert` needs a Bool, found {}",
+                        other.type_name()
+                    )))
+                }
             },
         }
         Ok(None)
@@ -429,7 +565,11 @@ impl Interp {
 
     fn apply_staged_one(&mut self, s: Staged) -> Res<()> {
         match s {
-            Staged::Flag { entity, flag, value } => {
+            Staged::Flag {
+                entity,
+                flag,
+                value,
+            } => {
                 if let Some(e) = self.entities.get_mut(&entity) {
                     e.flags.insert(flag, value);
                 }
@@ -468,24 +608,44 @@ impl Interp {
 
     fn assign(&mut self, target: &Expr, v: Value, vars: &Vars, mode: Mode) -> Res<()> {
         let ExprKind::Member(obj, attr) = &target.kind else {
-            return Err(Diagnostic::new("E-SYN-001", "only members can be assigned").at(target.span).help("use `let x = ...` to bind a name"));
+            return Err(Diagnostic::new("E-SYN-001", "only members can be assigned")
+                .at(target.span)
+                .help("use `let x = ...` to bind a name"));
         };
         match self.eval(obj, vars, mode)? {
             Value::Shape(sn) => {
-                if !matches!(attr.as_str(), "fill" | "stroke" | "stroke_width" | "z" | "visible") {
-                    return Err(Diagnostic::new("E-NAM-003", format!("cannot assign to `{sn}.{attr}`"))
-                        .help("assignable members: fill, stroke, stroke_width, z, visible"));
+                if !matches!(
+                    attr.as_str(),
+                    "fill" | "stroke" | "stroke_width" | "z" | "visible"
+                ) {
+                    return Err(Diagnostic::new(
+                        "E-NAM-003",
+                        format!("cannot assign to `{sn}.{attr}`"),
+                    )
+                    .help("assignable members: fill, stroke, stroke_width, z, visible"));
                 }
-                self.apply_or_stage(Staged::Style { shape: sn, prop: attr.clone(), value: v }, mode)
+                self.apply_or_stage(
+                    Staged::Style {
+                        shape: sn,
+                        prop: attr.clone(),
+                        value: v,
+                    },
+                    mode,
+                )
             }
             Value::Elem(sn, r) if attr == "name" => {
-                let Value::Str(name) = v else { return Err(type_err("a semantic name must be a string")) };
+                let Value::Str(name) = v else {
+                    return Err(type_err("a semantic name must be a string"));
+                };
                 if mode == Mode::Run {
                     return self.guard_topology(mode, "name");
                 }
                 self.with_shape(&sn, mode, target.span, |sh| sh.set_alias(r, &name))
             }
-            other => Err(type_err(format!("cannot assign to a member of {}", other.type_name()))),
+            other => Err(type_err(format!(
+                "cannot assign to a member of {}",
+                other.type_name()
+            ))),
         }
     }
 
@@ -500,7 +660,13 @@ impl Interp {
         Ok(())
     }
 
-    fn with_shape<R>(&mut self, sn: &str, mode: Mode, span: Span, f: impl FnOnce(&mut Shape) -> Res<R>) -> Res<R> {
+    fn with_shape<R>(
+        &mut self,
+        sn: &str,
+        mode: Mode,
+        span: Span,
+        f: impl FnOnce(&mut Shape) -> Res<R>,
+    ) -> Res<R> {
         let sh = self.shapes.get_mut(sn).expect("shape registered");
         sh.warn_on_edit = mode != Mode::Run;
         let r = f(sh);
@@ -529,15 +695,23 @@ impl Interp {
                     self.diagnostics.push(
                         Diagnostic::new("W-TIM-001", "sub-frame duration raised to one frame")
                             .at(span)
-                            .help("durations are whole ticks; use a duration of at least one frame"),
+                            .help(
+                                "durations are whole ticks; use a duration of at least one frame",
+                            ),
                     );
                 }
                 Ok(n)
             }
             Value::Dur(_) | Value::Frames(_) => Err(type_err("a duration cannot be negative")),
-            Value::Int(_) | Value::Num(_) => Err(Diagnostic::new("E-TYP-002", "expected a Duration, found a bare number")
-                .help("a bare number has no unit; write `2.seconds` or `12.frames`")),
-            other => Err(type_err(format!("expected a Duration, found {}", other.type_name()))),
+            Value::Int(_) | Value::Num(_) => Err(Diagnostic::new(
+                "E-TYP-002",
+                "expected a Duration, found a bare number",
+            )
+            .help("a bare number has no unit; write `2.seconds` or `12.frames`")),
+            other => Err(type_err(format!(
+                "expected a Duration, found {}",
+                other.type_name()
+            ))),
         }
     }
 
@@ -545,22 +719,37 @@ impl Interp {
         match v {
             Value::Int(i) => Ok(*i as f64),
             Value::Num(n) => Ok(*n),
-            Value::Dur(_) | Value::Frames(_) | Value::Angle(_) => Err(Diagnostic::new("E-TYP-002", format!("{what} must be a plain number, found {}", v.type_name()))),
-            other => Err(type_err(format!("{what} must be a number, found {}", other.type_name()))),
+            Value::Dur(_) | Value::Frames(_) | Value::Angle(_) => Err(Diagnostic::new(
+                "E-TYP-002",
+                format!("{what} must be a plain number, found {}", v.type_name()),
+            )),
+            other => Err(type_err(format!(
+                "{what} must be a number, found {}",
+                other.type_name()
+            ))),
         }
     }
     fn int(&self, v: &Value, what: &str) -> Res<i64> {
         match v {
             Value::Int(i) => Ok(*i),
-            other => Err(type_err(format!("{what} must be an Int, found {}", other.type_name()))),
+            other => Err(type_err(format!(
+                "{what} must be an Int, found {}",
+                other.type_name()
+            ))),
         }
     }
     fn angle(&self, v: &Value, what: &str) -> Res<f64> {
         match v {
             Value::Angle(t) => Ok(*t),
-            Value::Int(_) | Value::Num(_) => Err(Diagnostic::new("E-TYP-002", format!("{what} needs an Angle, found a bare number"))
-                .help("a bare number has no unit; write `20.degrees`")),
-            other => Err(type_err(format!("{what} must be an Angle, found {}", other.type_name()))),
+            Value::Int(_) | Value::Num(_) => Err(Diagnostic::new(
+                "E-TYP-002",
+                format!("{what} needs an Angle, found a bare number"),
+            )
+            .help("a bare number has no unit; write `20.degrees`")),
+            other => Err(type_err(format!(
+                "{what} must be an Angle, found {}",
+                other.type_name()
+            ))),
         }
     }
     fn point(&self, v: &Value, what: &str) -> Res<[f64; 2]> {
@@ -571,35 +760,59 @@ impl Interp {
                 sh.require_live(*r, Some(Kind::V), what)?;
                 Ok(sh.pos(r.id))
             }
-            other => Err(type_err(format!("{what} must be a point like `(10, 20)`, found {}", other.type_name()))),
+            other => Err(type_err(format!(
+                "{what} must be a point like `(10, 20)`, found {}",
+                other.type_name()
+            ))),
         }
     }
 
-    fn bind(&self, fname: &str, args: Vec<(Option<String>, Value)>, params: &[&'static str], required: &[&str]) -> Res<HashMap<&'static str, Value>> {
+    fn bind(
+        &self,
+        fname: &str,
+        args: Vec<(Option<String>, Value)>,
+        params: &[&'static str],
+        required: &[&str],
+    ) -> Res<HashMap<&'static str, Value>> {
         let mut out: HashMap<&'static str, Value> = HashMap::new();
         let mut pos = 0usize;
         for (name, v) in args {
             match name {
                 None => {
                     if pos >= params.len() {
-                        return Err(Diagnostic::new("E-TYP-003", format!("too many arguments to `{fname}`")).help(format!("`{fname}` takes: {}", params.join(", "))));
+                        return Err(Diagnostic::new(
+                            "E-TYP-003",
+                            format!("too many arguments to `{fname}`"),
+                        )
+                        .help(format!("`{fname}` takes: {}", params.join(", "))));
                     }
                     out.insert(params[pos], v);
                     pos += 1;
                 }
                 Some(n) => {
                     let Some(p) = params.iter().find(|p| **p == n) else {
-                        return Err(Diagnostic::new("E-TYP-003", format!("`{fname}` has no argument named `{n}`")).help(format!("`{fname}` takes: {}", params.join(", "))));
+                        return Err(Diagnostic::new(
+                            "E-TYP-003",
+                            format!("`{fname}` has no argument named `{n}`"),
+                        )
+                        .help(format!("`{fname}` takes: {}", params.join(", "))));
                     };
                     if out.insert(p, v).is_some() {
-                        return Err(Diagnostic::new("E-TYP-003", format!("argument `{n}` given twice to `{fname}`")));
+                        return Err(Diagnostic::new(
+                            "E-TYP-003",
+                            format!("argument `{n}` given twice to `{fname}`"),
+                        ));
                     }
                 }
             }
         }
         for r in required {
             if !out.contains_key(r) {
-                return Err(Diagnostic::new("E-TYP-003", format!("`{fname}` is missing the argument `{r}`")).help(format!("`{fname}` takes: {}", params.join(", "))));
+                return Err(Diagnostic::new(
+                    "E-TYP-003",
+                    format!("`{fname}` is missing the argument `{r}`"),
+                )
+                .help(format!("`{fname}` takes: {}", params.join(", "))));
             }
         }
         Ok(out)
@@ -615,9 +828,13 @@ impl Interp {
         match &e.kind {
             ExprKind::Num(t) => {
                 if t.chars().all(|c| c.is_ascii_digit()) {
-                    t.parse::<i64>().map(Value::Int).map_err(|_| type_err("integer literal too large"))
+                    t.parse::<i64>()
+                        .map(Value::Int)
+                        .map_err(|_| type_err("integer literal too large"))
                 } else {
-                    t.parse::<f64>().map(Value::Num).map_err(|_| type_err(format!("bad number `{t}`")))
+                    t.parse::<f64>()
+                        .map(Value::Num)
+                        .map_err(|_| type_err(format!("bad number `{t}`")))
                 }
             }
             ExprKind::Unit { num, unit } => self.unit_value(num, unit),
@@ -642,7 +859,11 @@ impl Interp {
                     ("-", Value::Num(n)) => Ok(Value::Num(-n)),
                     ("-", Value::Angle(a)) => Ok(Value::Angle(-a)),
                     ("-", Value::Dur(r)) => Ok(Value::Dur(Rat::new(-r.n, r.d))),
-                    ("-", Value::Tuple(t)) => Ok(Value::Tuple(t.into_iter().map(|x| self.binop("*", x, Value::Int(-1))).collect::<Res<_>>()?)),
+                    ("-", Value::Tuple(t)) => Ok(Value::Tuple(
+                        t.into_iter()
+                            .map(|x| self.binop("*", x, Value::Int(-1)))
+                            .collect::<Res<_>>()?,
+                    )),
                     ("not", Value::Bool(b)) => Ok(Value::Bool(!b)),
                     (o, v) => Err(type_err(format!("cannot apply `{o}` to {}", v.type_name()))),
                 }
@@ -650,45 +871,84 @@ impl Interp {
             ExprKind::Binary(op, a, b) => {
                 if *op == "and" || *op == "or" {
                     let av = self.eval(a, vars, mode)?;
-                    let Value::Bool(ab) = av else { return Err(type_err(format!("`{op}` needs Bool operands, found {}", av.type_name()))) };
+                    let Value::Bool(ab) = av else {
+                        return Err(type_err(format!(
+                            "`{op}` needs Bool operands, found {}",
+                            av.type_name()
+                        )));
+                    };
                     if (*op == "and" && !ab) || (*op == "or" && ab) {
                         return Ok(Value::Bool(ab));
                     }
                     let bv = self.eval(b, vars, mode)?;
                     return match bv {
                         Value::Bool(x) => Ok(Value::Bool(x)),
-                        other => Err(type_err(format!("`{op}` needs Bool operands, found {}", other.type_name()))),
+                        other => Err(type_err(format!(
+                            "`{op}` needs Bool operands, found {}",
+                            other.type_name()
+                        ))),
                     };
                 }
                 let av = self.eval(a, vars, mode)?;
                 if *op == "??" {
-                    return if matches!(av, Value::None) { self.eval(b, vars, mode) } else { Ok(av) };
+                    return if matches!(av, Value::None) {
+                        self.eval(b, vars, mode)
+                    } else {
+                        Ok(av)
+                    };
                 }
                 let bv = self.eval(b, vars, mode)?;
                 self.binop(op, av, bv)
             }
-            ExprKind::Tuple(items) => Ok(Value::Tuple(items.iter().map(|x| self.eval(x, vars, mode)).collect::<Res<_>>()?)),
-            ExprKind::List(items) => Ok(Value::List(items.iter().map(|x| self.eval(x, vars, mode)).collect::<Res<_>>()?)),
+            ExprKind::Tuple(items) => Ok(Value::Tuple(
+                items
+                    .iter()
+                    .map(|x| self.eval(x, vars, mode))
+                    .collect::<Res<_>>()?,
+            )),
+            ExprKind::List(items) => Ok(Value::List(
+                items
+                    .iter()
+                    .map(|x| self.eval(x, vars, mode))
+                    .collect::<Res<_>>()?,
+            )),
             ExprKind::Range(a, b) => {
                 let (av, bv) = (self.eval(a, vars, mode)?, self.eval(b, vars, mode)?);
-                let (lo, hi) = (self.int(&av, "a range bound")?, self.int(&bv, "a range bound")?);
+                let (lo, hi) = (
+                    self.int(&av, "a range bound")?,
+                    self.int(&bv, "a range bound")?,
+                );
                 Ok(Value::List((lo..=hi).map(Value::Int).collect()))
             }
         }
     }
 
     fn unit_value(&self, num: &str, unit: &str) -> Res<Value> {
-        let rat = || Rat::parse_decimal(num).ok_or_else(|| type_err(format!("`{num}` cannot be used with a unit")));
-        let f = || num.parse::<f64>().map_err(|_| type_err(format!("bad number `{num}`")));
+        let rat = || {
+            Rat::parse_decimal(num)
+                .ok_or_else(|| type_err(format!("`{num}` cannot be used with a unit")))
+        };
+        let f = || {
+            num.parse::<f64>()
+                .map_err(|_| type_err(format!("bad number `{num}`")))
+        };
         Ok(match unit {
             "seconds" | "second" | "s" => Value::Dur(rat()?),
             "ms" => Value::Dur(rat()?.mul(Rat::new(1, 1000))),
-            "frames" | "frame" | "f" => Value::Frames(num.parse::<i64>().map_err(|_| type_err("frame counts are whole numbers").help("`36f` is exact; fractions of a frame do not exist"))?),
+            "frames" | "frame" | "f" => Value::Frames(num.parse::<i64>().map_err(|_| {
+                type_err("frame counts are whole numbers")
+                    .help("`36f` is exact; fractions of a frame do not exist")
+            })?),
             "degrees" | "degree" | "deg" => Value::Angle(f()? / 360.0),
             "turns" | "turn" => Value::Angle(f()?),
             "rad" | "radians" => Value::Angle(f()? / std::f64::consts::TAU),
             "px" => Value::Num(f()?),
-            _ => return Err(Diagnostic::new("E-LEX-004", format!("unknown unit suffix `{unit}`"))),
+            _ => {
+                return Err(Diagnostic::new(
+                    "E-LEX-004",
+                    format!("unknown unit suffix `{unit}`"),
+                ))
+            }
         })
     }
 
@@ -719,7 +979,11 @@ impl Interp {
     }
 
     fn elem_list(&self, sn: &str, kind: Kind, ids: &[u32]) -> Value {
-        Value::List(ids.iter().map(|i| Value::Elem(sn.to_string(), ElemRef { kind, id: *i })).collect())
+        Value::List(
+            ids.iter()
+                .map(|i| Value::Elem(sn.to_string(), ElemRef { kind, id: *i }))
+                .collect(),
+        )
     }
 
     fn get_attr(&mut self, obj: Value, name: &str) -> Res<Value> {
@@ -757,8 +1021,20 @@ impl Interp {
                 let same = |ids: &[u32]| self.elem_list(&sn, r.kind, ids);
                 match name {
                     "children" => return Ok(same(&meta.children)),
-                    "parent" => return Ok(meta.parent.map(|p| Value::Elem(sn.clone(), p)).unwrap_or(Value::None)),
-                    "created" => return Ok(Value::List(meta.created.iter().map(|c| Value::Elem(sn.clone(), *c)).collect())),
+                    "parent" => {
+                        return Ok(meta
+                            .parent
+                            .map(|p| Value::Elem(sn.clone(), p))
+                            .unwrap_or(Value::None))
+                    }
+                    "created" => {
+                        return Ok(Value::List(
+                            meta.created
+                                .iter()
+                                .map(|c| Value::Elem(sn.clone(), *c))
+                                .collect(),
+                        ))
+                    }
                     "alive" => return Ok(Value::Bool(meta.state == State::Live)),
                     "name" => return Ok(meta.alias.clone().map(Value::Str).unwrap_or(Value::None)),
                     _ => {}
@@ -797,12 +1073,19 @@ impl Interp {
                 let ent = &self.entities[&en];
                 match ent.flags.get(name) {
                     Some(b) => Ok(Value::Bool(*b)),
-                    None => Err(Diagnostic::new("E-NAM-003", format!("`{en}` has no flag `{name}`")).help(format!("declared flags: {}", ent.states.join(", ")))),
+                    None => Err(Diagnostic::new(
+                        "E-NAM-003",
+                        format!("`{en}` has no flag `{name}`"),
+                    )
+                    .help(format!("declared flags: {}", ent.states.join(", ")))),
                 }
             }
             Value::SceneObj => match name {
                 "starts" => Ok(Value::Bool(self.events.contains("scene.starts"))),
-                _ => Err(Diagnostic::new("E-NAM-003", format!("`scene` has no event `{name}`")).help("this build supports `scene.starts`")),
+                _ => Err(
+                    Diagnostic::new("E-NAM-003", format!("`scene` has no event `{name}`"))
+                        .help("this build supports `scene.starts`"),
+                ),
             },
             other => Err(type_err(format!("a {} has no members", other.type_name()))),
         }
@@ -817,18 +1100,31 @@ impl Interp {
             }
             Value::List(items) | Value::Tuple(items) => {
                 let i = self.int(&idx, "a list index")?;
-                items.get(usize::try_from(i).unwrap_or(usize::MAX)).cloned().ok_or_else(|| {
-                    Diagnostic::new("E-TYP-001", format!("index {i} is out of range for a list of {}", items.len())).help("lists are indexed from 0")
-                })
+                items
+                    .get(usize::try_from(i).unwrap_or(usize::MAX))
+                    .cloned()
+                    .ok_or_else(|| {
+                        Diagnostic::new(
+                            "E-TYP-001",
+                            format!("index {i} is out of range for a list of {}", items.len()),
+                        )
+                        .help("lists are indexed from 0")
+                    })
             }
-            other => Err(type_err(format!("a {} cannot be indexed", other.type_name()))),
+            other => Err(type_err(format!(
+                "a {} cannot be indexed",
+                other.type_name()
+            ))),
         }
     }
 
     // ---- operators ---------------------------------------------------------------------
 
     fn mismatch(&self, verb: &str, a: &Value, b: &Value) -> Diagnostic {
-        let mut d = Diagnostic::new("E-TYP-002", format!("cannot {verb} `{}` and `{}`", a.type_name(), b.type_name()));
+        let mut d = Diagnostic::new(
+            "E-TYP-002",
+            format!("cannot {verb} `{}` and `{}`", a.type_name(), b.type_name()),
+        );
         let bare = |v: &Value| matches!(v, Value::Int(_) | Value::Num(_));
         let unit = |v: &Value| matches!(v, Value::Dur(_) | Value::Frames(_) | Value::Angle(_));
         if (bare(a) && unit(b)) || (unit(a) && bare(b)) {
@@ -849,7 +1145,9 @@ impl Interp {
             (Shape(x), Shape(y)) => x == y,
             (Elem(s1, r1), Elem(s2, r2)) => s1 == s2 && r1 == r2,
             (Entity(x), Entity(y)) => x == y,
-            (List(x), List(y)) | (Tuple(x), Tuple(y)) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| self.values_eq(p, q)),
+            (List(x), List(y)) | (Tuple(x), Tuple(y)) => {
+                x.len() == y.len() && x.iter().zip(y).all(|(p, q)| self.values_eq(p, q))
+            }
             _ => {
                 if let (Some(x), Some(y)) = (a.as_f64(), b.as_f64()) {
                     return x == y;
@@ -871,7 +1169,12 @@ impl Interp {
             match op {
                 "+" => return Ok(Dur(x.add(y))),
                 "-" => return Ok(Dur(x.sub(y))),
-                "/" => return x.div(y).map(|r| Num(r.to_f64())).ok_or_else(|| Diagnostic::new("E-RUN-005", "division by zero")),
+                "/" => {
+                    return x
+                        .div(y)
+                        .map(|r| Num(r.to_f64()))
+                        .ok_or_else(|| Diagnostic::new("E-RUN-005", "division by zero"))
+                }
                 "<" | "<=" | ">" | ">=" => {
                     let o = x.cmp(y);
                     return Ok(Bool(match op {
@@ -898,7 +1201,9 @@ impl Interp {
                     "+" => Int(x.wrapping_add(*y)),
                     "-" => Int(x.wrapping_sub(*y)),
                     "*" => Int(x.wrapping_mul(*y)),
-                    "/" | "%" if *y == 0 => return Err(Diagnostic::new("E-RUN-005", "division by zero")),
+                    "/" | "%" if *y == 0 => {
+                        return Err(Diagnostic::new("E-RUN-005", "division by zero"))
+                    }
                     "/" => Num(*x as f64 / *y as f64),
                     "%" => Int(x.rem_euclid(*y)),
                     "<" => Bool(x < y),
@@ -937,33 +1242,59 @@ impl Interp {
                 ">=" => Ok(Bool(x >= y)),
                 _ => Err(self.mismatch(verb, &a, &b)),
             },
-            (Angle(x), n) | (n, Angle(x)) if n.as_f64().is_some() && (op == "*" || (op == "/" && matches!(a, Angle(_)))) => {
+            (Angle(x), n) | (n, Angle(x))
+                if n.as_f64().is_some() && (op == "*" || (op == "/" && matches!(a, Angle(_)))) =>
+            {
                 let k = n.as_f64().unwrap();
                 Ok(Angle(if op == "*" { x * k } else { x / k }))
             }
-            (d, n) | (n, d) if self.to_dur(d).is_some() && n.as_f64().is_some() && (op == "*" || (op == "/" && self.to_dur(&a).is_some())) => {
-                let k = Rat::from_f64(n.as_f64().unwrap()).ok_or_else(|| type_err("cannot scale a duration by that number"))?;
+            (d, n) | (n, d)
+                if self.to_dur(d).is_some()
+                    && n.as_f64().is_some()
+                    && (op == "*" || (op == "/" && self.to_dur(&a).is_some())) =>
+            {
+                let k = Rat::from_f64(n.as_f64().unwrap())
+                    .ok_or_else(|| type_err("cannot scale a duration by that number"))?;
                 let x = self.to_dur(d).unwrap();
                 if op == "*" {
                     Ok(Dur(x.mul(k)))
                 } else {
-                    x.div(k).map(Dur).ok_or_else(|| Diagnostic::new("E-RUN-005", "division by zero"))
+                    x.div(k)
+                        .map(Dur)
+                        .ok_or_else(|| Diagnostic::new("E-RUN-005", "division by zero"))
                 }
             }
-            (Tuple(x), Tuple(y)) if (op == "+" || op == "-") && x.len() == y.len() => {
-                Ok(Tuple(x.iter().zip(y).map(|(p, q)| self.binop(op, p.clone(), q.clone())).collect::<Res<_>>()?))
-            }
-            (Tuple(x), n) if n.as_f64().is_some() && (op == "*" || op == "/") => {
-                Ok(Tuple(x.iter().map(|p| self.binop(op, p.clone(), n.clone())).collect::<Res<_>>()?))
-            }
-            (n, Tuple(x)) if n.as_f64().is_some() && op == "*" => Ok(Tuple(x.iter().map(|p| self.binop(op, n.clone(), p.clone())).collect::<Res<_>>()?)),
+            (Tuple(x), Tuple(y)) if (op == "+" || op == "-") && x.len() == y.len() => Ok(Tuple(
+                x.iter()
+                    .zip(y)
+                    .map(|(p, q)| self.binop(op, p.clone(), q.clone()))
+                    .collect::<Res<_>>()?,
+            )),
+            (Tuple(x), n) if n.as_f64().is_some() && (op == "*" || op == "/") => Ok(Tuple(
+                x.iter()
+                    .map(|p| self.binop(op, p.clone(), n.clone()))
+                    .collect::<Res<_>>()?,
+            )),
+            (n, Tuple(x)) if n.as_f64().is_some() && op == "*" => Ok(Tuple(
+                x.iter()
+                    .map(|p| self.binop(op, n.clone(), p.clone()))
+                    .collect::<Res<_>>()?,
+            )),
             _ => Err(self.mismatch(verb, &a, &b)),
         }
     }
 
     // ---- calls -------------------------------------------------------------------------
 
-    pub fn eval_call(&mut self, call: &Expr, f: &Expr, args: &[Arg], extra: Vec<(Option<String>, Value)>, vars: &Vars, mode: Mode) -> Res<Value> {
+    pub fn eval_call(
+        &mut self,
+        call: &Expr,
+        f: &Expr,
+        args: &[Arg],
+        extra: Vec<(Option<String>, Value)>,
+        vars: &Vars,
+        mode: Mode,
+    ) -> Res<Value> {
         let mut vals: Vec<(Option<String>, Value)> = vec![];
         let callee = match &f.kind {
             ExprKind::Member(o, name) => Some((self.eval(o, vars, mode)?, name.clone())),
@@ -980,9 +1311,16 @@ impl Interp {
         }
     }
 
-    fn call_function(&mut self, name: &str, args: Vec<(Option<String>, Value)>, _mode: Mode) -> Res<Value> {
+    fn call_function(
+        &mut self,
+        name: &str,
+        args: Vec<(Option<String>, Value)>,
+        _mode: Mode,
+    ) -> Res<Value> {
         let at_default = |m: &HashMap<&'static str, Value>, s: &Interp| -> Res<[f64; 2]> {
-            m.get("at").map(|v| s.point(v, "`at`")).unwrap_or(Ok([0.0, 0.0]))
+            m.get("at")
+                .map(|v| s.point(v, "`at`"))
+                .unwrap_or(Ok([0.0, 0.0]))
         };
         match name {
             "square" => {
@@ -1097,10 +1435,16 @@ impl Interp {
         }
     }
 
-    fn over_frames(&mut self, m: &HashMap<&'static str, Value>, mode: Mode, span: Span) -> Res<Option<(i64, Ease)>> {
+    fn over_frames(
+        &mut self,
+        m: &HashMap<&'static str, Value>,
+        mode: Mode,
+        span: Span,
+    ) -> Res<Option<(i64, Ease)>> {
         let Some(o) = m.get("over") else {
             if m.contains_key("ease") {
-                return Err(Diagnostic::new("E-TYP-003", "`ease` needs `over`").help("add a duration: `... over 0.3.seconds ease ease_out`"));
+                return Err(Diagnostic::new("E-TYP-003", "`ease` needs `over`")
+                    .help("add a duration: `... over 0.3.seconds ease ease_out`"));
             }
             return Ok(None);
         };
@@ -1111,32 +1455,61 @@ impl Interp {
         let n = self.frames_of(&o.clone(), span)?;
         let ease = match m.get("ease") {
             Some(Value::Ease(e)) => *e,
-            Some(other) => return Err(type_err(format!("`ease` must be an easing such as `ease_out`, found {}", other.type_name()))),
+            Some(other) => {
+                return Err(type_err(format!(
+                    "`ease` must be an easing such as `ease_out`, found {}",
+                    other.type_name()
+                )))
+            }
             None => Ease::InOut,
         };
         Ok(if n == 0 { None } else { Some((n, ease)) })
     }
 
-    fn call_method(&mut self, obj: Value, name: &str, args: Vec<(Option<String>, Value)>, span: Span, mode: Mode) -> Res<Value> {
+    fn call_method(
+        &mut self,
+        obj: Value,
+        name: &str,
+        args: Vec<(Option<String>, Value)>,
+        span: Span,
+        mode: Mode,
+    ) -> Res<Value> {
         if TOPOLOGY_METHODS.contains(&name) {
             self.guard_topology(mode, name)?;
         }
         match obj {
             Value::Shape(sn) => self.shape_method(&sn, name, args, span, mode),
             Value::Elem(sn, r) => self.elem_method(&sn, r, name, args, span, mode),
-            other => Err(Diagnostic::new("E-NAM-003", format!("a {} has no operation `{name}`", other.type_name()))),
+            other => Err(Diagnostic::new(
+                "E-NAM-003",
+                format!("a {} has no operation `{name}`", other.type_name()),
+            )),
         }
     }
 
     fn elem_ref(&self, v: &Value, sn: &str, kind: Kind, what: &str) -> Res<ElemRef> {
         match v {
             Value::Elem(s, r) if s == sn && r.kind == kind => Ok(*r),
-            Value::Elem(s, r) if s != sn => Err(type_err(format!("`{}` belongs to another shape, not `{sn}`", self.shapes[s].label(*r)))),
-            other => Err(type_err(format!("{what} must be a {}, found {}", kind.name(), other.type_name()))),
+            Value::Elem(s, r) if s != sn => Err(type_err(format!(
+                "`{}` belongs to another shape, not `{sn}`",
+                self.shapes[s].label(*r)
+            ))),
+            other => Err(type_err(format!(
+                "{what} must be a {}, found {}",
+                kind.name(),
+                other.type_name()
+            ))),
         }
     }
 
-    fn shape_method(&mut self, sn: &str, name: &str, args: Vec<(Option<String>, Value)>, span: Span, mode: Mode) -> Res<Value> {
+    fn shape_method(
+        &mut self,
+        sn: &str,
+        name: &str,
+        args: Vec<(Option<String>, Value)>,
+        span: Span,
+        mode: Mode,
+    ) -> Res<Value> {
         match name {
             "smooth" => {
                 let m = self.bind(name, args, &["levels"], &[])?;
@@ -1209,7 +1582,10 @@ impl Interp {
                 "last" => Ok(MergeAt::Last),
                 _ => Err(type_err("`at` must be \"center\", \"first\" or \"last\"")),
             },
-            Some(o) => Err(type_err(format!("`at` must be a string, found {}", o.type_name()))),
+            Some(o) => Err(type_err(format!(
+                "`at` must be a string, found {}",
+                o.type_name()
+            ))),
         }
     }
 
@@ -1217,11 +1593,22 @@ impl Interp {
         match (m.get("x"), m.get("y")) {
             (Some(p @ Value::Tuple(_)), None) => self.point(p, "the target"),
             (Some(x), Some(y)) => Ok([self.num(x, "`x`")?, self.num(y, "`y`")?]),
-            _ => Err(Diagnostic::new("E-TYP-003", "this operation needs two numbers or one point").help("write `move_to(10, 20)` or `move_to((10, 20))`")),
+            _ => Err(
+                Diagnostic::new("E-TYP-003", "this operation needs two numbers or one point")
+                    .help("write `move_to(10, 20)` or `move_to((10, 20))`"),
+            ),
         }
     }
 
-    fn elem_method(&mut self, sn: &str, r: ElemRef, name: &str, args: Vec<(Option<String>, Value)>, span: Span, mode: Mode) -> Res<Value> {
+    fn elem_method(
+        &mut self,
+        sn: &str,
+        r: ElemRef,
+        name: &str,
+        args: Vec<(Option<String>, Value)>,
+        span: Span,
+        mode: Mode,
+    ) -> Res<Value> {
         match name {
             "move_to" | "move_by" => {
                 let m = self.bind(name, args, &["x", "y", "over", "ease"], &["x"])?;

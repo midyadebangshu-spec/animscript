@@ -23,7 +23,9 @@ pub fn check(src: &str) -> Vec<Diagnostic> {
     let scenes = it.program.scenes.clone();
     for sc in &scenes {
         if let Some(setup) = &sc.setup {
-            let vars = Vars { scopes: vec![it.globals.clone()] };
+            let vars = Vars {
+                scopes: vec![it.globals.clone()],
+            };
             let mut t = Task::new(0, std::rc::Rc::clone(setup), vars, Mode::Setup, true);
             let r = it.run_sync(&mut t);
             out.append(&mut it.diagnostics);
@@ -81,9 +83,12 @@ fn walk_stmt(it: &Interp, s: &Stmt, out: &mut Vec<Diagnostic>) {
         }
         StmtKind::Together(b) => walk_block(it, b, out),
         StmtKind::ShapeDecl { name, .. } => out.push(
-            Diagnostic::new("E-SHP-003", format!("shape `{name}` cannot be created while the scene is running"))
-                .at(s.span)
-                .help("declare shapes at the top level or in `setup:`"),
+            Diagnostic::new(
+                "E-SHP-003",
+                format!("shape `{name}` cannot be created while the scene is running"),
+            )
+            .at(s.span)
+            .help("declare shapes at the top level or in `setup:`"),
         ),
         StmtKind::Become { .. } | StmtKind::Note(_) | StmtKind::Pass => {}
     }
@@ -102,7 +107,9 @@ fn walk_expr(it: &Interp, e: &Expr, out: &mut Vec<Diagnostic>) {
                     );
                 }
                 if name == "morph_to" {
-                    if let (ExprKind::Name(a), Some(ExprKind::Name(b))) = (&obj.kind, args.first().map(|x| &x.value.kind)) {
+                    if let (ExprKind::Name(a), Some(ExprKind::Name(b))) =
+                        (&obj.kind, args.first().map(|x| &x.value.kind))
+                    {
                         if let (Some(sa), Some(sb)) = (it.shapes.get(a), it.shapes.get(b)) {
                             if let Err(d) = sa.check_morph(sb) {
                                 out.push(d.at(e.span));

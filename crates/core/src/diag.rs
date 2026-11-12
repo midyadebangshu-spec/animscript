@@ -16,7 +16,11 @@ impl Span {
     /// Extend to cover `other` when both are on the same line.
     pub fn to(self, other: Span) -> Span {
         if other.line == self.line {
-            Span { line: self.line, col: self.col.min(other.col), end_col: self.end_col.max(other.end_col) }
+            Span {
+                line: self.line,
+                col: self.col.min(other.col),
+                end_col: self.end_col.max(other.end_col),
+            }
         } else {
             self
         }
@@ -98,7 +102,10 @@ impl Diagnostic {
                     let pad = " ".repeat(num.len());
                     let carets = "^".repeat(sp.end_col.saturating_sub(sp.col).max(1) as usize);
                     let lead = " ".repeat(sp.col.saturating_sub(1) as usize);
-                    out += &format!("{pad} |\n{num} | {text}\n{pad} | {lead}{carets} {}\n{pad} |\n", self.label);
+                    out += &format!(
+                        "{pad} |\n{num} | {text}\n{pad} | {lead}{carets} {}\n{pad} |\n",
+                        self.label
+                    );
                 }
             }
         }

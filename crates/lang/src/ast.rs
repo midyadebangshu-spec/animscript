@@ -19,7 +19,10 @@ pub struct Arg {
 #[derive(Clone, Debug)]
 pub enum ExprKind {
     Num(String),
-    Unit { num: String, unit: String },
+    Unit {
+        num: String,
+        unit: String,
+    },
     Str(String),
     Bool(bool),
     Color([u8; 4]),
@@ -44,15 +47,38 @@ pub struct Stmt {
 #[derive(Clone, Debug)]
 pub enum StmtKind {
     Let(String, Expr),
-    ShapeDecl { name: String, expr: Expr, body: Option<Block> },
+    ShapeDecl {
+        name: String,
+        expr: Expr,
+        body: Option<Block>,
+    },
     Assign(Expr, Expr),
-    Expr { expr: Expr, over: Option<Expr>, ease: Option<Expr> },
-    For { var: String, iter: Expr, body: Block },
-    If { cond: Expr, then: Block, else_: Option<Block> },
-    Repeat { count: Expr, body: Block },
+    Expr {
+        expr: Expr,
+        over: Option<Expr>,
+        ease: Option<Expr>,
+    },
+    For {
+        var: String,
+        iter: Expr,
+        body: Block,
+    },
+    If {
+        cond: Expr,
+        then: Block,
+        else_: Option<Block>,
+    },
+    Repeat {
+        count: Expr,
+        body: Block,
+    },
     Wait(Expr),
     Together(Block),
-    Become { target: String, flag: String, set: bool },
+    Become {
+        target: String,
+        flag: String,
+        set: bool,
+    },
     Note(String),
     Assert(Expr),
     Pass,

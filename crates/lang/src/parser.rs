@@ -5,7 +5,8 @@ use animscript_core::{Diagnostic, Res, Span};
 use std::rc::Rc;
 
 pub const UNITS: &[&str] = &[
-    "seconds", "second", "s", "ms", "frames", "frame", "f", "degrees", "degree", "deg", "turns", "turn", "rad", "radians", "px",
+    "seconds", "second", "s", "ms", "frames", "frame", "f", "degrees", "degree", "deg", "turns",
+    "turn", "rad", "radians", "px",
 ];
 const SHORT_UNITS: &[&str] = &["s", "ms", "f", "px", "deg"];
 
@@ -26,7 +27,12 @@ fn parse_color(hex: &str) -> [u8; 4] {
         3 => [d[0] * 17, d[1] * 17, d[2] * 17, 255],
         4 => [d[0] * 17, d[1] * 17, d[2] * 17, d[3] * 17],
         6 => [d[0] * 16 + d[1], d[2] * 16 + d[3], d[4] * 16 + d[5], 255],
-        _ => [d[0] * 16 + d[1], d[2] * 16 + d[3], d[4] * 16 + d[5], d[6] * 16 + d[7]],
+        _ => [
+            d[0] * 16 + d[1],
+            d[2] * 16 + d[3],
+            d[4] * 16 + d[5],
+            d[6] * 16 + d[7],
+        ],
     }
 }
 
@@ -94,7 +100,11 @@ impl Parser {
             Ok(self.next())
         } else {
             let code = if o == ":" { "E-SYN-002" } else { "E-SYN-001" };
-            let msg = if o == ":" { "missing `:` before a block".to_string() } else { format!("expected `{o}`, found {}", self.describe()) };
+            let msg = if o == ":" {
+                "missing `:` before a block".to_string()
+            } else {
+                format!("expected `{o}`, found {}", self.describe())
+            };
             Err(Diagnostic::new(code, msg).at(self.peek().span))
         }
     }
@@ -209,23 +219,51 @@ impl Parser {
         let start = self.next().span;
         let name = match self.next().t {
             T::Str(s) => s,
-            _ => return Err(Diagnostic::new("E-SYN-001", "expected the project name as a string").at(start)),
+            _ => {
+                return Err(
+                    Diagnostic::new("E-SYN-001", "expected the project name as a string").at(start),
+                )
+            }
         };
-        let mut pr = Project { name, anim_version: None, canvas: (1280, 720), fps: (24, 1), seed: 0, background: None, span: start };
+        let mut pr = Project {
+            name,
+            anim_version: None,
+            canvas: (1280, 720),
+            fps: (24, 1),
+            seed: 0,
+            background: None,
+            span: start,
+        };
         self.attrs(|p, key, span| {
             match key {
                 "anim_version" => match p.next().t {
                     T::Str(s) => pr.anim_version = Some(s),
-                    _ => return Err(Diagnostic::new("E-SYN-001", "anim_version must be a string").at(span)),
+                    _ => {
+                        return Err(
+                            Diagnostic::new("E-SYN-001", "anim_version must be a string").at(span),
+                        )
+                    }
                 },
                 "canvas" => match p.next().t {
                     T::Canvas(w, h) => pr.canvas = (w, h),
-                    _ => return Err(Diagnostic::new("E-SYN-001", "canvas must look like `1280x720`").at(span)),
+                    _ => {
+                        return Err(Diagnostic::new(
+                            "E-SYN-001",
+                            "canvas must look like `1280x720`",
+                        )
+                        .at(span))
+                    }
                 },
                 "fps" => {
                     let n = match p.next().t {
                         T::Num(s) => s.parse::<i64>().unwrap_or(24),
-                        _ => return Err(Diagnostic::new("E-SYN-001", "fps must be an integer or a ratio such as 30000/1001").at(span)),
+                        _ => {
+                            return Err(Diagnostic::new(
+                                "E-SYN-001",
+                                "fps must be an integer or a ratio such as 30000/1001",
+                            )
+                            .at(span))
+                        }
                     };
                     let mut d = 1;
                     if p.eat_op("/") {
@@ -275,14 +313,23 @@ impl Parser {
             }
             Ok(())
         })?;
-        Ok(EntityDecl { kind, name, states, span: start })
+        Ok(EntityDecl {
+            kind,
+            name,
+            states,
+            span: start,
+        })
     }
 
     fn scene(&mut self) -> Res<Scene> {
         let start = self.next().span;
         let name = match self.next().t {
             T::Str(s) => s,
-            _ => return Err(Diagnostic::new("E-SYN-001", "expected the scene name as a string").at(start)),
+            _ => {
+                return Err(
+                    Diagnostic::new("E-SYN-001", "expected the scene name as a string").at(start),
+                )
+            }
         };
         if self.at_ident("in") {
             self.next();
@@ -307,7 +354,14 @@ impl Parser {
             return self.err("expected an indented scene body");
         }
         self.next();
-        let mut sc = Scene { name, length, setup: None, main: None, rules: vec![], span: start };
+        let mut sc = Scene {
+            name,
+            length,
+            setup: None,
+            main: None,
+            rules: vec![],
+            span: start,
+        };
         loop {
             self.skip_newlines();
             if matches!(self.peek().t, T::Dedent | T::Eof) {
@@ -329,7 +383,11 @@ impl Parser {
                 "setup" => sc.setup = Some(self.block()?),
                 "main" => sc.main = Some(self.block()?),
                 "when" | "whenever" => {
-                    let kind = if kw == "when" { RuleKind::When } else { RuleKind::Whenever };
+                    let kind = if kw == "when" {
+                        RuleKind::When
+                    } else {
+                        RuleKind::Whenever
+                    };
                     let trigger = self.expr()?;
                     let mut guard = None;
                     let mut priority = 0;
@@ -347,19 +405,33 @@ impl Parser {
                             self.next();
                             let m = self.ident("`ignore`")?;
                             if m != "ignore" {
-                                return Err(Diagnostic::new("E-SYN-001", "only `retrigger ignore` is supported in this slice").at(self.prev_span()));
+                                return Err(Diagnostic::new(
+                                    "E-SYN-001",
+                                    "only `retrigger ignore` is supported in this slice",
+                                )
+                                .at(self.prev_span()));
                             }
                         } else {
                             break;
                         }
                     }
                     let body = self.block()?;
-                    sc.rules.push(Rule { kind, trigger, guard, priority, body, span: sp });
+                    sc.rules.push(Rule {
+                        kind,
+                        trigger,
+                        guard,
+                        priority,
+                        body,
+                        span: sp,
+                    });
                 }
                 other => {
-                    return Err(Diagnostic::new("E-SYN-001", format!("`{other}` is not supported in a scene yet"))
-                        .at(sp)
-                        .help("this build supports `cast:`, `setup:`, `main:`, `when` and `whenever`"))
+                    return Err(Diagnostic::new(
+                        "E-SYN-001",
+                        format!("`{other}` is not supported in a scene yet"),
+                    )
+                    .at(sp)
+                    .help("this build supports `cast:`, `setup:`, `main:`, `when` and `whenever`"))
                 }
             }
         }
@@ -373,8 +445,15 @@ impl Parser {
 
     fn stmt(&mut self) -> Res<Stmt> {
         let start = self.peek().span;
-        let kw = if let T::Ident(s) = &self.peek().t { s.clone() } else { String::new() };
-        let mk = |kind: StmtKind, end: Span| Stmt { kind, span: start.to(end) };
+        let kw = if let T::Ident(s) = &self.peek().t {
+            s.clone()
+        } else {
+            String::new()
+        };
+        let mk = |kind: StmtKind, end: Span| Stmt {
+            kind,
+            span: start.to(end),
+        };
         match kw.as_str() {
             "let" => {
                 self.next();
@@ -384,13 +463,18 @@ impl Parser {
                 self.end_stmt()?;
                 return Ok(mk(StmtKind::Let(name, e), self.prev_span()));
             }
-            "shape" if matches!(self.peek_at(1).t, T::Ident(_)) && matches!(self.peek_at(2).t, T::Op("=")) => {
+            "shape"
+                if matches!(self.peek_at(1).t, T::Ident(_))
+                    && matches!(self.peek_at(2).t, T::Op("=")) =>
+            {
                 self.next();
                 let name = self.ident("a shape name")?;
                 self.next();
                 let expr = self.expr()?;
                 let end = self.prev_span();
-                let body = if self.at_op(":") { Some(self.block()?) } else {
+                let body = if self.at_op(":") {
+                    Some(self.block()?)
+                } else {
                     self.end_stmt()?;
                     None
                 };
@@ -407,7 +491,10 @@ impl Parser {
                 let iter = if self.eat_op("..") {
                     let hi = self.expr()?;
                     let sp = lo.span.to(hi.span);
-                    Expr { kind: ExprKind::Range(Box::new(lo), Box::new(hi)), span: sp }
+                    Expr {
+                        kind: ExprKind::Range(Box::new(lo), Box::new(hi)),
+                        span: sp,
+                    }
                 } else {
                     lo
                 };
@@ -455,7 +542,9 @@ impl Parser {
                 self.next();
                 let s = match self.next().t {
                     T::Str(s) => s,
-                    _ => return Err(Diagnostic::new("E-SYN-001", "`note` needs a string").at(start)),
+                    _ => {
+                        return Err(Diagnostic::new("E-SYN-001", "`note` needs a string").at(start))
+                    }
                 };
                 self.end_stmt()?;
                 return Ok(mk(StmtKind::Note(s), self.prev_span()));
@@ -474,7 +563,9 @@ impl Parser {
             _ => {}
         }
         // `bird becomes flag` / `bird clears flag`
-        if matches!(self.peek().t, T::Ident(_)) && (self.at_ident_k(1, "becomes") || self.at_ident_k(1, "clears")) {
+        if matches!(self.peek().t, T::Ident(_))
+            && (self.at_ident_k(1, "becomes") || self.at_ident_k(1, "clears"))
+        {
             let target = self.ident("an entity")?;
             let set = self.ident("")? == "becomes";
             let flag = self.ident("a flag name")?;
@@ -498,7 +589,14 @@ impl Parser {
         }
         self.end_stmt()?;
         let end = self.prev_span();
-        Ok(mk(StmtKind::Expr { expr: e, over, ease }, end))
+        Ok(mk(
+            StmtKind::Expr {
+                expr: e,
+                over,
+                ease,
+            },
+            end,
+        ))
     }
 
     // ---- expressions -------------------------------------------------------------------
@@ -509,7 +607,15 @@ impl Parser {
 
     fn binary(&mut self, level: usize) -> Res<Expr> {
         // lowest to highest precedence
-        const LEVELS: &[&[&str]] = &[&["??"], &["or"], &["and"], &["==", "!="], &["<", "<=", ">", ">="], &["+", "-"], &["*", "/", "%"]];
+        const LEVELS: &[&[&str]] = &[
+            &["??"],
+            &["or"],
+            &["and"],
+            &["==", "!="],
+            &["<", "<=", ">", ">="],
+            &["+", "-"],
+            &["*", "/", "%"],
+        ];
         if level == LEVELS.len() {
             return self.unary();
         }
@@ -529,7 +635,10 @@ impl Parser {
             self.next();
             let rhs = self.binary(level + 1)?;
             let span = lhs.span.to(rhs.span);
-            lhs = Expr { kind: ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)), span };
+            lhs = Expr {
+                kind: ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)),
+                span,
+            };
         }
         Ok(lhs)
     }
@@ -539,12 +648,18 @@ impl Parser {
         if self.at_op("-") {
             self.next();
             let e = self.unary()?;
-            return Ok(Expr { span: start.to(e.span), kind: ExprKind::Unary("-", Box::new(e)) });
+            return Ok(Expr {
+                span: start.to(e.span),
+                kind: ExprKind::Unary("-", Box::new(e)),
+            });
         }
         if self.at_ident("not") {
             self.next();
             let e = self.unary()?;
-            return Ok(Expr { span: start.to(e.span), kind: ExprKind::Unary("not", Box::new(e)) });
+            return Ok(Expr {
+                span: start.to(e.span),
+                kind: ExprKind::Unary("not", Box::new(e)),
+            });
         }
         self.postfix()
     }
@@ -557,27 +672,47 @@ impl Parser {
                 match self.peek().t.clone() {
                     T::Ident(name) => {
                         let sp = self.next().span;
-                        e = Expr { span: e.span.to(sp), kind: ExprKind::Member(Box::new(e), name) };
+                        e = Expr {
+                            span: e.span.to(sp),
+                            kind: ExprKind::Member(Box::new(e), name),
+                        };
                     }
                     T::Num(n) => {
                         let root = root_name(&e).unwrap_or("shape").to_string();
-                        return Err(Diagnostic::new("E-SYN-001", format!("unexpected number `{n}` after `.`"))
-                            .at(self.peek().span)
-                            .help(format!("`v1.1` is not valid syntax; write `{root}.v1` for vertex 1"))
-                            .help(format!("for loops and computed access use the indexed form `{root}.v[n]`")));
+                        return Err(Diagnostic::new(
+                            "E-SYN-001",
+                            format!("unexpected number `{n}` after `.`"),
+                        )
+                        .at(self.peek().span)
+                        .help(format!(
+                            "`v1.1` is not valid syntax; write `{root}.v1` for vertex 1"
+                        ))
+                        .help(format!(
+                            "for loops and computed access use the indexed form `{root}.v[n]`"
+                        )));
                     }
-                    _ => return self.err(format!("expected a member name after `.`, found {}", self.describe())),
+                    _ => {
+                        return self.err(format!(
+                            "expected a member name after `.`, found {}",
+                            self.describe()
+                        ))
+                    }
                 }
             } else if self.at_op("[") {
                 self.next();
                 let idx = self.expr()?;
                 let end = self.expect_op("]")?.span;
-                e = Expr { span: e.span.to(end), kind: ExprKind::Index(Box::new(e), Box::new(idx)) };
+                e = Expr {
+                    span: e.span.to(end),
+                    kind: ExprKind::Index(Box::new(e), Box::new(idx)),
+                };
             } else if self.at_op("(") {
                 self.next();
                 let mut args = vec![];
                 while !self.at_op(")") {
-                    let name = if matches!(self.peek().t, T::Ident(_)) && matches!(self.peek_at(1).t, T::Op(":")) {
+                    let name = if matches!(self.peek().t, T::Ident(_))
+                        && matches!(self.peek_at(1).t, T::Op(":"))
+                    {
                         let n = self.ident("")?;
                         self.next();
                         Some(n)
@@ -591,7 +726,10 @@ impl Parser {
                     }
                 }
                 let end = self.expect_op(")")?.span;
-                e = Expr { span: e.span.to(end), kind: ExprKind::Call(Box::new(e), args) };
+                e = Expr {
+                    span: e.span.to(end),
+                    kind: ExprKind::Call(Box::new(e), args),
+                };
             } else {
                 break;
             }
@@ -609,23 +747,36 @@ impl Parser {
                     if let T::Ident(u) = self.peek_at(1).t.clone() {
                         if self.peek_at(1).adj {
                             if !UNITS.contains(&u.as_str()) {
-                                return Err(Diagnostic::new("E-LEX-004", format!("unknown unit suffix `{u}`"))
-                                    .at(self.peek_at(1).span)
-                                    .help("units: seconds, ms, frames, degrees, turns, rad, px"));
+                                return Err(Diagnostic::new(
+                                    "E-LEX-004",
+                                    format!("unknown unit suffix `{u}`"),
+                                )
+                                .at(self.peek_at(1).span)
+                                .help("units: seconds, ms, frames, degrees, turns, rad, px"));
                             }
                             self.next();
                             let us = self.next().span;
-                            return Ok(Expr { span: span.to(us), kind: ExprKind::Unit { num: n, unit: u } });
+                            return Ok(Expr {
+                                span: span.to(us),
+                                kind: ExprKind::Unit { num: n, unit: u },
+                            });
                         }
                     }
                 }
                 if let T::Ident(u) = self.peek().t.clone() {
                     if self.peek().adj {
                         if !SHORT_UNITS.contains(&u.as_str()) {
-                            return Err(Diagnostic::new("E-LEX-004", format!("unknown unit suffix `{u}`")).at(self.peek().span));
+                            return Err(Diagnostic::new(
+                                "E-LEX-004",
+                                format!("unknown unit suffix `{u}`"),
+                            )
+                            .at(self.peek().span));
                         }
                         let us = self.next().span;
-                        return Ok(Expr { span: span.to(us), kind: ExprKind::Unit { num: n, unit: u } });
+                        return Ok(Expr {
+                            span: span.to(us),
+                            kind: ExprKind::Unit { num: n, unit: u },
+                        });
                     }
                 }
                 ExprKind::Num(n)
@@ -648,10 +799,16 @@ impl Parser {
                         items.push(self.expr()?);
                     }
                     let end = self.expect_op(")")?.span;
-                    return Ok(Expr { span: span.to(end), kind: ExprKind::Tuple(items) });
+                    return Ok(Expr {
+                        span: span.to(end),
+                        kind: ExprKind::Tuple(items),
+                    });
                 }
                 let end = self.expect_op(")")?.span;
-                return Ok(Expr { span: span.to(end), kind: first.kind });
+                return Ok(Expr {
+                    span: span.to(end),
+                    kind: first.kind,
+                });
             }
             T::Op("[") => {
                 let mut items = vec![];
@@ -662,7 +819,10 @@ impl Parser {
                     }
                 }
                 let end = self.expect_op("]")?.span;
-                return Ok(Expr { span: span.to(end), kind: ExprKind::List(items) });
+                return Ok(Expr {
+                    span: span.to(end),
+                    kind: ExprKind::List(items),
+                });
             }
             _ => {
                 self.i = self.i.saturating_sub(1);

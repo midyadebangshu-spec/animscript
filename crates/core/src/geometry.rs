@@ -87,7 +87,14 @@ pub struct Meta {
 
 impl Meta {
     fn new(parent: Option<ElemRef>) -> Meta {
-        Meta { state: State::Live, parent, children: vec![], created: vec![], alias: None, note: String::new() }
+        Meta {
+            state: State::Live,
+            parent,
+            children: vec![],
+            created: vec![],
+            alias: None,
+            note: String::new(),
+        }
     }
 }
 
@@ -163,7 +170,12 @@ fn lerp(a: P, b: P, t: f64) -> P {
 pub fn curve_points(p0: P, p1: P, c: &Curve) -> Vec<P> {
     let d = [p1[0] - p0[0], p1[1] - p0[1]];
     let perp = [-d[1], d[0]];
-    let ctrl = |uw: &[f64; 2]| [p0[0] + uw[0] * d[0] + uw[1] * perp[0], p0[1] + uw[0] * d[1] + uw[1] * perp[1]];
+    let ctrl = |uw: &[f64; 2]| {
+        [
+            p0[0] + uw[0] * d[0] + uw[1] * perp[0],
+            p0[1] + uw[0] * d[1] + uw[1] * perp[1],
+        ]
+    };
     match c {
         Curve::Straight => vec![p0, p1],
         Curve::Quad(a) => vec![p0, ctrl(a), p1],
@@ -179,14 +191,19 @@ pub fn to_local(p0: P, p1: P, c: P) -> [f64; 2] {
         return [0.0, 0.0];
     }
     let r = [c[0] - p0[0], c[1] - p0[1]];
-    [(r[0] * d[0] + r[1] * d[1]) / d2, (r[0] * -d[1] + r[1] * d[0]) / d2]
+    [
+        (r[0] * d[0] + r[1] * d[1]) / d2,
+        (r[0] * -d[1] + r[1] * d[0]) / d2,
+    ]
 }
 
 fn split_bezier(pts: &[P], t: f64) -> (Vec<P>, Vec<P>) {
     let mut levels: Vec<Vec<P>> = vec![pts.to_vec()];
     while levels.last().unwrap().len() > 1 {
         let cur = levels.last().unwrap();
-        let next: Vec<P> = (0..cur.len() - 1).map(|i| lerp(cur[i], cur[i + 1], t)).collect();
+        let next: Vec<P> = (0..cur.len() - 1)
+            .map(|i| lerp(cur[i], cur[i + 1], t))
+            .collect();
         levels.push(next);
     }
     let left = levels.iter().map(|l| l[0]).collect();
@@ -202,7 +219,10 @@ fn bezier_at(pts: &[P], t: f64) -> P {
 fn piece_curve(pts: &[P]) -> Curve {
     match pts.len() {
         3 => Curve::Quad(to_local(pts[0], pts[2], pts[1])),
-        4 => Curve::Cubic(to_local(pts[0], pts[3], pts[1]), to_local(pts[0], pts[3], pts[2])),
+        4 => Curve::Cubic(
+            to_local(pts[0], pts[3], pts[1]),
+            to_local(pts[0], pts[3], pts[2]),
+        ),
         _ => Curve::Straight,
     }
 }
@@ -212,7 +232,9 @@ pub fn flatten(pts: &[P]) -> Vec<P> {
     if pts.len() == 2 {
         return pts.to_vec();
     }
-    (0..=FLATTEN_STEPS).map(|i| bezier_at(pts, i as f64 / FLATTEN_STEPS as f64)).collect()
+    (0..=FLATTEN_STEPS)
+        .map(|i| bezier_at(pts, i as f64 / FLATTEN_STEPS as f64))
+        .collect()
 }
 
 /// Signed area by the shoelace formula. Negative means counter-clockwise *on screen* (y points down).
@@ -231,7 +253,12 @@ fn orient(a: P, b: P, c: P) -> f64 {
 }
 
 fn proper_cross(a: P, b: P, c: P, d: P) -> bool {
-    let (d1, d2, d3, d4) = (orient(c, d, a), orient(c, d, b), orient(a, b, c), orient(a, b, d));
+    let (d1, d2, d3, d4) = (
+        orient(c, d, a),
+        orient(c, d, b),
+        orient(a, b, c),
+        orient(a, b, d),
+    );
     d1 * d2 < 0.0 && d3 * d4 < 0.0
 }
 
@@ -251,7 +278,11 @@ fn self_intersects(poly: &[P]) -> bool {
 }
 
 fn fmt_ids(kind: Kind, ids: &[u32]) -> String {
-    let mut s: Vec<String> = ids.iter().take(12).map(|i| format!("{}{}", kind.letter(), i)).collect();
+    let mut s: Vec<String> = ids
+        .iter()
+        .take(12)
+        .map(|i| format!("{}{}", kind.letter(), i))
+        .collect();
     if ids.len() > 12 {
         s.push(format!("… ({} more)", ids.len() - 12));
     }
@@ -263,8 +294,25 @@ fn fmt_ids(kind: Kind, ids: &[u32]) -> String {
 }
 
 const RESERVED_NAMES: &[&str] = &[
-    "v", "e", "f", "name", "vertices", "edges", "faces", "fill", "stroke", "stroke_width", "z", "visible",
-    "copy", "count", "smooth", "merge", "delete", "extrude", "morph_to",
+    "v",
+    "e",
+    "f",
+    "name",
+    "vertices",
+    "edges",
+    "faces",
+    "fill",
+    "stroke",
+    "stroke_width",
+    "z",
+    "visible",
+    "copy",
+    "count",
+    "smooth",
+    "merge",
+    "delete",
+    "extrude",
+    "morph_to",
 ];
 
 fn invalid(msg: impl Into<String>) -> Diagnostic {
@@ -318,22 +366,50 @@ impl Shape {
 
     pub fn live_ids(&self, kind: Kind) -> Vec<u32> {
         match kind {
-            Kind::V => self.verts.values().filter(|x| x.meta.state == State::Live).map(|x| x.id).collect(),
-            Kind::E => self.edges.values().filter(|x| x.meta.state == State::Live).map(|x| x.id).collect(),
-            Kind::F => self.faces.values().filter(|x| x.meta.state == State::Live).map(|x| x.id).collect(),
+            Kind::V => self
+                .verts
+                .values()
+                .filter(|x| x.meta.state == State::Live)
+                .map(|x| x.id)
+                .collect(),
+            Kind::E => self
+                .edges
+                .values()
+                .filter(|x| x.meta.state == State::Live)
+                .map(|x| x.id)
+                .collect(),
+            Kind::F => self
+                .faces
+                .values()
+                .filter(|x| x.meta.state == State::Live)
+                .map(|x| x.id)
+                .collect(),
         }
     }
 
     fn unknown(&self, kind: Kind, id: u32) -> Diagnostic {
         let allocated = self.next[kind as usize] - 1;
-        Diagnostic::new("E-SHP-002", format!("unknown {} `{}.{}{}`", kind.name(), self.name, kind.letter(), id))
-            .help(format!(
-                "`{}` has {} {}{}",
+        Diagnostic::new(
+            "E-SHP-002",
+            format!(
+                "unknown {} `{}.{}{}`",
+                kind.name(),
                 self.name,
-                kind.plural(),
-                fmt_ids(kind, &self.live_ids(kind)),
-                if allocated > 0 { format!(" (highest id ever used: {}{})", kind.letter(), allocated) } else { String::new() }
-            ))
+                kind.letter(),
+                id
+            ),
+        )
+        .help(format!(
+            "`{}` has {} {}{}",
+            self.name,
+            kind.plural(),
+            fmt_ids(kind, &self.live_ids(kind)),
+            if allocated > 0 {
+                format!(" (highest id ever used: {}{})", kind.letter(), allocated)
+            } else {
+                String::new()
+            }
+        ))
     }
 
     /// A reference to an element that has been allocated (live or retired). Errors with `E-SHP-002` otherwise.
@@ -361,8 +437,15 @@ impl Shape {
     fn retired(&self, r: ElemRef, m: &Meta) -> Diagnostic {
         let d = Diagnostic::new("E-SHP-002", format!("`{}` was {}", self.label(r), m.note));
         if m.state == State::Replaced && !m.children.is_empty() {
-            let c: Vec<String> = m.children.iter().map(|i| format!("{}.{}{}", self.name, r.kind.letter(), i)).collect();
-            d.help(format!("it no longer exists; use {} instead", c.join(" or ")))
+            let c: Vec<String> = m
+                .children
+                .iter()
+                .map(|i| format!("{}.{}{}", self.name, r.kind.letter(), i))
+                .collect();
+            d.help(format!(
+                "it no longer exists; use {} instead",
+                c.join(" or ")
+            ))
         } else {
             d.help(format!(
                 "retired ids are never reused; live {} are {}",
@@ -377,7 +460,12 @@ impl Shape {
         let m = self.meta(r).ok_or_else(|| self.unknown(r.kind, r.id))?;
         if let Some(k) = kind {
             if k != r.kind {
-                return Err(invalid(format!("`{op}` needs a {}, but `{}` is a {}", k.name(), self.label(r), r.kind.name())));
+                return Err(invalid(format!(
+                    "`{op}` needs a {}, but `{}` is a {}",
+                    k.name(),
+                    self.label(r),
+                    r.kind.name()
+                )));
             }
         }
         if m.state != State::Live {
@@ -401,21 +489,45 @@ impl Shape {
     fn new_vertex(&mut self, x: f64, y: f64, parent: Option<ElemRef>) -> u32 {
         let id = self.next[0];
         self.next[0] += 1;
-        self.verts.insert(id, Vertex { id, x, y, meta: Meta::new(parent) });
+        self.verts.insert(
+            id,
+            Vertex {
+                id,
+                x,
+                y,
+                meta: Meta::new(parent),
+            },
+        );
         self.link(parent, v(id));
         id
     }
     fn new_edge(&mut self, a: u32, b: u32, parent: Option<ElemRef>) -> u32 {
         let id = self.next[1];
         self.next[1] += 1;
-        self.edges.insert(id, Edge { id, a, b, curve: Curve::Straight, meta: Meta::new(parent) });
+        self.edges.insert(
+            id,
+            Edge {
+                id,
+                a,
+                b,
+                curve: Curve::Straight,
+                meta: Meta::new(parent),
+            },
+        );
         self.link(parent, e(id));
         id
     }
     fn new_face(&mut self, loop_: Vec<(u32, i8)>, parent: Option<ElemRef>) -> u32 {
         let id = self.next[2];
         self.next[2] += 1;
-        self.faces.insert(id, Face { id, loop_, meta: Meta::new(parent) });
+        self.faces.insert(
+            id,
+            Face {
+                id,
+                loop_,
+                meta: Meta::new(parent),
+            },
+        );
         self.link(parent, f(id));
         id
     }
@@ -433,7 +545,8 @@ impl Shape {
         [v.x, v.y]
     }
     fn pos_with(&self, vid: u32, ov: Option<&BTreeMap<u32, P>>) -> P {
-        ov.and_then(|m| m.get(&vid).copied()).unwrap_or_else(|| self.pos(vid))
+        ov.and_then(|m| m.get(&vid).copied())
+            .unwrap_or_else(|| self.pos(vid))
     }
 
     /// Absolute control points of an edge (2 = straight, 3 = quadratic, 4 = cubic).
@@ -460,7 +573,11 @@ impl Shape {
             .collect()
     }
     pub fn face_vertex_ids(&self, fid: u32) -> Vec<u32> {
-        self.faces[&fid].loop_.iter().map(|&(eid, s)| self.start_vertex(eid, s)).collect()
+        self.faces[&fid]
+            .loop_
+            .iter()
+            .map(|&(eid, s)| self.start_vertex(eid, s))
+            .collect()
     }
     fn start_vertex(&self, eid: u32, s: i8) -> u32 {
         let ed = &self.edges[&eid];
@@ -531,8 +648,11 @@ impl Shape {
         let mut seen: BTreeSet<&str> = BTreeSet::new();
         for n in names {
             let ok = !n.is_empty()
-                && n.chars().next().is_some_and(|c| c.is_ascii_lowercase() || c == '_')
-                && n.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+                && n.chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+                && n.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
             let id_like = n.len() > 1
                 && n.chars().next().and_then(Kind::from_letter).is_some()
                 && n[1..].chars().all(|c| c.is_ascii_digit());
@@ -541,13 +661,19 @@ impl Shape {
                     .help("names are lower snake case and must not look like an id (`v1`, `e2`) or clash with a member name"));
             }
             if let Some(existing) = self.aliases.get(n) {
-                return Err(Diagnostic::new("E-SHP-004", format!("duplicate semantic name `{n}` in `{}`", self.name))
-                    .help(format!("`{n}` already names {}", self.label(*existing)))
-                    .help("semantic names must be unique within a shape; pick another"));
+                return Err(Diagnostic::new(
+                    "E-SHP-004",
+                    format!("duplicate semantic name `{n}` in `{}`", self.name),
+                )
+                .help(format!("`{n}` already names {}", self.label(*existing)))
+                .help("semantic names must be unique within a shape; pick another"));
             }
             if !seen.insert(n.as_str()) {
-                return Err(Diagnostic::new("E-SHP-004", format!("duplicate semantic name `{n}` in `{}`", self.name))
-                    .help("the same name appears twice in this `names:` list"));
+                return Err(Diagnostic::new(
+                    "E-SHP-004",
+                    format!("duplicate semantic name `{n}` in `{}`", self.name),
+                )
+                .help("the same name appears twice in this `names:` list"));
             }
         }
         Ok(())
@@ -570,7 +696,10 @@ impl Shape {
     }
     fn expect_names(&self, names: &[String], n: usize, what: &str) -> Res<()> {
         if !names.is_empty() && names.len() != n {
-            return Err(invalid(format!("`names:` has {} entries but {what} produces {n}", names.len())));
+            return Err(invalid(format!(
+                "`names:` has {} entries but {what} produces {n}",
+                names.len()
+            )));
         }
         Ok(())
     }
@@ -587,16 +716,26 @@ impl Shape {
             let poly = self.face_polygon(fid);
             let label = self.label(f(fid));
             let problem = if self.faces[&fid].loop_.len() < 3 || shoelace(&poly).abs() < 1e-9 {
-                Some((0u8, format!("degenerate face `{label}` (zero area) after `{op}`")))
+                Some((
+                    0u8,
+                    format!("degenerate face `{label}` (zero area) after `{op}`"),
+                ))
             } else if self_intersects(&poly) {
-                Some((1u8, format!("face `{label}` intersects itself after `{op}`")))
+                Some((
+                    1u8,
+                    format!("face `{label}` intersects itself after `{op}`"),
+                ))
             } else {
                 None
             };
             if let Some((k, msg)) = problem {
                 now.insert((fid, k));
                 if !self.warned.contains(&(fid, k)) {
-                    fresh.push(Diagnostic::new("W-SHP-010", msg).help("move the vertices apart, or `delete` the face if it is not wanted"));
+                    fresh.push(
+                        Diagnostic::new("W-SHP-010", msg).help(
+                            "move the vertices apart, or `delete` the face if it is not wanted",
+                        ),
+                    );
                 }
             }
         }
@@ -608,7 +747,10 @@ impl Shape {
 
     fn face_unique_vertices(&self, fid: u32) -> Vec<u32> {
         let mut seen = BTreeSet::new();
-        self.face_vertex_ids(fid).into_iter().filter(|x| seen.insert(*x)).collect()
+        self.face_vertex_ids(fid)
+            .into_iter()
+            .filter(|x| seen.insert(*x))
+            .collect()
     }
     fn shift(&mut self, ids: &[u32], dx: f64, dy: f64) {
         for i in ids {
@@ -648,7 +790,10 @@ impl Shape {
     pub fn move_anchor(&self, r: ElemRef) -> P {
         let ids = self.element_vertices(r);
         let n = ids.len().max(1) as f64;
-        [ids.iter().map(|i| self.pos(*i)[0]).sum::<f64>() / n, ids.iter().map(|i| self.pos(*i)[1]).sum::<f64>() / n]
+        [
+            ids.iter().map(|i| self.pos(*i)[0]).sum::<f64>() / n,
+            ids.iter().map(|i| self.pos(*i)[1]).sum::<f64>() / n,
+        ]
     }
     pub fn move_by(&mut self, r: ElemRef, dx: f64, dy: f64) -> Res<()> {
         self.require_live(r, None, "move_by")?;
@@ -664,7 +809,8 @@ impl Shape {
     pub fn subdivide(&mut self, r: ElemRef, n: usize, names: &[String]) -> Res<()> {
         self.require_live(r, None, "subdivide")?;
         if n < 2 {
-            return Err(invalid("`subdivide` needs a count of at least 2").help("write `subdivide(2)` to split in half"));
+            return Err(invalid("`subdivide` needs a count of at least 2")
+                .help("write `subdivide(2)` to split in half"));
         }
         match r.kind {
             Kind::E => {
@@ -674,7 +820,11 @@ impl Shape {
                 self.apply_names(Kind::E, &es, names);
             }
             Kind::F => self.subdivide_face(r.id, n, names)?,
-            Kind::V => return Err(invalid("a vertex cannot be subdivided").help("subdivide an edge or a face")),
+            Kind::V => {
+                return Err(
+                    invalid("a vertex cannot be subdivided").help("subdivide an edge or a face")
+                )
+            }
         }
         self.post_edit("subdivide");
         Ok(())
@@ -687,7 +837,10 @@ impl Shape {
         let mut pieces: Vec<Vec<P>> = vec![];
         if ed.curve == Curve::Straight {
             for k in 0..n {
-                pieces.push(vec![lerp(p0, p1, k as f64 / n as f64), lerp(p0, p1, (k + 1) as f64 / n as f64)]);
+                pieces.push(vec![
+                    lerp(p0, p1, k as f64 / n as f64),
+                    lerp(p0, p1, (k + 1) as f64 / n as f64),
+                ]);
             }
             pieces[0][0] = p0;
             pieces[n - 1][1] = p1;
@@ -720,7 +873,11 @@ impl Shape {
     }
 
     fn replace_edge_in_faces(&mut self, old: u32, new_ids: &[u32]) {
-        for fc in self.faces.values_mut().filter(|x| x.meta.state == State::Live) {
+        for fc in self
+            .faces
+            .values_mut()
+            .filter(|x| x.meta.state == State::Live)
+        {
             let mut out = Vec::with_capacity(fc.loop_.len() + new_ids.len());
             for &(eid, s) in &fc.loop_ {
                 if eid == old {
@@ -742,16 +899,29 @@ impl Shape {
         let fc = self.faces[&fid].clone();
         let lbl = self.label(f(fid));
         if fc.loop_.len() != 4 {
-            return Err(invalid(format!("`{lbl}` has {} sides; a face grid needs exactly 4", fc.loop_.len()))
-                .help("subdivide the edges individually, or delete the face and rebuild it from a quad"));
+            return Err(invalid(format!(
+                "`{lbl}` has {} sides; a face grid needs exactly 4",
+                fc.loop_.len()
+            ))
+            .help(
+                "subdivide the edges individually, or delete the face and rebuild it from a quad",
+            ));
         }
-        if fc.loop_.iter().any(|&(eid, _)| self.edges[&eid].curve != Curve::Straight) {
+        if fc
+            .loop_
+            .iter()
+            .any(|&(eid, _)| self.edges[&eid].curve != Curve::Straight)
+        {
             return Err(invalid(format!("`{lbl}` has curved edges"))
                 .help("call `straighten()` on its edges first, then subdivide the face"));
         }
         self.expect_names(names, n * n, "this grid")?;
         self.validate_names(names)?;
-        let corners: Vec<u32> = fc.loop_.iter().map(|&(eid, s)| self.start_vertex(eid, s)).collect();
+        let corners: Vec<u32> = fc
+            .loop_
+            .iter()
+            .map(|&(eid, s)| self.start_vertex(eid, s))
+            .collect();
         let cp: Vec<P> = corners.iter().map(|&c| self.pos(c)).collect();
         // Subdivide the four boundary edges (shared with neighbouring faces, which stay consistent).
         let mut chains: Vec<(Vec<u32>, Vec<u32>)> = vec![];
@@ -811,7 +981,10 @@ impl Shape {
                     (he[i][j + 1], vg[i + 1][j + 1]),
                     (ve[i][j], vg[i][j + 1]),
                 ];
-                let loop_: Vec<(u32, i8)> = steps.iter().map(|&(eid, from)| (eid, self.sign_from(eid, from))).collect();
+                let loop_: Vec<(u32, i8)> = steps
+                    .iter()
+                    .map(|&(eid, from)| (eid, self.sign_from(eid, from)))
+                    .collect();
                 new_faces.push(self.new_face(loop_, parent));
             }
         }
@@ -828,15 +1001,22 @@ impl Shape {
         self.require_live(r, Some(Kind::E), "extrude")?;
         let lbl = self.label(r);
         if by == 0.0 || !by.is_finite() {
-            return Err(invalid("`extrude` needs a non-zero distance").help("write `extrude(by: 40)`; negative values push inward"));
+            return Err(invalid("`extrude` needs a non-zero distance")
+                .help("write `extrude(by: 40)`; negative values push inward"));
         }
         let ed = self.edges[&r.id].clone();
         let (pa, pb) = (self.pos(ed.a), self.pos(ed.b));
-        let users: Vec<u32> =
-            self.live_ids(Kind::F).into_iter().filter(|fid| self.faces[fid].loop_.iter().any(|x| x.0 == r.id)).collect();
+        let users: Vec<u32> = self
+            .live_ids(Kind::F)
+            .into_iter()
+            .filter(|fid| self.faces[fid].loop_.iter().any(|x| x.0 == r.id))
+            .collect();
         if users.len() > 1 {
-            return Err(invalid(format!("`{lbl}` is shared by {} faces, so there is no single outward side", users.len()))
-                .help("extrude edges on the boundary of the shape"));
+            return Err(invalid(format!(
+                "`{lbl}` is shared by {} faces, so there is no single outward side",
+                users.len()
+            ))
+            .help("extrude edges on the boundary of the shape"));
         }
         let d = [pb[0] - pa[0], pb[1] - pa[1]];
         let len = (d[0] * d[0] + d[1] * d[1]).sqrt();
@@ -845,7 +1025,12 @@ impl Shape {
         }
         // "Right of travel" on screen is (-dy, dx). For a counter-clockwise face the outside is on the right.
         let mut dir = if let Some(&fid) = users.first() {
-            let s = self.faces[&fid].loop_.iter().find(|x| x.0 == r.id).unwrap().1;
+            let s = self.faces[&fid]
+                .loop_
+                .iter()
+                .find(|x| x.0 == r.id)
+                .unwrap()
+                .1;
             let travel = if s > 0 { d } else { [-d[0], -d[1]] };
             let sign = if self.face_area(fid) < 0.0 { 1.0 } else { -1.0 };
             [-travel[1] * sign, travel[0] * sign]
@@ -860,8 +1045,18 @@ impl Shape {
         let e2 = self.new_edge(a2, b2, parent);
         let e3 = self.new_edge(b2, ed.b, parent);
         // ring a -> a2 -> b2 -> b -> a (back along the original edge), wound counter-clockwise on screen
-        let mut loop_ = vec![(e1, 1i8), (e2, 1), (e3, 1), (r.id, self.sign_from(r.id, ed.b))];
-        let ring = [pa, [pa[0] + dir[0] * by, pa[1] + dir[1] * by], [pb[0] + dir[0] * by, pb[1] + dir[1] * by], pb];
+        let mut loop_ = vec![
+            (e1, 1i8),
+            (e2, 1),
+            (e3, 1),
+            (r.id, self.sign_from(r.id, ed.b)),
+        ];
+        let ring = [
+            pa,
+            [pa[0] + dir[0] * by, pa[1] + dir[1] * by],
+            [pb[0] + dir[0] * by, pb[1] + dir[1] * by],
+            pb,
+        ];
         if shoelace(&ring) > 0.0 {
             loop_ = loop_.into_iter().rev().map(|(i, s)| (i, -s)).collect();
         }
@@ -884,10 +1079,16 @@ impl Shape {
     fn soften(&mut self, r: ElemRef, radius: f64, rounded: bool, op: &str) -> Res<()> {
         self.require_live(r, Some(Kind::V), op)?;
         let lbl = self.label(r);
-        let inc: Vec<u32> =
-            self.live_ids(Kind::E).into_iter().filter(|i| self.edges[i].a == r.id || self.edges[i].b == r.id).collect();
+        let inc: Vec<u32> = self
+            .live_ids(Kind::E)
+            .into_iter()
+            .filter(|i| self.edges[i].a == r.id || self.edges[i].b == r.id)
+            .collect();
         if inc.len() != 2 {
-            return Err(invalid(format!("`{op}` needs a corner with exactly two edges, `{lbl}` has {}", inc.len())));
+            return Err(invalid(format!(
+                "`{op}` needs a corner with exactly two edges, `{lbl}` has {}",
+                inc.len()
+            )));
         }
         if inc.iter().any(|i| self.edges[i].curve != Curve::Straight) {
             return Err(invalid(format!("a corner of `{lbl}` has a curved edge"))
@@ -902,15 +1103,26 @@ impl Shape {
                 ed.a
             }
         };
-        let (pa, pb, pv) = (self.pos(other(self, ea)), self.pos(other(self, eb)), self.pos(r.id));
+        let (pa, pb, pv) = (
+            self.pos(other(self, ea)),
+            self.pos(other(self, eb)),
+            self.pos(r.id),
+        );
         let len = |p: P| ((p[0] - pv[0]).powi(2) + (p[1] - pv[1]).powi(2)).sqrt();
         let (la, lb) = (len(pa), len(pb));
         let max = la.min(lb);
         if !(radius > 0.0 && radius < max) {
-            return Err(invalid(format!("`{op}` radius must be between 0 and {max:.6} (exclusive) at `{lbl}`"))
-                .help(format!("the shortest edge at this corner is {max:.3} long")));
+            return Err(invalid(format!(
+                "`{op}` radius must be between 0 and {max:.6} (exclusive) at `{lbl}`"
+            ))
+            .help(format!("the shortest edge at this corner is {max:.3} long")));
         }
-        let along = |p: P, l: f64| [pv[0] + (p[0] - pv[0]) / l * radius, pv[1] + (p[1] - pv[1]) / l * radius];
+        let along = |p: P, l: f64| {
+            [
+                pv[0] + (p[0] - pv[0]) / l * radius,
+                pv[1] + (p[1] - pv[1]) / l * radius,
+            ]
+        };
         let (qa, qb) = (along(pa, la), along(pb, lb));
         let va = self.new_vertex(qa[0], qa[1], Some(r));
         let vb = self.new_vertex(qb[0], qb[1], Some(r));
@@ -934,12 +1146,20 @@ impl Shape {
                 if (e1 == ea && e2 == eb) || (e1 == eb && e2 == ea) {
                     let from = self.end_vertex(lp[i].0, lp[i].1);
                     let s = self.sign_from(ne, from);
-                    self.faces.get_mut(&fid).unwrap().loop_.insert(i + 1, (ne, s));
+                    self.faces
+                        .get_mut(&fid)
+                        .unwrap()
+                        .loop_
+                        .insert(i + 1, (ne, s));
                     break;
                 }
             }
         }
-        let note = format!("{} into {}", if rounded { "rounded" } else { "beveled" }, fmt_ids(Kind::V, &[va, vb]));
+        let note = format!(
+            "{} into {}",
+            if rounded { "rounded" } else { "beveled" },
+            fmt_ids(Kind::V, &[va, vb])
+        );
         self.retire(r, State::Replaced, note);
         self.post_edit(op);
         Ok(())
@@ -950,7 +1170,8 @@ impl Shape {
     /// Chaikin corner cutting, `levels` times. Needs closed outlines where every vertex has exactly two edges.
     pub fn smooth(&mut self, levels: u32) -> Res<()> {
         if levels < 1 {
-            return Err(invalid("`smooth` needs at least 1 level").help("write `smooth(2)` for two rounds of Chaikin subdivision"));
+            return Err(invalid("`smooth` needs at least 1 level")
+                .help("write `smooth(2)` for two rounds of Chaikin subdivision"));
         }
         for _ in 0..levels {
             self.chaikin()?;
@@ -964,9 +1185,15 @@ impl Shape {
         if live_e.is_empty() {
             return Err(invalid(format!("`{}` has no edges to smooth", self.name)));
         }
-        if let Some(&c) = live_e.iter().find(|i| self.edges[i].curve != Curve::Straight) {
-            return Err(invalid(format!("`{}` is curved; smooth needs straight edges", self.label(e(c))))
-                .help(format!("call `{}.straighten()` first", self.label(e(c)))));
+        if let Some(&c) = live_e
+            .iter()
+            .find(|i| self.edges[i].curve != Curve::Straight)
+        {
+            return Err(invalid(format!(
+                "`{}` is curved; smooth needs straight edges",
+                self.label(e(c))
+            ))
+            .help(format!("call `{}.straighten()` first", self.label(e(c)))));
         }
         let mut deg: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
         for &eid in &live_e {
@@ -990,7 +1217,10 @@ impl Shape {
             let verts = self.face_vertex_ids(fid);
             let uniq: BTreeSet<u32> = verts.iter().copied().collect();
             if uniq.len() != verts.len() {
-                return Err(invalid(format!("`{}` touches itself; smooth needs simple outlines", self.label(f(fid)))));
+                return Err(invalid(format!(
+                    "`{}` touches itself; smooth needs simple outlines",
+                    self.label(f(fid))
+                )));
             }
             let mut key: Vec<u32> = self.faces[&fid].loop_.iter().map(|x| x.0).collect();
             key.sort();
@@ -1003,7 +1233,11 @@ impl Shape {
                 continue;
             }
             covered.extend(uniq);
-            rings.push(Ring { verts, edges: self.faces[&fid].loop_.clone(), faces: vec![fid] });
+            rings.push(Ring {
+                verts,
+                edges: self.faces[&fid].loop_.clone(),
+                faces: vec![fid],
+            });
         }
         for &start in deg.keys() {
             if covered.contains(&start) {
@@ -1020,9 +1254,16 @@ impl Shape {
                 if cur == start {
                     break;
                 }
-                eid = *deg[&cur].iter().find(|&&x| x != eid).unwrap_or(&deg[&cur][0]);
+                eid = *deg[&cur]
+                    .iter()
+                    .find(|&&x| x != eid)
+                    .unwrap_or(&deg[&cur][0]);
             }
-            rings.push(Ring { verts, edges, faces: vec![] });
+            rings.push(Ring {
+                verts,
+                edges,
+                faces: vec![],
+            });
         }
         for ring in rings {
             let n = ring.edges.len();
@@ -1038,7 +1279,8 @@ impl Shape {
             let mut new_loop = vec![];
             for i in 0..n {
                 let inner = self.new_edge(qs[i], rs[i], Some(e(ring.edges[i].0)));
-                let corner = self.new_edge(rs[i], qs[(i + 1) % n], Some(v(ring.verts[(i + 1) % n])));
+                let corner =
+                    self.new_edge(rs[i], qs[(i + 1) % n], Some(v(ring.verts[(i + 1) % n])));
                 new_loop.push((inner, 1i8));
                 new_loop.push((corner, 1i8));
             }
@@ -1075,7 +1317,11 @@ impl Shape {
             va.x = np[0];
             va.y = np[1];
         }
-        for ed in self.edges.values_mut().filter(|x| x.meta.state == State::Live) {
+        for ed in self
+            .edges
+            .values_mut()
+            .filter(|x| x.meta.state == State::Live)
+        {
             if ed.a == b.id {
                 ed.a = a.id;
             }
@@ -1083,20 +1329,46 @@ impl Shape {
                 ed.b = a.id;
             }
         }
-        let collapsed: Vec<u32> = self.live_ids(Kind::E).into_iter().filter(|i| self.edges[i].a == self.edges[i].b).collect();
-        for fc in self.faces.values_mut().filter(|x| x.meta.state == State::Live) {
+        let collapsed: Vec<u32> = self
+            .live_ids(Kind::E)
+            .into_iter()
+            .filter(|i| self.edges[i].a == self.edges[i].b)
+            .collect();
+        for fc in self
+            .faces
+            .values_mut()
+            .filter(|x| x.meta.state == State::Live)
+        {
             fc.loop_.retain(|x| !collapsed.contains(&x.0));
         }
         for c in &collapsed {
-            self.retire(e(*c), State::Deleted, format!("collapsed when {} was merged into {}", self.label(b), self.label(a)));
+            self.retire(
+                e(*c),
+                State::Deleted,
+                format!(
+                    "collapsed when {} was merged into {}",
+                    self.label(b),
+                    self.label(a)
+                ),
+            );
         }
         for fid in self.live_ids(Kind::F) {
             if self.faces[&fid].loop_.len() < 3 {
-                self.retire(f(fid), State::Deleted, "removed because a merge left it with fewer than 3 edges".into());
+                self.retire(
+                    f(fid),
+                    State::Deleted,
+                    "removed because a merge left it with fewer than 3 edges".into(),
+                );
                 if self.warn_on_edit {
                     self.warnings.push(
-                        Diagnostic::new("W-SHP-010", format!("degenerate face `{}` collapsed and was removed by `merge`", self.label(f(fid))))
-                            .help("merge fewer vertices, or rebuild the face"),
+                        Diagnostic::new(
+                            "W-SHP-010",
+                            format!(
+                                "degenerate face `{}` collapsed and was removed by `merge`",
+                                self.label(f(fid))
+                            ),
+                        )
+                        .help("merge fewer vertices, or rebuild the face"),
                     );
                 }
             }
@@ -1113,8 +1385,11 @@ impl Shape {
         self.require_live(r, None, "delete")?;
         match r.kind {
             Kind::V => {
-                let inc: Vec<u32> =
-                    self.live_ids(Kind::E).into_iter().filter(|i| self.edges[i].a == r.id || self.edges[i].b == r.id).collect();
+                let inc: Vec<u32> = self
+                    .live_ids(Kind::E)
+                    .into_iter()
+                    .filter(|i| self.edges[i].a == r.id || self.edges[i].b == r.id)
+                    .collect();
                 for eid in inc {
                     self.delete_edge(eid);
                 }
@@ -1127,10 +1402,17 @@ impl Shape {
         Ok(())
     }
     fn delete_edge(&mut self, eid: u32) {
-        let users: Vec<u32> =
-            self.live_ids(Kind::F).into_iter().filter(|fid| self.faces[fid].loop_.iter().any(|x| x.0 == eid)).collect();
+        let users: Vec<u32> = self
+            .live_ids(Kind::F)
+            .into_iter()
+            .filter(|fid| self.faces[fid].loop_.iter().any(|x| x.0 == eid))
+            .collect();
         for fid in users {
-            self.retire(f(fid), State::Deleted, format!("deleted because {} was deleted", self.label(e(eid))));
+            self.retire(
+                f(fid),
+                State::Deleted,
+                format!("deleted because {} was deleted", self.label(e(eid))),
+            );
         }
         self.retire(e(eid), State::Deleted, "deleted".into());
     }
@@ -1145,7 +1427,8 @@ impl Shape {
             return Err(invalid("`bend` angle must be between -90.degrees and 90.degrees (exclusive)")
                 .help("a quarter turn would need an infinitely long handle; use `set_handle` or subdivide first"));
         }
-        self.edges.get_mut(&r.id).unwrap().curve = Curve::Quad([0.5, (turns * std::f64::consts::TAU).tan() / 2.0]);
+        self.edges.get_mut(&r.id).unwrap().curve =
+            Curve::Quad([0.5, (turns * std::f64::consts::TAU).tan() / 2.0]);
         self.post_edit("bend");
         Ok(())
     }
@@ -1163,7 +1446,8 @@ impl Shape {
         self.require_live(r, Some(Kind::E), "set_handles")?;
         let ed = self.edges[&r.id].clone();
         let (p0, p1) = (self.pos(ed.a), self.pos(ed.b));
-        self.edges.get_mut(&r.id).unwrap().curve = Curve::Cubic(to_local(p0, p1, h1), to_local(p0, p1, h2));
+        self.edges.get_mut(&r.id).unwrap().curve =
+            Curve::Cubic(to_local(p0, p1, h1), to_local(p0, p1, h2));
         self.post_edit("set_handles");
         Ok(())
     }
@@ -1201,17 +1485,27 @@ pub fn square(size: f64, at: P) -> Shape {
 }
 pub fn rectangle(width: f64, height: f64, at: P) -> Shape {
     let (hw, hh) = (width / 2.0, height / 2.0);
-    closed(&[[at[0] - hw, at[1] - hh], [at[0] - hw, at[1] + hh], [at[0] + hw, at[1] + hh], [at[0] + hw, at[1] - hh]])
+    closed(&[
+        [at[0] - hw, at[1] - hh],
+        [at[0] - hw, at[1] + hh],
+        [at[0] + hw, at[1] + hh],
+        [at[0] + hw, at[1] - hh],
+    ])
 }
 /// Equilateral triangle pointing up with side `size`: v1 top, v2 bottom-left, v3 bottom-right.
 pub fn triangle(size: f64, at: P) -> Shape {
     let r = size / 3f64.sqrt();
-    closed(&[[at[0], at[1] - r], [at[0] - size / 2.0, at[1] + r / 2.0], [at[0] + size / 2.0, at[1] + r / 2.0]])
+    closed(&[
+        [at[0], at[1] - r],
+        [at[0] - size / 2.0, at[1] + r / 2.0],
+        [at[0] + size / 2.0, at[1] + r / 2.0],
+    ])
 }
 /// A regular n-gon: v1 at the top, then counter-clockwise on screen.
 pub fn circle(n: usize, radius: f64, at: P) -> Res<Shape> {
     if n < 3 {
-        return Err(invalid("`circle` needs at least 3 sides").help("write `circle(16, radius: 50)` for a smooth-looking circle"));
+        return Err(invalid("`circle` needs at least 3 sides")
+            .help("write `circle(16, radius: 50)` for a smooth-looking circle"));
     }
     let pts: Vec<P> = (0..n)
         .map(|k| {
@@ -1223,7 +1517,11 @@ pub fn circle(n: usize, radius: f64, at: P) -> Res<Shape> {
 }
 pub fn polygon(points: &[P]) -> Res<Shape> {
     if points.len() < 3 {
-        return Err(invalid(format!("`polygon` needs at least 3 points, got {}", points.len())).help("use `line(a, b)` for two points"));
+        return Err(invalid(format!(
+            "`polygon` needs at least 3 points, got {}",
+            points.len()
+        ))
+        .help("use `line(a, b)` for two points"));
     }
     Ok(closed(points))
 }

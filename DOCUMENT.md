@@ -3,10 +3,11 @@
 A learn-by-example guide to writing AnimScript (`.anim`) files. It covers every piece of syntax in the
 language specification v0.1, plus the planned shape system.
 
-> **Status.** The language is in the design stage. The compiler is not built yet (it will be written in Rust),
-> so nothing here can be run today. Sections marked **(planned)** are agreed designs that are not yet in the
-> specification PDF. If this guide and the specification ever disagree, the specification wins, except for
-> planned items, which the next spec revision will absorb.
+> **Status.** The compiler is being written in Rust. Today only the **shape system** (section 13) and the
+> small part of the language it needs (statements, loops, `when`/`whenever` rules on flags, vertex animation)
+> actually run. Everything else in this guide describes the specification and is **not implemented yet**.
+> If this guide and the specification disagree, the specification wins, except for section 13, which the next
+> spec revision will absorb (see `docs/DECISIONS.md` for every choice made).
 
 ---
 
@@ -858,22 +859,38 @@ setup:
 
 ---
 
-## 13. Shapes (planned)
+## 13. Shapes (implemented)
 
-> **Planned.** This is the editable-geometry system we agreed to add first. It is not in the v0.1 spec yet.
-> Details may change. Resolved ambiguities will be recorded in `docs/DECISIONS.md`.
+A **shape** is editable 2D geometry made of **vertices**, **edges** and **faces**, like Blender's edit mode
+but in 2D. Try it:
 
-A **shape** is editable 2D geometry made of **vertices**, **edges** and **faces**, like Blender's edit mode but in 2D.
+```bash
+cargo run -p anim -- check examples/flower.anim
+cargo run -p anim -- render examples/flower.anim -o flower.png
+```
 
 ### Creating shapes
 
 ```anim
-shape sq1 = square(size: 200)
-shape box = rectangle(width: 300, height: 120)
-shape tri = triangle(size: 150)
-shape ring = circle(16, radius: 80)               # an n-gon with n sides
+shape sq1  = square(size: 200)                      # centred on (0, 0); add `at: (x, y)` to move it
+shape box  = rectangle(width: 300, height: 120, at: (400, 300))
+shape tri  = triangle(size: 150)                    # equilateral, point up
+shape ring = circle(16, radius: 80)                 # an n-gon with n sides
 shape poly = polygon([(0, 0), (100, 0), (50, 80)])
-shape ruler = line((0, 0), (200, 0))
+shape ruler = line((0, 0), (200, 0))                # two vertices, one edge, no face
+shape copy1 = sq1.copy()
+```
+
+Positions are absolute canvas coordinates (origin top-left, +y down); `at:` is the centre.
+Bare numbers in shape operations are pixels. Angles accept `20.degrees` or `20.deg`.
+
+Style (applies to the whole shape; all optional):
+
+```anim
+sq1.fill = #f4a6c0
+sq1.stroke = #b83a6b
+sq1.stroke_width = 3
+sq1.z = 1                       # drawing order, higher is in front
 ```
 
 ### Naming elements
@@ -888,26 +905,30 @@ sq1.e2.bend(20.degrees)
 sq1.v[3].move_by(40, -10)
 ```
 
-- `vN`, `eN`, `fN` are numbered from 1.
-- **`v1.1` is not valid.** It collides with number literals and member access. Use `v1` or `v[1]`.
-- A square starts with `v1..v4` going counter-clockwise (on screen) from the top-left, `e1..e4`
-  (`eN` runs from `vN` to `vN+1`, `e4` closes back to `v1`) and `f1`.
+- `vN`, `eN`, `fN` are numbered from 1. **`v1.1` is not valid syntax.** Use `v1` or `v[1]`.
+- A square starts with `v1..v4` going counter-clockwise **on screen** from the top-left (top-left, bottom-left,
+  bottom-right, top-right), `e1..e4` (`eN` runs from `vN` to `vN+1`, `e4` closes back to `v1`) and `f1`.
 - An **edge** is an ordered pair of vertex IDs. A **face** is an ordered loop of edge IDs.
+- Reading things: `sq1.v1.x`, `sq1.v1.y`, `sq1.v1.position`, `sq1.f1.vertices` (in loop order),
+  `sq1.f1.edges`, `sq1.e1.vertices`, `sq1.e1.curve`, `sq1.vertices` / `.edges` / `.faces` (all live ones).
 
 ### Stable IDs
 
 Existing elements are **never renumbered or reused**; deleted IDs stay retired. New elements get the next unused
-number. Subdividing `e1` of a square creates `v5`, and `v1..v4` keep their IDs and positions.
+number. Subdividing `e1` of a square creates `v5` and edges `e5`, `e6`; `v1..v4` keep their IDs and positions.
 
 ```anim
-sq1.e1.children       # the edges created from e1
-sq1.v5.parent         # the element v5 came from (e1)
+sq1.e1.subdivide(2)
+sq1.e1.children       # [e5, e6]  the same-kind elements created from e1
+sq1.v5.parent         # e1        the element v5 came from
+sq1.e1.created        # [v5, e5, e6]  everything created from e1
+sq1.e1.alive          # false     e1 was replaced; using it in an operation is E-SHP-002
 ```
 
-You can also give elements semantic names, which are aliases for IDs and must be unique within the shape (`E-SHP-004`):
+Optional semantic names are aliases for IDs and must be unique within the shape:
 
 ```anim
-sq1.e1.subdivide(into: 3, names: ["left", "mid", "right"])
+sq1.e2.subdivide(into: 3, names: ["left", "mid", "right"])
 sq1.mid.bend(10.degrees)
 ```
 
@@ -915,72 +936,103 @@ sq1.mid.bend(10.degrees)
 
 | Operation | Effect |
 |---|---|
-| `subdivide(n)` | Split an edge into `n` equal parts, or a face into a grid |
-| `move_to(x, y)`, `move_by(dx, dy)` | Reposition a vertex. Moving an edge moves both its vertices |
-| `extrude(edge, by)` | Push an edge outward, creating new vertices, edges and a face |
-| `bevel(radius)` / `round(radius)` | Soften a corner vertex |
-| `smooth(levels)` | Chaikin (2D) subdivision, rounding the whole shape |
-| `merge(a, b)` | Weld two vertices |
-| `delete(element)` | Remove an element; the IDs of the rest stay |
-| `bend(angle)` | Curve an edge |
+| `e.subdivide(n)` / `f.subdivide(n)` | Split an edge into `n` equal parts, or a four-sided face into an `n`×`n` grid |
+| `v.move_to(x, y)`, `v.move_by(dx, dy)` | Reposition a vertex. Also accept a point: `move_to((x, y))`. On an edge, the midpoint goes to `(x, y)` and both vertices move. On a face, the centroid does |
+| `e.extrude(by: d)` | Push an edge outward by `d`, creating 2 vertices, 3 edges and a face |
+| `v.bevel(r)` / `v.round(r)` | Cut a corner `r` away along both edges (`round` joins the cut with a curve) |
+| `s.smooth(levels)` | Chaikin subdivision: rounds a closed outline (every vertex must have exactly two edges) |
+| `v1.merge(v2)` or `s.merge(v1, v2)` | Weld two vertices (`at: "first"` / `"last"` / default centre) |
+| `x.delete()` or `s.delete(x)` | Remove an element; the IDs of the rest stay |
+| `e.bend(angle)` | Curve an edge (|angle| < 90°; positive bulges to the right of travel, outward for a normal shape) |
+| `e.set_handle(x, y)`, `e.set_handles(p1, p2)`, `e.straighten()` | Explicit quadratic / cubic Bézier handles, or back to straight |
+| `a.morph_to(b)` | Move every vertex of `a` to the matching vertex of `b` |
 
-Edges are straight by default. `bend` or an explicit handle makes them quadratic or cubic Bézier curves.
+Edges are straight by default. Deleting a vertex deletes its edges and the faces using them; deleting an edge
+deletes the faces using it; deleting a face deletes only the face.
 
 ### Two modes
 
-1. **Authoring-time** operations change topology (`subdivide`, `extrude`, `merge`, `delete`, `bevel`, `smooth`).
-   They run in `setup:` or a `shape` build block, are deterministic, and finish before animation starts.
-2. **Runtime animation** only moves vertices. Vertex positions are ordinary animatable properties, so easing,
+1. **Authoring-time** operations change topology (`subdivide`, `extrude`, `bevel`, `round`, `smooth`, `merge`,
+   `delete`, `bend` and the handle operations). They run at the top level, in a `shape` build block or in a
+   scene's `setup:`, are deterministic, and finish before animation starts.
+
+   ```anim
+   shape flower = square(size: 200):      # a build block
+       flower.e1.subdivide(4)
+   ```
+
+2. **Runtime animation** only moves vertices. Vertex positions are ordinary animatable values, so easing,
    `together:` and rules all work:
 
+   ```anim
+   when bird.is_scared:
+       cloud.v[2].move_by(0, 10) over 0.3.seconds ease ease_out
+   ```
+
+   Two moves of the same vertex run one after the other; moves of different vertices run together.
+   Without `over`, a move is an instant, zero-time write.
+
+Morphing needs equal vertex counts, otherwise `E-SHP-001`
+("cannot morph: 4 vs 12 vertices; subdivide `sq1` first").
+
+### Language used by the examples
+
 ```anim
-when bird.is_scared:
-    cloud.v[2].move_by(0, 10) over 0.3.seconds
+for i in 1..4:                  # inclusive range: 1, 2, 3, 4
+    flower.e[i].subdivide(4)
+let ring = flower.f1.vertices   # lists are indexed from 0: ring[0]
+if i % 2 == 0:
+    ...
+else:
+    ...
+let c = (400, 300)
+let p = c + unit_vector(225.degrees) * 150     # points support + - and * by a number
 ```
 
-Morphing between two shapes needs equal vertex counts, otherwise `E-SHP-001`
-("cannot morph: 4 vs 12 vertices; subdivide `sq1` first").
+Helpers: `unit_vector(angle)`, `direction_to(a, b)`, `distance(a, b)`, `center(shape)`, `min`, `max`, `abs`, `clamp`,
+`lerp`, `floor`, `ceil`, `round`, `sqrt`, `sin`, `cos`, `len`, `frames(d)`.
 
 ### Shape errors
 
 | Code | Meaning |
 |---|---|
 | `E-SHP-001` | Morph vertex-count mismatch |
-| `E-SHP-002` | Unknown vertex/edge/face ID, or one that was deleted |
-| `E-SHP-003` | Operation not allowed at runtime (topology change after setup) |
+| `E-SHP-002` | Unknown vertex/edge/face ID, or one that was deleted or replaced |
+| `E-SHP-003` | Operation not allowed at runtime (topology change after setup); also caught by `anim check` |
 | `E-SHP-004` | Duplicate semantic name |
+| `E-SHP-005` | Invalid argument or operation not applicable (e.g. bevel radius longer than the edge) |
 | `W-SHP-010` | Degenerate face (zero area) or self-intersection after an edit |
 
 ### Worked example: a square becomes a flower
 
+This is `examples/flower.anim`; the picture is `examples/flower.png`.
+
 ```anim
-# 1. start from a square
+# 1. Start from a square (v1..v4, e1..e4, f1).
 shape flower = square(size: 200, at: (400, 300))
 
-# 2. cut every side into four (IDs never change, so a loop is safe)
+# 2. Cut every side into four. IDs never change, so a loop over e1..e4 is safe.
 for i in 1..4:
     flower.e[i].subdivide(4)
 
-# 3. push the ring out and in alternately
+# 3. Push the ring of 16 vertices out and in alternately.
 let c = (400, 300)
-let ring = flower.f1.vertices
+let ring = flower.f1.vertices          # in loop order, starting at v1
 for i in 0..15:
     let a = 225.degrees - i * 22.5.degrees
     if i % 2 == 0:
-        ring[i].move_to(c + unit_vector(a) * 150)
+        ring[i].move_to(c + unit_vector(a) * 230)
     else:
-        ring[i].move_to(c + unit_vector(a) * 80)
+        ring[i].move_to(c + unit_vector(a) * 110)
 
-# 4. bevel the tips
+# 4. Bevel the eight tips.
 for i in 0..15:
     if i % 2 == 0:
-        ring[i].bevel(30)
+        ring[i].bevel(45)
 
-# 5. round the whole outline
+# 5. Round the whole outline (Chaikin subdivision, twice).
 flower.smooth(2)
 ```
-
-*(`for i in a..b`, 0-based list indexing and `Vec2` arithmetic are proposed here and still awaiting approval.)*
 
 ---
 
@@ -1145,7 +1197,7 @@ setup main timeline screenplay when whenever while if else derive states event v
 requires on_conflict conflict together race repeat times wait start await cancel finally become clear emit let place
 lock release constrain attach cut dissolve assert fresh note and or not true false in for auto priority retrigger once`
 
-Also reserved for future use: `after`, `then`, `continue`, and `shape` (planned).
+Also reserved for future use: `after`, `then`, `continue`. `shape` is also a keyword.
 
 **Statement cheat sheet**
 

@@ -32,6 +32,14 @@ Trivial single-step edits (e.g. fixing a typo) do not need a plan.
 - Prefer the standard library and a small number of well-known crates; justify each new dependency in the plan.
 - Determinism is a core requirement (see spec §1.2, §6.11): no hidden inputs, no unseeded randomness.
 
+## Layout
+- `crates/core`: diagnostics and the editable shape model (`geometry.rs`). No parsing.
+- `crates/lang`: lexer, parser, interpreter, tick loop, snapshots, `check`.
+- `crates/render`: snapshot to PNG (`tiny-skia`). Pure function of the snapshot.
+- `crates/anim`: the `anim` CLI (`check`, `run`, `render`).
+- `docs/DECISIONS.md`: every spec ambiguity resolved so far. `DOCUMENT.md`: the user-facing syntax guide.
+- Golden snapshot: `UPDATE_GOLDEN=1 cargo test -p animscript-lang --test flower` regenerates it.
+
 ## Commands
 - Build: `cargo build`
 - Test: `cargo test`

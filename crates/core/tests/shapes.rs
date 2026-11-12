@@ -6,7 +6,10 @@ fn pos(sh: &Shape, id: u32) -> (f64, f64) {
     (v.x, v.y)
 }
 fn near(a: (f64, f64), b: (f64, f64)) {
-    assert!((a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9, "{a:?} != {b:?}");
+    assert!(
+        (a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9,
+        "{a:?} != {b:?}"
+    );
 }
 fn pt(p: [f64; 2]) -> (f64, f64) {
     (p[0], p[1])
@@ -38,7 +41,10 @@ fn t1_square_has_v1_v4_e1_e4_f1_with_correct_connectivity() {
     assert_eq!(ends, [(1, 2), (2, 3), (3, 4), (4, 1)]);
     assert_eq!(loop_ids(&s, 1), [1, 2, 3, 4]);
     assert_eq!(s.face_vertex_ids(1), [1, 2, 3, 4]);
-    assert!(s.face_area(1) < 0.0, "visually counter-clockwise (y points down)");
+    assert!(
+        s.face_area(1) < 0.0,
+        "visually counter-clockwise (y points down)"
+    );
     assert!(s.warnings.is_empty());
 }
 
@@ -52,11 +58,21 @@ fn t1_other_primitives() {
     let c = circle(8, 10.0, [0.0, 0.0]).unwrap();
     assert_eq!(c.live_ids(Kind::V).len(), 8);
     near(pos(&c, 1), (0.0, -10.0));
-    assert!(pos(&c, 2).0 < 0.0, "v2 follows v1 counter-clockwise on screen");
+    assert!(
+        pos(&c, 2).0 < 0.0,
+        "v2 follows v1 counter-clockwise on screen"
+    );
     let p = polygon(&[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]]).unwrap();
     assert_eq!(p.live_ids(Kind::E), [1, 2, 3]);
     let l = line([0.0, 0.0], [5.0, 5.0]);
-    assert_eq!((l.live_ids(Kind::V), l.live_ids(Kind::E), l.live_ids(Kind::F)), (vec![1, 2], vec![1], vec![]));
+    assert_eq!(
+        (
+            l.live_ids(Kind::V),
+            l.live_ids(Kind::E),
+            l.live_ids(Kind::F)
+        ),
+        (vec![1, 2], vec![1], vec![])
+    );
     assert_eq!(code(polygon(&[[0.0, 0.0], [1.0, 1.0]])).code, "E-SHP-005");
     assert_eq!(code(circle(2, 1.0, [0.0, 0.0])).code, "E-SHP-005");
 }
@@ -67,7 +83,12 @@ fn t2_subdividing_e1_into_2_yields_v5_midpoint_and_children() {
     let mut s = sq();
     s.subdivide(e(1), 2, &[]).unwrap();
     near(pos(&s, 5), (-100.0, 0.0));
-    for (i, p) in [(1, (-100.0, -100.0)), (2, (-100.0, 100.0)), (3, (100.0, 100.0)), (4, (100.0, -100.0))] {
+    for (i, p) in [
+        (1, (-100.0, -100.0)),
+        (2, (-100.0, 100.0)),
+        (3, (100.0, 100.0)),
+        (4, (100.0, -100.0)),
+    ] {
         near(pos(&s, i), p); // v1..v4 keep IDs and positions
     }
     assert_eq!(s.edges[&1].meta.children, [5, 6]);
@@ -97,7 +118,11 @@ fn t2_face_subdivide_makes_a_grid() {
     assert_eq!(s.live_ids(Kind::F).len(), 4);
     assert_eq!(s.faces[&1].meta.state, State::Replaced);
     assert_eq!(s.faces[&1].meta.children, [2, 3, 4, 5]);
-    let centre = s.live_ids(Kind::V).into_iter().filter(|i| pos(&s, *i) == (0.0, 0.0)).count();
+    let centre = s
+        .live_ids(Kind::V)
+        .into_iter()
+        .filter(|i| pos(&s, *i) == (0.0, 0.0))
+        .count();
     assert_eq!(centre, 1);
     for fid in s.live_ids(Kind::F) {
         assert_eq!(s.faces[&fid].loop_.len(), 4);
@@ -109,7 +134,10 @@ fn t2_face_subdivide_makes_a_grid() {
 #[test]
 fn t2_semantic_names_are_aliases() {
     let mut s = sq();
-    let names: Vec<String> = ["left", "mid", "right"].iter().map(|x| x.to_string()).collect();
+    let names: Vec<String> = ["left", "mid", "right"]
+        .iter()
+        .map(|x| x.to_string())
+        .collect();
     s.subdivide(e(1), 3, &names).unwrap();
     assert_eq!(s.resolve_name("mid"), Some(e(6)));
     assert_eq!(s.edges[&7].meta.alias.as_deref(), Some("right"));
@@ -123,9 +151,15 @@ fn t2_duplicate_semantic_name_is_e_shp_004_and_changes_nothing() {
     let err = code(s.subdivide(e(2), 2, &n(&["b", "c"])));
     assert_eq!(err.code, "E-SHP-004");
     assert!(!err.helps.is_empty());
-    assert_eq!(code(s.subdivide(e(2), 2, &n(&["x", "x"]))).code, "E-SHP-004");
+    assert_eq!(
+        code(s.subdivide(e(2), 2, &n(&["x", "x"]))).code,
+        "E-SHP-004"
+    );
     assert_eq!(s.live_ids(Kind::E), [2, 3, 4, 5, 6]);
-    assert_eq!(code(s.subdivide(e(2), 2, &n(&["v9", "y"]))).code, "E-SHP-005");
+    assert_eq!(
+        code(s.subdivide(e(2), 2, &n(&["v9", "y"]))).code,
+        "E-SHP-005"
+    );
 }
 
 // ---- Test 3 ---------------------------------------------------------------------------
@@ -135,11 +169,20 @@ fn t3_subdividing_twice_never_reuses_or_renumbers_an_id() {
     s.subdivide(e(1), 2, &[]).unwrap(); // v5, e5, e6
     s.subdivide(e(5), 2, &[]).unwrap(); // v6, e7, e8  (e5 retired)
     s.subdivide(e(2), 3, &[]).unwrap(); // v7 v8, e9 e10 e11
-    assert_eq!(s.verts.keys().copied().collect::<Vec<_>>(), (1..=8).collect::<Vec<_>>());
-    assert_eq!(s.edges.keys().copied().collect::<Vec<_>>(), (1..=11).collect::<Vec<_>>());
+    assert_eq!(
+        s.verts.keys().copied().collect::<Vec<_>>(),
+        (1..=8).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        s.edges.keys().copied().collect::<Vec<_>>(),
+        (1..=11).collect::<Vec<_>>()
+    );
     near(pos(&s, 1), (-100.0, -100.0));
     near(pos(&s, 6), (-100.0, -50.0));
-    assert_eq!((s.edges[&1].meta.state, s.edges[&5].meta.state), (State::Replaced, State::Replaced));
+    assert_eq!(
+        (s.edges[&1].meta.state, s.edges[&5].meta.state),
+        (State::Replaced, State::Replaced)
+    );
     assert_eq!(s.edges[&5].meta.children, [7, 8]);
     assert_eq!(s.edges[&7].meta.parent, Some(e(5)));
     assert_eq!(loop_ids(&s, 1), [7, 8, 6, 9, 10, 11, 3, 4]);
@@ -197,7 +240,10 @@ fn t5_extrude_creates_the_expected_new_face() {
     ids.sort();
     assert_eq!(ids, [1, 5, 6, 7]);
     assert_eq!(s.face_vertex_ids(2), [1, 5, 6, 2]);
-    assert!((s.face_area(2) + 40.0 * 200.0).abs() < 1e-9, "same winding as the original face");
+    assert!(
+        (s.face_area(2) + 40.0 * 200.0).abs() < 1e-9,
+        "same winding as the original face"
+    );
     assert_eq!(s.faces[&2].meta.parent, Some(e(1)));
     assert_eq!(s.verts[&5].meta.parent, Some(e(1)));
     assert_eq!(s.edges[&1].meta.children, [5, 6, 7]);
@@ -245,7 +291,10 @@ fn t6_delete_edge_and_face() {
     assert_eq!(s.live_ids(Kind::V), [1, 2, 3, 4]);
     let mut s = sq();
     s.delete(f(1)).unwrap();
-    assert_eq!((s.live_ids(Kind::E), s.live_ids(Kind::V)), (vec![1, 2, 3, 4], vec![1, 2, 3, 4]));
+    assert_eq!(
+        (s.live_ids(Kind::E), s.live_ids(Kind::V)),
+        (vec![1, 2, 3, 4], vec![1, 2, 3, 4])
+    );
 }
 
 #[test]
@@ -265,7 +314,10 @@ fn t7_morph_vertex_count_mismatch_is_e_shp_001() {
     let b = circle(12, 50.0, [0.0, 0.0]).unwrap();
     let err = code(a.check_morph(&b));
     assert_eq!(err.code, "E-SHP-001");
-    assert_eq!(err.message, "cannot morph: 4 vs 12 vertices; subdivide `sq1` first");
+    assert_eq!(
+        err.message,
+        "cannot morph: 4 vs 12 vertices; subdivide `sq1` first"
+    );
     assert!(!err.helps.is_empty());
     assert!(a.check_morph(&square(50.0, [0.0, 0.0])).is_ok());
 }
@@ -356,7 +408,10 @@ fn smooth_is_chaikin() {
     near(first, (-100.0, -50.0));
     s.smooth(2).unwrap();
     assert_eq!(s.live_ids(Kind::V).len(), 32);
-    assert_eq!(code(line([0.0, 0.0], [1.0, 1.0]).smooth(1)).code, "E-SHP-005");
+    assert_eq!(
+        code(line([0.0, 0.0], [1.0, 1.0]).smooth(1)).code,
+        "E-SHP-005"
+    );
     assert_eq!(code(sq().smooth(0)).code, "E-SHP-005");
 }
 
