@@ -469,18 +469,17 @@ impl Interp {
 
     /// `own` holds each soft shape's own resolved transform this tick: when it changes, the whole
     /// simulation (points and pin targets) is carried along with it.
-    pub fn soft_tick(
+    pub fn soft_prepare(
         &mut self,
         tick: i64,
         targets: &BTreeMap<String, Transform>,
         own: &BTreeMap<String, Transform>,
-    ) -> Vec<(String, u32, f64, f64)> {
-        let (cfg, fps) = (self.world_cfg.clone(), self.fps.to_f64());
+    ) {
         let Some(sim) = self.soft.as_mut() else {
-            return vec![];
+            return;
         };
         if tick == 0 {
-            return vec![];
+            return;
         }
         let ppm = sim.ppm;
         for i in 0..sim.bodies.len() {
@@ -504,15 +503,17 @@ impl Interp {
                 }
             }
         }
-        let world = self.phys.as_mut().map(|p| &mut p.world);
-        ph::soft_step(
-            &mut sim.bodies,
-            world,
-            v2(cfg.gravity[0], cfg.gravity[1]),
-            1.0 / fps,
-            cfg.soft_substeps,
-            cfg.soft_iterations,
-        );
+    }
+
+    /// The new local vertex positions `(shape, vertex id, x, y)` to write as layer-2 overrides.
+    pub fn soft_collect(&self, tick: i64) -> Vec<(String, u32, f64, f64)> {
+        let Some(sim) = self.soft.as_ref() else {
+            return vec![];
+        };
+        if tick == 0 {
+            return vec![];
+        }
+        let ppm = sim.ppm;
         let mut out = vec![];
         for i in 0..sim.bodies.len() {
             for (v, id) in sim.ids[i].iter().enumerate() {
@@ -555,6 +556,9 @@ impl Interp {
 }
 
 impl SoftSim {
+    pub(crate) fn bodies_mut(&mut self) -> &mut [ph::SoftBody] {
+        &mut self.bodies
+    }
     fn volume(&self, i: usize) -> f64 {
         self.faces[i]
             .iter()

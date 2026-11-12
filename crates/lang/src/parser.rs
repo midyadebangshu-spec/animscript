@@ -165,6 +165,20 @@ impl Parser {
                         span: start,
                     });
                 }
+                T::Ident(s) if s == "fluid" && matches!(&self.peek_at(1).t, T::Ident(_)) => {
+                    let start = self.next().span;
+                    let name = self.ident("a fluid name")?;
+                    let mut attrs = vec![];
+                    self.attrs(|p, key, span| {
+                        attrs.push((key.to_string(), p.expr()?, span));
+                        Ok(())
+                    })?;
+                    prog.fluids.push(EmitterDecl {
+                        name,
+                        attrs,
+                        span: start,
+                    });
+                }
                 T::Ident(s) if s == "prop" || s == "character" => {
                     let e = self.entity()?;
                     prog.entities.push(e);
@@ -323,6 +337,8 @@ impl Parser {
             substeps: None,
             soft_substeps: None,
             soft_iterations: None,
+            fluid_substeps: None,
+            fluid_iterations: None,
             span: start,
         };
         self.attrs(|p, key, span| {
@@ -332,13 +348,15 @@ impl Parser {
                 "substeps" => w.substeps = Some(p.expr()?),
                 "soft_substeps" => w.soft_substeps = Some(p.expr()?),
                 "soft_iterations" => w.soft_iterations = Some(p.expr()?),
+                "fluid_substeps" => w.fluid_substeps = Some(p.expr()?),
+                "fluid_iterations" => w.fluid_iterations = Some(p.expr()?),
                 _ => {
                     return Err(Diagnostic::new(
                         "E-SYN-001",
                         format!("`world` has no setting `{key}`"),
                     )
                     .at(span)
-                    .help("settings: gravity, scale, substeps, soft_substeps, soft_iterations"))
+                    .help("settings: gravity, scale, substeps, soft_substeps, soft_iterations, fluid_substeps, fluid_iterations"))
                 }
             }
             Ok(())

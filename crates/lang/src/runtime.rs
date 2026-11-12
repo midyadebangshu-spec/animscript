@@ -195,6 +195,7 @@ impl Runtime {
         self.it.scene_name = sc.name.clone();
         self.it.decls.start_scene();
         self.it.reset_particles();
+        self.it.reset_fluids();
         self.it.mod_counts.clear();
         self.pending.clear();
         self.channels.clear();
@@ -218,6 +219,7 @@ impl Runtime {
                 self.it.freeze_pivots(); // pivots default to the bounding-box centre once building is over
                 self.it.build_physics()?; // the world starts from the shapes' poses after setup
                 self.it.build_soft()?;
+                self.it.fill_fluids()?;
                 self.register_timeline(sc)?;
                 if let Some(main) = &sc.main {
                     let id = self.new_task_id();
@@ -929,8 +931,13 @@ impl Runtime {
         }
         let mut physics = None;
         let mut soft_snap = None;
-        let (has_phys, has_soft) = (self.it.phys.is_some(), self.it.soft.is_some());
-        if has_phys || has_soft {
+        let mut fluid_snap = None;
+        let (has_phys, has_soft, has_fluid) = (
+            self.it.phys.is_some(),
+            self.it.soft.is_some(),
+            self.it.has_fluid(),
+        );
+        if has_phys || has_soft || has_fluid {
             // kinematic bodies follow the pose the other layers resolved; dynamic bodies write theirs
             let mut kin = BTreeMap::new();
             for n in self.it.kinematic_bodies() {
@@ -981,12 +988,15 @@ impl Runtime {
                 };
                 own.insert(n, t);
             }
-            let soft_out = if has_soft {
-                self.it.soft_tick(tick, &targets, &own)
+            if has_soft {
+                self.it.soft_prepare(tick, &targets, &own);
+            }
+            if has_soft || has_fluid {
+                self.it.step_coupled(tick);
             } else {
                 self.it.physics_advance(tick);
-                vec![]
-            };
+            }
+            let soft_out = self.it.soft_collect(tick);
             let poses = self.it.physics_collect();
             for (i, (n, x, y, r)) in poses.dynamic.into_iter().enumerate() {
                 for (prop, value) in [(PropId::PosX, x), (PropId::PosY, y), (PropId::Rot, r)] {
@@ -1022,10 +1032,12 @@ impl Runtime {
             }
             physics = self.it.physics_snapshot();
             soft_snap = self.it.soft_snapshot();
+            fluid_snap = self.it.fluid_snapshot();
         }
         let mut resolved = Resolved {
             physics,
             soft: soft_snap,
+            fluids: fluid_snap,
             ..Resolved::default()
         };
         for ((shape, prop), mut contribs) in by_prop {
@@ -1094,6 +1106,7 @@ impl Runtime {
 
     fn end_scene(&mut self) {
         self.it.end_soft();
+        self.it.end_fluids();
         self.it.end_physics();
         self.it.parts.clear();
         let acts = std::mem::take(&mut self.acts);

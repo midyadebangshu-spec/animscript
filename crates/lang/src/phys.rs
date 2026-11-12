@@ -22,6 +22,8 @@ pub struct WorldCfg {
     pub substeps: usize,
     pub soft_substeps: usize,
     pub soft_iterations: usize,
+    pub fluid_substeps: usize,
+    pub fluid_iterations: usize,
 }
 
 impl Default for WorldCfg {
@@ -32,6 +34,8 @@ impl Default for WorldCfg {
             substeps: 4,
             soft_substeps: 16,
             soft_iterations: 4,
+            fluid_substeps: 4,
+            fluid_iterations: 3,
         }
     }
 }
@@ -202,6 +206,8 @@ impl Interp {
         for (e, name, lo, hi) in [
             (&w.soft_substeps, "soft_substeps", 1, 128),
             (&w.soft_iterations, "soft_iterations", 1, 64),
+            (&w.fluid_substeps, "fluid_substeps", 1, 64),
+            (&w.fluid_iterations, "fluid_iterations", 1, 16),
         ] {
             if let Some(e) = e {
                 let v = self.eval(e, &vars, Mode::Build)?;
@@ -213,10 +219,11 @@ impl Interp {
                     )
                     .at(e.span));
                 }
-                if name == "soft_substeps" {
-                    cfg.soft_substeps = n as usize;
-                } else {
-                    cfg.soft_iterations = n as usize;
+                match name {
+                    "soft_substeps" => cfg.soft_substeps = n as usize,
+                    "soft_iterations" => cfg.soft_iterations = n as usize,
+                    "fluid_substeps" => cfg.fluid_substeps = n as usize,
+                    _ => cfg.fluid_iterations = n as usize,
                 }
             }
         }

@@ -1,0 +1,45 @@
+project "Fluid":
+    anim_version: "0.1"
+    canvas: 800x600
+    fps: 24
+    background: #f4f1ea
+
+world:
+    gravity: (0, 9.8)
+    scale: 100
+
+# a tank: a floor and two walls, all static bodies
+shape floor = rectangle(width: 540, height: 30, at: (400, 575))
+shape wall_l = rectangle(width: 20, height: 340, at: (150, 400))
+shape wall_r = rectangle(width: 20, height: 340, at: (650, 400))
+floor.fill = #6b5b4b
+wall_l.fill = #6b5b4b
+wall_r.fill = #6b5b4b
+floor.body(kind: static)
+wall_l.body(kind: static)
+wall_r.body(kind: static)
+
+# the water: a block of particles on a lattice, drawn as a smooth surface that darkens with depth
+fluid water:
+    fill: rect(170, 450, 460, 110)
+    spacing: 10
+    viscosity: 0.05
+    color: #62b0f0dd
+    color_end: #1f4f9add
+    max: 2500
+
+# a light ball floats, a heavy box sinks
+shape ball = circle(20, radius: 32, at: (520, 140))
+shape crate = square(size: 56, at: (330, 90))
+ball.fill = #e0674f
+crate.fill = #8a6a3a
+ball.body(density: 0.35, restitution: 0.2)
+crate.body(density: 3.0)
+
+scene "Fluid" for 7.seconds:
+    main:
+        wait 2.seconds
+        water.pour(at: (230, 40), speed: (60, 260), width: 30)
+        wait 2.seconds
+        water.stop()
+        wait 3.seconds

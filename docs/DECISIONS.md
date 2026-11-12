@@ -554,3 +554,49 @@ judgement calls I expect you to want to look at.
 123. **Still limits.** Mass ratios far above about 20:1 along one chain stretch noticeably; a soft shape has no
     skin-and-core mode; a very fast rigid body can still tunnel through a soft edge in one substep.
 
+
+## Round 8: fluids
+
+124. **Solver.** Position based fluids in 2D (`crates/physics/src/fluid.rs`): each particle stands for
+    `spacing^2` of fluid; a density constraint (poly6 density, spiky gradient, smoothing radius `2 * spacing`,
+    one-sided: only compression is corrected) moves neighbours until the local density matches the rest
+    density computed from a perfect lattice, with a tensile correction against clumping, XSPH smoothing for
+    `viscosity` and a small pull for `surface_tension`. Neighbours come from a sorted cell list (cells of
+    `1.3 h`, visited in cell then index order), so every sum has a fixed order and the result is
+    reproducible. Defaults: 4 substeps per frame and 3 density iterations (`fluid_substeps`,
+    `fluid_iterations` in `world:`). Particle speed is capped at 20 m/s.
+125. **Declaration.** `fluid name:` is a top-level block like `emitter`. Settings: `fill` (or `in`, an alias),
+    `spacing` (px, default 8), `density` (default 1), `viscosity` (0 to 1, default 0.05), `surface_tension`,
+    `color`, `color_end`, `render` (`"blob"` or `"dots"`), `behind`, `max` (default 4000, 20000 over all
+    fluids). `fill` takes `rect(x, y, w, h)` or a shape (its faces are filled; hide the shape if it is only a
+    region). Unknown settings or bad values are `E-FLD-001`; a bad `fill` is `E-FLD-002`. A region that needs
+    more than `max` particles is an error, not a silent truncation. There is no automatic container: `in:`
+    does not create walls; build the container from static bodies.
+126. **Lattice and scenes.** The region is filled with one particle per `spacing x spacing` cell, row by row,
+    after `setup:` (so shapes are in place). Every scene starts from its own fill: the water of the previous
+    scene is not kept. Particles that leave a box of three canvas sizes are removed so lost water does not
+    fill the pool.
+127. **Methods.** `pour(at:, speed:, width:, rate:)` starts a stream (the rate defaults to the one that makes a
+    continuous stream, `|speed| / spacing * width / spacing` particles per second; particles of a frame are
+    placed along the stream path so the jet is smooth), `stop()` ends all streams of that fluid, `add(region)`
+    adds a lattice block at once, `level(x)` is the surface height (px) within one spacing of `x` (none when
+    there is no water), and `count` is the number of particles. A pour needs a speed other than (0, 0).
+128. **Rigid bodies, two way.** Particles collide with every non-sensor fixture (a particle is a circle of half
+    the spacing). The contact is searched from where the particle was, with a margin for its speed and for the
+    solver's own movement, so a fast particle cannot jump a thin wall. Dynamic bodies receive the momentum of
+    the push-out as an impulse, which is how a box floats (about Archimedes' depth) and a ball splashes.
+129. **Soft bodies, one way.** Soft shapes are obstacles for the fluid (vertices plus samples along edges every
+    half spacing): water is pushed by them, but they are not pushed by it. Making this two way is left for
+    later. A cloth in a stream therefore does not move.
+130. **Lockstep.** `step_coupled` advances the rigid world, soft bodies and fluids together, substep by
+    substep (soft solve, fluid solve, world step). The number of substeps per frame is `fluid_substeps` for
+    fluids alone, `soft_substeps` for soft bodies alone and the larger of the two when both exist.
+131. **Output.** The snapshot has a `fluids` list (absent when none are declared) of `{name, spacing, color,
+    color_end, render, behind, particles: [[x, y]...]}` in pixels, included in the hash. The renderer, a pure
+    function of the snapshot, draws `"blob"` by splatting a smooth kernel (radius `1.6 * spacing`) into a
+    density field and thresholding it with a soft edge (the colour runs from `color` at the surface to
+    `color_end` eight spacings down; colours may carry an alpha), or `"dots"` as overlapping circles. Fluids
+    are drawn over the shapes, or under them with `behind: true`.
+132. **Limits.** The surface is only as fine as the spacing (8 px is a few thousand particles; halving it is
+    four times the particles); water at walls has a small density deficit, so it settles about a spacing
+    lower than the exact level; there is no air (no bubbles) and no two-way coupling with soft bodies.

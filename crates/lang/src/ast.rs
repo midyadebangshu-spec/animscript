@@ -150,6 +150,8 @@ pub struct WorldDecl {
     pub substeps: Option<Expr>,
     pub soft_substeps: Option<Expr>,
     pub soft_iterations: Option<Expr>,
+    pub fluid_substeps: Option<Expr>,
+    pub fluid_iterations: Option<Expr>,
     pub span: Span,
 }
 
@@ -207,6 +209,7 @@ pub struct Program {
     pub project: Option<Project>,
     pub world: Option<WorldDecl>,
     pub emitters: Vec<EmitterDecl>,
+    pub fluids: Vec<EmitterDecl>,
     pub entities: Vec<EntityDecl>,
     pub top: Vec<Stmt>,
     pub scenes: Vec<Rc<Scene>>,

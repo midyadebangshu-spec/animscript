@@ -5,6 +5,7 @@
 //! Units are metres, kilograms, seconds and radians. The y axis points down (screen space), so
 //! gravity is `(0, +9.8)`. The language layer converts pixels with a scale (100 px/m by default).
 mod collide;
+mod fluid;
 mod joint;
 mod math;
 mod particles;
@@ -13,11 +14,12 @@ mod soft;
 mod world;
 
 pub use collide::{collide, Manifold, ManifoldPoint};
+pub use fluid::{Fluid, FluidParams};
 pub use joint::{Joint, JointDef, JointKind};
 pub use math::{cross_sv, v2, Rot, Vec2, Xf};
 pub use particles::{Emitter, EmitterDef, Particle};
 pub use shape::{decompose, find_pairs, Aabb, MassData, Polygon, Shape};
-pub use soft::{soft_step, SoftBody, SoftParams};
+pub use soft::{coupled_step, soft_step, SoftBody, SoftParams};
 pub use world::{
     Body, BodyDef, BodyId, BodyKind, ContactEvent, ContactInfo, FixtureDef, JointId, World,
 };

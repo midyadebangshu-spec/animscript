@@ -213,6 +213,8 @@ pub struct Interp {
     pub emitters: BTreeMap<String, crate::particles::EmitterCfg>,
     pub parts: BTreeMap<String, animscript_physics::Emitter>,
     pub soft: Option<crate::soft::SoftSim>,
+    pub fluid_cfg: BTreeMap<String, crate::fluid::FluidCfg>,
+    pub fluid: Option<crate::fluid::FluidSim>,
 }
 
 pub const TOPOLOGY_METHODS: &[&str] = &[
@@ -281,6 +283,8 @@ impl Interp {
             emitters: BTreeMap::new(),
             parts: BTreeMap::new(),
             soft: None,
+            fluid_cfg: BTreeMap::new(),
+            fluid: None,
             program: Program::default(),
         };
         if let Some(p) = &program.project {
@@ -325,6 +329,7 @@ impl Interp {
         self.globals = t.vars.scopes[0].clone();
         self.freeze_pivots();
         self.eval_emitters()?;
+        self.eval_fluids()?;
         Ok(())
     }
 
@@ -1250,6 +1255,9 @@ impl Interp {
         if self.emitters.contains_key(n) {
             return Ok(Value::Emitter(n.to_string()));
         }
+        if self.fluid_cfg.contains_key(n) {
+            return Ok(Value::Fluid(n.to_string()));
+        }
         if let Some(e) = Ease::from_name(n) {
             return Ok(Value::Ease(e));
         }
@@ -1411,6 +1419,9 @@ impl Interp {
                         .help("this build supports `scene.starts`"),
                 ),
             },
+            Value::Fluid(fname) if name == "count" => {
+                Ok(Value::Int(self.fluid_count(&fname) as i64))
+            }
             Value::Emitter(en) if name == "count" => Ok(Value::Int(self.emitter_count(&en) as i64)),
             Value::Tuple(t) if t.len() == 2 && (name == "x" || name == "y") => {
                 Ok(t[usize::from(name == "y")].clone())
@@ -1869,6 +1880,10 @@ impl Interp {
         if let (Value::Shape(sn), true) = (&obj, Interp::is_soft_method(name)) {
             let sn = sn.clone();
             return self.soft_method(&sn, name, args, mode);
+        }
+        if let Value::Fluid(fname) = &obj {
+            let fname = fname.clone();
+            return self.fluid_method(&fname, name, args);
         }
         if let Value::Emitter(en) = &obj {
             let en = en.clone();

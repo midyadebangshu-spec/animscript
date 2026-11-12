@@ -63,6 +63,148 @@ pub fn render(snapshot: &Value, scale: f32, debug: bool) -> Result<Pixmap, Strin
     render_with(snapshot, scale, debug, false)
 }
 
+/// Draw the fluids of a snapshot: `blob` rasterises a smooth density field of the particles
+/// (shaded from the surface colour to the deep colour by depth under the surface), `dots` draws
+/// overlapping circles. Only `behind` or only front fluids are drawn, as asked.
+fn draw_fluids(pm: &mut Pixmap, fluids: &Value, scale: f32, behind: bool) {
+    for fl in fluids.as_array().into_iter().flatten() {
+        if fl["behind"].as_bool().unwrap_or(false) != behind {
+            continue;
+        }
+        let spacing = fl["spacing"].as_f64().unwrap_or(8.0);
+        let (c0, c1) = (
+            fl["color"]
+                .as_str()
+                .and_then(parse_hex)
+                .unwrap_or(Color::from_rgba8(80, 150, 230, 255)),
+            fl["color_end"]
+                .as_str()
+                .and_then(parse_hex)
+                .unwrap_or(Color::from_rgba8(80, 150, 230, 255)),
+        );
+        let pts: Vec<(f64, f64)> = fl["particles"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|p| (p[0].as_f64().unwrap_or(0.0), p[1].as_f64().unwrap_or(0.0)))
+            .collect();
+        if pts.is_empty() {
+            continue;
+        }
+        // depth below the surface of the column (bins one spacing wide), 0 at the surface to 1 deep down
+        let mut tops: std::collections::BTreeMap<i64, f64> = Default::default();
+        for p in &pts {
+            let e = tops
+                .entry((p.0 / spacing).floor() as i64)
+                .or_insert(f64::MAX);
+            *e = e.min(p.1);
+        }
+        let depth: Vec<f64> = pts
+            .iter()
+            .map(|p| {
+                ((p.1 - tops[&((p.0 / spacing).floor() as i64)]) / (8.0 * spacing)).clamp(0.0, 1.0)
+            })
+            .collect();
+        let mix = |t: f64| -> [f32; 3] {
+            let t = t as f32;
+            [
+                c0.red() + (c1.red() - c0.red()) * t,
+                c0.green() + (c1.green() - c0.green()) * t,
+                c0.blue() + (c1.blue() - c0.blue()) * t,
+            ]
+        };
+        if fl["render"].as_str() == Some("dots") {
+            let mut paint = Paint {
+                anti_alias: true,
+                ..Paint::default()
+            };
+            for (p, d) in pts.iter().zip(&depth) {
+                let c = mix(*d);
+                paint.set_color(Color::from_rgba(c[0], c[1], c[2], c0.alpha()).unwrap_or(c0));
+                if let Some(circle) = PathBuilder::from_circle(
+                    p.0 as f32 * scale,
+                    p.1 as f32 * scale,
+                    (0.75 * spacing) as f32 * scale,
+                ) {
+                    pm.fill_path(
+                        &circle,
+                        &paint,
+                        FillRule::Winding,
+                        Transform::identity(),
+                        None,
+                    );
+                }
+            }
+            continue;
+        }
+        let (w, h) = (pm.width() as i32, pm.height() as i32);
+        let r = (1.6 * spacing) as f32 * scale;
+        let r2 = r * r;
+        let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+        for p in &pts {
+            let (x, y) = (p.0 as f32 * scale, p.1 as f32 * scale);
+            x0 = x0.min((x - r).floor() as i32);
+            y0 = y0.min((y - r).floor() as i32);
+            x1 = x1.max((x + r).ceil() as i32);
+            y1 = y1.max((y + r).ceil() as i32);
+        }
+        let (x0, y0, x1, y1) = (x0.max(0), y0.max(0), x1.min(w - 1), y1.min(h - 1));
+        if x1 < x0 || y1 < y0 {
+            continue;
+        }
+        let bw = (x1 - x0 + 1) as usize;
+        let mut field = vec![0f32; bw * (y1 - y0 + 1) as usize];
+        let mut dsum = vec![0f32; field.len()];
+        for (p, d) in pts.iter().zip(&depth) {
+            let (cx, cy) = (p.0 as f32 * scale, p.1 as f32 * scale);
+            let (ax, bx) = (
+                ((cx - r).floor() as i32).max(x0),
+                ((cx + r).ceil() as i32).min(x1),
+            );
+            let (ay, by) = (
+                ((cy - r).floor() as i32).max(y0),
+                ((cy + r).ceil() as i32).min(y1),
+            );
+            for py in ay..=by {
+                for px in ax..=bx {
+                    let (dx, dy) = (px as f32 + 0.5 - cx, py as f32 + 0.5 - cy);
+                    let q = (dx * dx + dy * dy) / r2;
+                    if q < 1.0 {
+                        let k = (1.0 - q) * (1.0 - q);
+                        let i = (py - y0) as usize * bw + (px - x0) as usize;
+                        field[i] += k;
+                        dsum[i] += k * *d as f32;
+                    }
+                }
+            }
+        }
+        let stride = pm.width() as usize * 4;
+        let data = pm.data_mut();
+        for py in y0..=y1 {
+            for px in x0..=x1 {
+                let i = (py - y0) as usize * bw + (px - x0) as usize;
+                let f = field[i];
+                // smooth edge between densities 0.65 and 0.95
+                let t = ((f - 0.65) / 0.3).clamp(0.0, 1.0);
+                let a = t * t * (3.0 - 2.0 * t);
+                if a <= 0.0 {
+                    continue;
+                }
+                let c = mix((dsum[i] / f) as f64);
+                let a = a * c0.alpha();
+                let o = py as usize * stride + px as usize * 4;
+                for (k, ch) in c.iter().enumerate() {
+                    let src = ch * a;
+                    let dst = data[o + k] as f32 / 255.0;
+                    data[o + k] = ((src + dst * (1.0 - a)) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+                }
+                let dst_a = data[o + 3] as f32 / 255.0;
+                data[o + 3] = ((a + dst_a * (1.0 - a)) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+}
+
 /// Draw the physics section of a snapshot: contact points with their normals (red) and joints as
 /// lines between their anchors (blue). Only what the snapshot says; no simulation happens here.
 fn draw_physics(pm: &mut Pixmap, phys: &Value, soft: &Value, tf: Transform) {
@@ -144,6 +286,7 @@ pub fn render_with(
             .unwrap_or(Color::WHITE),
     );
     let tf = Transform::from_scale(scale, scale);
+    draw_fluids(&mut pm, &snapshot["fluids"], scale, true);
     for sh in snapshot["shapes"]
         .as_array()
         .map(|v| v.as_slice())
@@ -196,6 +339,7 @@ pub fn render_with(
             }
         }
     }
+    draw_fluids(&mut pm, &snapshot["fluids"], scale, false);
     for em in snapshot["particles"].as_array().into_iter().flatten() {
         for it in em["items"].as_array().into_iter().flatten() {
             let Some(color) = it[3].as_str().and_then(parse_hex) else {

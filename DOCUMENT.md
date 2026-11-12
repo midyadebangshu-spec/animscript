@@ -1482,6 +1482,60 @@ flag.soft_impulse((600, -150))                     # a puff of wind (kg*px/s)
 - In `world:` the settings `soft_substeps` (16) and `soft_iterations` (4) trade speed for accuracy.
 - Errors: `E-PHY-003`, `E-PHY-004`. Worked example: `examples/soft.anim`.
 
+## 13e. Fluids
+
+A **fluid** is thousands of small particles that pour, splash, pool and slosh like water. It collides with
+rigid bodies and pushes them (a light box floats, a heavy one sinks, a ball splashes).
+
+```anim
+shape floor = rectangle(width: 540, height: 30, at: (400, 575))
+shape wall_l = rectangle(width: 20, height: 340, at: (150, 400))
+shape wall_r = rectangle(width: 20, height: 340, at: (650, 400))
+floor.body(kind: static)
+wall_l.body(kind: static)
+wall_r.body(kind: static)
+
+fluid water:
+    fill: rect(170, 450, 460, 110)     # a block of water, in px (or a shape: its faces are filled)
+    spacing: 10                        # distance between particles in px: smaller = finer and slower
+    viscosity: 0.05                    # 0 = water, higher = syrup (0 to 1)
+    color: #62b0f0dd                   # at the surface (alpha allowed) ...
+    color_end: #1f4f9add               # ... and deep down
+
+scene "s" for 7.seconds:
+    main:
+        water.pour(at: (230, 40), speed: (60, 260), width: 30)    # a jet of water
+        wait 2.seconds
+        water.stop()
+        water.add(rect(300, 200, 60, 60))                           # drop in a block at once
+```
+
+| Setting | Meaning | Default |
+|---|---|---|
+| `fill` / `in` | starting region: `rect(x, y, w, h)` or a shape | none (dry) |
+| `spacing` | particle distance, px | `8` |
+| `density` | kg per square metre | `1` |
+| `viscosity` | 0 to 1 | `0.05` |
+| `surface_tension` | pull between neighbours (droplets) | `0` |
+| `color`, `color_end` | surface and deep colour, alpha allowed | light blue |
+| `render` | `"blob"` (smooth surface) or `"dots"` | `"blob"` |
+| `behind` | draw under the shapes instead of over them | `false` |
+| `max` | most particles (all fluids together: 20000) | `4000` |
+
+- **Containers** are ordinary static bodies; `fill` only chooses where the water starts. Water that leaves the
+  area around the canvas is removed.
+- `pour(at:, speed:, width:)` makes a continuous stream (`rate:` overrides the automatic particle rate);
+  `stop()` ends the streams; `add(region)` adds a block; `water.level(x)` is the surface height at `x` (px);
+  `water.count` is the number of particles.
+- **Bodies:** dynamic bodies are pushed and buoyed by water; give a body `density` below 1 to float it. Soft
+  shapes are obstacles for water but are not pushed by it.
+- **Cost:** a few thousand particles is normal; halving `spacing` is four times the particles and cost. Render
+  many frames at once with `anim frames` (it simulates once).
+- Each scene starts again from the `fill` region. In `world:` the settings `fluid_substeps` (4) and
+  `fluid_iterations` (3) trade speed for accuracy.
+- Errors: `E-FLD-001` (bad setting, over the particle cap), `E-FLD-002` (`fill` is not a region). Example:
+  `examples/fluid.anim`.
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,

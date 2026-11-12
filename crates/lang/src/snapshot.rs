@@ -32,6 +32,8 @@ pub struct Resolved {
     pub particles: Option<J>,
     /// Soft bodies: volume, stretch and pinned points, when any exist.
     pub soft: Option<J>,
+    /// Fluid particles per fluid, when any are declared.
+    pub fluids: Option<J>,
 }
 
 /// The complete description of one tick. Vertex positions, curve handles and styles are fully resolved
@@ -133,6 +135,9 @@ pub fn build_snapshot(
     }
     if let Some(p) = &resolved.soft {
         snap["soft"] = p.clone();
+    }
+    if let Some(p) = &resolved.fluids {
+        snap["fluids"] = p.clone();
     }
     if let Some(p) = &resolved.particles {
         snap["particles"] = p.clone();
