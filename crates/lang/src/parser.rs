@@ -359,6 +359,7 @@ impl Parser {
             length,
             setup: None,
             main: None,
+            timeline: vec![],
             rules: vec![],
             span: start,
         };
@@ -382,6 +383,7 @@ impl Parser {
                 }
                 "setup" => sc.setup = Some(self.block()?),
                 "main" => sc.main = Some(self.block()?),
+                "timeline" => sc.timeline = self.key_blocks(None)?,
                 "when" | "whenever" => {
                     let kind = if kw == "when" {
                         RuleKind::When
@@ -573,6 +575,24 @@ impl Parser {
             return Ok(mk(StmtKind::Become { target, flag, set }, self.prev_span()));
         }
         let e = self.expr()?;
+        if let ExprKind::Member(obj, name) = &e.kind {
+            if name == "keyframes" && self.at_ident("over") {
+                self.next();
+                let over = self.expr()?;
+                let target = (**obj).clone();
+                let mut opts = KeyOpts::default();
+                let keys = self.key_blocks(Some(&mut opts))?;
+                return Ok(mk(
+                    StmtKind::Keyframes {
+                        target,
+                        over,
+                        opts,
+                        keys,
+                    },
+                    start,
+                ));
+            }
+        }
         if self.eat_op("=") {
             let v = self.expr()?;
             self.end_stmt()?;
@@ -606,6 +626,114 @@ impl Parser {
             return Ok(l);
         }
         self.binary(0)
+    }
+
+    /// The indented body of `keyframes over D:` or `timeline:`: `at TIME:` blocks and, for `keyframes`,
+    /// the option lines `hold_before`, `hold_after`, `blend_in: D`, `blend_out: D`.
+    fn key_blocks(&mut self, mut opts: Option<&mut KeyOpts>) -> Res<Vec<KeyBlock>> {
+        self.expect_op(":")?;
+        if !matches!(self.peek().t, T::Newline) {
+            return self.err("expected an indented block of `at TIME:` keys");
+        }
+        self.next();
+        if !matches!(self.peek().t, T::Indent) {
+            return self.err("expected an indented block of `at TIME:` keys");
+        }
+        self.next();
+        let mut out = vec![];
+        loop {
+            self.skip_newlines();
+            if matches!(self.peek().t, T::Dedent | T::Eof) {
+                break;
+            }
+            let span = self.peek().span;
+            if self.at_ident("at") {
+                self.next();
+                let at = self.expr()?;
+                self.expect_op(":")?;
+                let mut assigns = vec![];
+                if matches!(self.peek().t, T::Newline) {
+                    self.next();
+                    if !matches!(self.peek().t, T::Indent) {
+                        return self.err("expected the keys under `at ...:`");
+                    }
+                    self.next();
+                    loop {
+                        self.skip_newlines();
+                        if matches!(self.peek().t, T::Dedent | T::Eof) {
+                            break;
+                        }
+                        assigns.push(self.key_assign()?);
+                    }
+                    if matches!(self.peek().t, T::Dedent) {
+                        self.next();
+                    }
+                } else {
+                    assigns.push(self.key_assign()?);
+                }
+                out.push(KeyBlock { at, assigns, span });
+                continue;
+            }
+            let Some(o) = opts.as_mut() else {
+                return self.err(format!("expected `at TIME:`, found {}", self.describe()));
+            };
+            let word =
+                self.ident("`at`, `hold_before`, `hold_after`, `blend_in` or `blend_out`")?;
+            match word.as_str() {
+                "hold_before" => o.hold_before = true,
+                "hold_after" => o.hold_after = true,
+                "blend_in" | "blend_out" => {
+                    self.expect_op(":")?;
+                    let e = self.expr()?;
+                    if word == "blend_in" {
+                        o.blend_in = Some(e);
+                    } else {
+                        o.blend_out = Some(e);
+                    }
+                }
+                other => {
+                    return Err(Diagnostic::new(
+                        "E-SYN-001",
+                        format!("`{other}` is not a keyframe option"),
+                    )
+                    .at(span)
+                    .help("options: hold_before, hold_after, blend_in: D, blend_out: D"))
+                }
+            }
+            self.end_stmt()?;
+        }
+        if matches!(self.peek().t, T::Dedent) {
+            self.next();
+        }
+        Ok(out)
+    }
+
+    /// `property = value [ease E]` or `property += value [ease E]`.
+    fn key_assign(&mut self) -> Res<KeyAssign> {
+        let start = self.peek().span;
+        let lhs = self.expr()?;
+        let add = if self.eat_op("+=") {
+            true
+        } else if self.eat_op("=") {
+            false
+        } else {
+            return self.err(format!("expected `=` or `+=`, found {}", self.describe()));
+        };
+        let value = self.expr()?;
+        let ease = if self.at_ident("ease") {
+            self.next();
+            Some(self.expr()?)
+        } else {
+            None
+        };
+        self.end_stmt()?;
+        Ok(KeyAssign {
+            lhs,
+            add,
+            value,
+            ease,
+            span: start.to(self.prev_span()),
+        })
     }
 
     /// `name -> expr` or `(a, b) -> expr`; the body extends as far right as an expression can.

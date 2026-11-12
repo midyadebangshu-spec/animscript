@@ -4,6 +4,7 @@
 pub mod ast;
 pub mod check;
 pub mod interp;
+pub mod layers;
 pub mod lexer;
 pub mod parser;
 pub mod runtime;

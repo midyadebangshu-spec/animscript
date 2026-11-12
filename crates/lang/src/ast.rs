@@ -79,6 +79,13 @@ pub enum StmtKind {
     },
     Wait(Expr),
     Together(Block),
+    /// `target.keyframes over D:` followed by key blocks.
+    Keyframes {
+        target: Expr,
+        over: Expr,
+        opts: KeyOpts,
+        keys: Vec<KeyBlock>,
+    },
     Become {
         target: String,
         flag: String,
@@ -87,6 +94,32 @@ pub enum StmtKind {
     Note(String),
     Assert(Expr),
     Pass,
+}
+
+/// One `prop = value` (or `prop += value`) line of a key block, with an optional easing.
+#[derive(Clone, Debug)]
+pub struct KeyAssign {
+    pub lhs: Expr,
+    pub add: bool,
+    pub value: Expr,
+    pub ease: Option<Expr>,
+    pub span: Span,
+}
+
+/// `at TIME:` and the assignments under it.
+#[derive(Clone, Debug)]
+pub struct KeyBlock {
+    pub at: Expr,
+    pub assigns: Vec<KeyAssign>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct KeyOpts {
+    pub hold_before: bool,
+    pub hold_after: bool,
+    pub blend_in: Option<Expr>,
+    pub blend_out: Option<Expr>,
 }
 
 #[derive(Clone, Debug)]
@@ -136,6 +169,7 @@ pub struct Scene {
     pub length: SceneLen,
     pub setup: Option<Block>,
     pub main: Option<Block>,
+    pub timeline: Vec<KeyBlock>,
     pub rules: Vec<Rule>,
     pub span: Span,
 }

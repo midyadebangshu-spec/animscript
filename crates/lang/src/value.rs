@@ -167,14 +167,83 @@ pub enum Target {
     By([f64; 2]),
 }
 
-/// A request to start a timed action on some vertices of one shape.
+/// One animatable scalar: a vertex coordinate or a component of the shape transform (spec 7.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PropId {
+    Vx(u32),
+    Vy(u32),
+    PosX,
+    PosY,
+    ScaleX,
+    ScaleY,
+    Rot,
+}
+
+/// A scalar target: an absolute value or a change relative to the value when the action starts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Tgt {
+    To(f64),
+    By(f64),
+}
+
+/// The channel of a shape's own transform (vertices use their id).
+pub const BODY: u32 = u32::MAX;
+
+/// A request to start a timed action on some scalar properties of one shape.
 #[derive(Clone, Debug)]
 pub struct ActionReq {
     pub shape: String,
     pub label: String,
     pub frames: i64,
     pub ease: Ease,
-    pub items: Vec<(u32, Target)>,
+    /// Channels occupied for the whole duration (acquired atomically).
+    pub channels: Vec<u32>,
+    pub comps: Vec<(PropId, Tgt)>,
+}
+
+impl ActionReq {
+    /// An action that moves whole vertices; each vertex is its own channel.
+    pub fn vertices(
+        shape: String,
+        label: String,
+        frames: i64,
+        ease: Ease,
+        items: Vec<(u32, Target)>,
+    ) -> ActionReq {
+        let mut comps = vec![];
+        for (vid, t) in &items {
+            let (x, y) = match t {
+                Target::To(p) => (Tgt::To(p[0]), Tgt::To(p[1])),
+                Target::By(d) => (Tgt::By(d[0]), Tgt::By(d[1])),
+            };
+            comps.push((PropId::Vx(*vid), x));
+            comps.push((PropId::Vy(*vid), y));
+        }
+        ActionReq {
+            shape,
+            label,
+            frames,
+            ease,
+            channels: items.iter().map(|x| x.0).collect(),
+            comps,
+        }
+    }
+}
+
+/// A set of keys for one scalar (spec 7.7), ready to become a layer-3 contribution.
+#[derive(Clone, Debug)]
+pub struct KeySetSpec {
+    pub shape: String,
+    pub prop: PropId,
+    /// `+=` keys add an offset instead of overriding.
+    pub add: bool,
+    /// `(tick, value, easing)`: relative to the statement's start, or absolute scene ticks.
+    pub keys: Vec<(i64, f64, Ease)>,
+    pub absolute: bool,
+    pub hold_before: bool,
+    pub hold_after: bool,
+    pub blend_in: i64,
+    pub blend_out: i64,
 }
 
 #[derive(Clone, Debug)]

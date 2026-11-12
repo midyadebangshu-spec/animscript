@@ -2,8 +2,9 @@
 //! rule dispatch and task stepping, action sampling, property resolution and snapshots.
 use crate::ast::*;
 use crate::interp::*;
+use crate::layers::{fold, BlendMode, Contribution};
 use crate::parser::parse;
-use crate::snapshot::{build_snapshot, snapshot_hash};
+use crate::snapshot::{build_snapshot, snapshot_hash, Resolved};
 use crate::value::*;
 use animscript_core::*;
 use serde_json::Value as J;
@@ -22,20 +23,34 @@ pub struct RunResult {
     pub trace: Vec<String>,
 }
 
-struct ActItem {
-    vid: u32,
-    from: P,
-    to: P,
+struct ActComp {
+    prop: PropId,
+    from: f64,
+    to: f64,
 }
 struct Act {
     id: u32,
     task: u32,
     shape: String,
-    items: Vec<ActItem>,
+    channels: Vec<u32>,
+    comps: Vec<ActComp>,
     start: i64,
     end: i64,
     ease: Ease,
-    last: BTreeMap<u32, P>,
+    prio: i64,
+    last: BTreeMap<PropId, f64>,
+}
+/// A layer-3 contribution: keys for one scalar between `from` and `to` (inclusive; `None` = until the scene ends).
+struct KeySet {
+    id: u32,
+    shape: String,
+    prop: PropId,
+    add: bool,
+    keys: Vec<(i64, f64, Ease)>,
+    from: i64,
+    to: Option<i64>,
+    blend_in: i64,
+    blend_out: i64,
 }
 struct PendingAct {
     req: ActionReq,
@@ -60,7 +75,8 @@ pub struct Runtime {
     seq: u64,
     channels: BTreeMap<(String, u32), u32>,
     rules: Vec<RuleSt>,
-    resolved: BTreeMap<String, BTreeMap<u32, P>>,
+    resolved: Resolved,
+    keysets: Vec<KeySet>,
     main_task: Option<u32>,
     main_done: bool,
     project_tick: i64,
@@ -107,7 +123,8 @@ impl Runtime {
             seq: 0,
             channels: BTreeMap::new(),
             rules: vec![],
-            resolved: BTreeMap::new(),
+            resolved: Resolved::default(),
+            keysets: vec![],
             main_task: None,
             main_done: false,
             project_tick: 0,
@@ -142,6 +159,7 @@ impl Runtime {
         };
         self.tasks.clear();
         self.acts.clear();
+        self.keysets.clear();
         self.pending.clear();
         self.channels.clear();
         self.rules = vec![RuleSt::default(); sc.rules.len()];
@@ -161,6 +179,8 @@ impl Runtime {
                     let mut t = Task::new(0, Rc::clone(setup), self.base_vars(), Mode::Setup, true);
                     self.it.run_sync(&mut t)?;
                 }
+                self.it.freeze_pivots(); // pivots default to the bounding-box centre once building is over
+                self.register_timeline(sc)?;
                 if let Some(main) = &sc.main {
                     let id = self.new_task_id();
                     let t = Task::new(id, Rc::clone(main), self.base_vars(), Mode::Run, true);
@@ -215,15 +235,50 @@ impl Runtime {
     }
 
     fn key_free(&self, req: &ActionReq) -> bool {
-        req.items
+        req.channels
             .iter()
-            .all(|(vid, _)| !self.channels.contains_key(&(req.shape.clone(), *vid)))
+            .all(|c| !self.channels.contains_key(&(req.shape.clone(), *c)))
+    }
+
+    /// The rest (layer 0) value of one scalar property.
+    fn rest_value(&self, shape: &str, prop: PropId) -> f64 {
+        let sh = &self.it.shapes[shape];
+        match prop {
+            PropId::Vx(i) => sh.verts[&i].x,
+            PropId::Vy(i) => sh.verts[&i].y,
+            PropId::PosX => sh.position[0],
+            PropId::PosY => sh.position[1],
+            PropId::ScaleX => sh.scale[0],
+            PropId::ScaleY => sh.scale[1],
+            PropId::Rot => sh.rotation,
+        }
+    }
+
+    fn set_rest(&mut self, shape: &str, prop: PropId, v: f64) {
+        let Some(sh) = self.it.shapes.get_mut(shape) else {
+            return;
+        };
+        match prop {
+            PropId::Vx(i) => {
+                if let Some(x) = sh.verts.get_mut(&i) {
+                    x.x = v;
+                }
+            }
+            PropId::Vy(i) => {
+                if let Some(x) = sh.verts.get_mut(&i) {
+                    x.y = v;
+                }
+            }
+            other => set_transform_prop(sh, other, v, false),
+        }
     }
 
     // ---- phase 2 -----------------------------------------------------------------------
 
     fn ingest(&mut self) {
         let tick = self.it.tick;
+        // key sets past their last tick simply stop: the layer below shows through again
+        self.keysets.retain(|k| k.to.is_none_or(|t| tick <= t));
         let done: Vec<u32> = self
             .acts
             .values()
@@ -234,7 +289,7 @@ impl Runtime {
             let a = self.acts.remove(&id).unwrap();
             self.commit(&a, false);
             self.it
-                .trace_line("ACT-", &format!("{} {}", a.shape, a.items.len()));
+                .trace_line("ACT-", &format!("{} {}", a.shape, a.comps.len()));
             if let Some(t) = self.tasks.get_mut(&a.task) {
                 t.state = TaskState::Ready;
             }
@@ -256,43 +311,36 @@ impl Runtime {
         }
     }
 
-    /// Commit an action's values to the rest layer (spec §7.6): the final value when it finished,
+    /// Commit an action's values to the rest layer (spec 7.6): the final value when it finished,
     /// the last sampled value when it was cut off.
     fn commit(&mut self, a: &Act, interrupted: bool) {
-        for item in &a.items {
-            let p = if interrupted {
-                a.last.get(&item.vid).copied().unwrap_or(item.from)
+        for c in &a.comps {
+            let v = if interrupted {
+                a.last.get(&c.prop).copied().unwrap_or(c.from)
             } else {
-                item.to
+                c.to
             };
-            if let Some(v) = self
-                .it
-                .shapes
-                .get_mut(&a.shape)
-                .and_then(|s| s.verts.get_mut(&item.vid))
-            {
-                v.x = p[0];
-                v.y = p[1];
-            }
-            self.channels.remove(&(a.shape.clone(), item.vid));
+            self.set_rest(&a.shape, c.prop, v);
+        }
+        for ch in &a.channels {
+            self.channels.remove(&(a.shape.clone(), *ch));
         }
     }
 
     fn start_action(&mut self, p: PendingAct) {
         let tick = self.it.tick;
-        let sh = &self.it.shapes[&p.req.shape];
-        let items: Vec<ActItem> = p
+        let comps: Vec<ActComp> = p
             .req
-            .items
+            .comps
             .iter()
-            .map(|(vid, t)| {
-                let from = sh.pos(*vid);
+            .map(|(prop, t)| {
+                let from = self.rest_value(&p.req.shape, *prop);
                 let to = match t {
-                    Target::To(q) => *q,
-                    Target::By(d) => [from[0] + d[0], from[1] + d[1]],
+                    Tgt::To(v) => *v,
+                    Tgt::By(d) => from + d,
                 };
-                ActItem {
-                    vid: *vid,
+                ActComp {
+                    prop: *prop,
                     from,
                     to,
                 }
@@ -300,8 +348,8 @@ impl Runtime {
             .collect();
         let id = self.next_act;
         self.next_act += 1;
-        for it in &items {
-            self.channels.insert((p.req.shape.clone(), it.vid), id);
+        for ch in &p.req.channels {
+            self.channels.insert((p.req.shape.clone(), *ch), id);
         }
         let end = tick + p.req.frames;
         self.it.trace_line(
@@ -314,13 +362,78 @@ impl Runtime {
                 id,
                 task: p.task,
                 shape: p.req.shape,
-                items,
+                channels: p.req.channels,
+                comps,
                 start: tick,
                 end,
                 ease: p.req.ease,
+                prio: p.prio,
                 last: BTreeMap::new(),
             },
         );
+    }
+
+    /// Pick up key sets registered by `keyframes` statements during the last step.
+    fn take_keysets(&mut self) {
+        let specs = std::mem::take(&mut self.it.pending_keysets);
+        let base = self.it.tick;
+        for s in specs {
+            self.add_keyset(s, base);
+        }
+    }
+
+    fn add_keyset(&mut self, s: KeySetSpec, base: i64) {
+        let shift = if s.absolute { 0 } else { base };
+        let keys: Vec<(i64, f64, Ease)> =
+            s.keys.iter().map(|(t, v, e)| (t + shift, *v, *e)).collect();
+        let (first, last) = (keys[0].0, keys[keys.len() - 1].0);
+        let from = if s.hold_before { shift } else { first };
+        let to = if s.hold_after { None } else { Some(last) };
+        let id = self.next_act;
+        self.next_act += 1;
+        self.it.trace_line(
+            "KEYS",
+            &format!(
+                "{} {:?} [{} -> {}]",
+                s.shape,
+                s.prop,
+                from,
+                to.map_or("end".to_string(), |t| t.to_string())
+            ),
+        );
+        self.keysets.push(KeySet {
+            id,
+            shape: s.shape,
+            prop: s.prop,
+            add: s.add,
+            keys,
+            from,
+            to,
+            blend_in: s.blend_in,
+            blend_out: s.blend_out,
+        });
+    }
+
+    /// A scene's `timeline:` becomes key sets with absolute scene times.
+    fn register_timeline(&mut self, sc: &Rc<Scene>) -> Res<()> {
+        if sc.timeline.is_empty() {
+            return Ok(());
+        }
+        let vars = self.base_vars();
+        let specs = self.it.build_keysets(
+            None,
+            &sc.timeline,
+            None,
+            &vars,
+            Mode::Run,
+            true,
+            [0, 0],
+            (false, false),
+        )?;
+        for s in specs {
+            self.add_keyset(s, 0);
+        }
+        Ok(())
     }
 
     // ---- phases 3-5 --------------------------------------------------------------------
@@ -410,7 +523,9 @@ impl Runtime {
             .map(|(i, _)| *i)
         {
             let mut t = self.tasks.remove(&id).unwrap();
-            match self.it.step(&mut t)? {
+            let stepped = self.it.step(&mut t)?;
+            self.take_keysets();
+            match stepped {
                 Step::Done => self.finish_task(t),
                 Step::Blocked(Req::Wait(n)) => {
                     if n == 0 {
@@ -479,26 +594,93 @@ impl Runtime {
 
     // ---- phases 6-7 --------------------------------------------------------------------
 
-    /// Sample every running action at this tick and resolve each vertex component: the rest value,
-    /// overridden by the action contributions in a fixed order (layer, start tick, id).
+    /// Sample every running action and key set at this tick and resolve every touched scalar through the
+    /// layer fold (spec 7.3): the rest value, then the contributions in `(layer, priority, start, id)` order.
     fn advance_actions(&mut self) {
         let tick = self.it.tick;
-        self.resolved.clear();
+        let mut by_prop: BTreeMap<(String, PropId), Vec<Contribution>> = BTreeMap::new();
         for a in self.acts.values_mut() {
             let p = (tick - a.start) as f64 / (a.end - a.start) as f64;
             let e = a.ease.apply(p);
-            for item in &a.items {
-                let q = [
-                    item.from[0] + (item.to[0] - item.from[0]) * e,
-                    item.from[1] + (item.to[1] - item.from[1]) * e,
-                ];
-                a.last.insert(item.vid, q);
-                self.resolved
-                    .entry(a.shape.clone())
+            for c in &a.comps {
+                let value = c.from + (c.to - c.from) * e;
+                a.last.insert(c.prop, value);
+                by_prop
+                    .entry((a.shape.clone(), c.prop))
                     .or_default()
-                    .insert(item.vid, q);
+                    .push(Contribution {
+                        layer: 1,
+                        mode: BlendMode::Override,
+                        weight: 1.0,
+                        priority: a.prio,
+                        start: a.start,
+                        id: a.id,
+                        value,
+                    });
             }
         }
+        for k in &self.keysets {
+            if tick < k.from || k.to.is_some_and(|t| tick > t) {
+                continue;
+            }
+            let mut w = 1.0f64;
+            if k.blend_in > 0 {
+                w = w.min((tick - k.from) as f64 / k.blend_in as f64);
+            }
+            if let (true, Some(to)) = (k.blend_out > 0, k.to) {
+                w = w.min((to - tick) as f64 / k.blend_out as f64);
+            }
+            by_prop
+                .entry((k.shape.clone(), k.prop))
+                .or_default()
+                .push(Contribution {
+                    layer: 3,
+                    mode: if k.add {
+                        BlendMode::Add
+                    } else {
+                        BlendMode::Override
+                    },
+                    weight: w.clamp(0.0, 1.0),
+                    priority: 0,
+                    start: k.from,
+                    id: k.id,
+                    value: key_value(&k.keys, tick),
+                });
+        }
+        let mut resolved = Resolved::default();
+        for ((shape, prop), mut contribs) in by_prop {
+            let v = fold(self.rest_value(&shape, prop), &mut contribs);
+            let sh = &self.it.shapes[&shape];
+            match prop {
+                PropId::Vx(i) | PropId::Vy(i) => {
+                    let p = resolved
+                        .verts
+                        .entry(shape.clone())
+                        .or_default()
+                        .entry(i)
+                        .or_insert_with(|| sh.pos(i));
+                    if matches!(prop, PropId::Vx(_)) {
+                        p[0] = v;
+                    } else {
+                        p[1] = v;
+                    }
+                }
+                other => {
+                    let t = resolved
+                        .tf
+                        .entry(shape.clone())
+                        .or_insert_with(|| sh.transform());
+                    match other {
+                        PropId::PosX => t.position[0] = v,
+                        PropId::PosY => t.position[1] = v,
+                        PropId::ScaleX => t.scale[0] = v,
+                        PropId::ScaleY => t.scale[1] = v,
+                        _ => t.rotation = v,
+                    }
+                }
+            }
+        }
+        self.resolved = resolved;
     }
 
     fn end_scene(&mut self) {
@@ -511,6 +693,22 @@ impl Runtime {
         self.channels.clear();
         self.it.staged.clear();
         self.it.events.clear();
-        self.resolved.clear();
+        self.keysets.clear();
+        self.resolved = Resolved::default();
     }
+}
+
+/// The value of a key set at tick `t`: linear between keys with the *later* key's easing (spec 7.7).
+fn key_value(keys: &[(i64, f64, Ease)], t: i64) -> f64 {
+    if t <= keys[0].0 {
+        return keys[0].1;
+    }
+    for w in keys.windows(2) {
+        let (a, b) = (&w[0], &w[1]);
+        if t <= b.0 {
+            let p = (t - a.0) as f64 / (b.0 - a.0) as f64;
+            return a.1 + (b.1 - a.1) * b.2.apply(p);
+        }
+    }
+    keys[keys.len() - 1].1
 }

@@ -1,0 +1,31 @@
+project "Pinwheel":
+    anim_version: "0.1"
+    canvas: 800x600
+    fps: 24
+    background: #fdf6e3
+
+## One blade, repeated around a ring (radial_array), coloured face by face,
+## then spun (rotation), pulsed (keyframes on scale) and moved (position).
+
+# The blade: the centre and two rim points 45 degrees apart; the outer edge bulges outward.
+shape pinwheel = polygon([(400, 300), (600, 300), (400 + 200 * cos(45.deg), 300 + 200 * sin(45.deg))])
+pinwheel.e2.bend(-25.degrees)
+pinwheel.f1.fill = #e4572e
+
+# Eight blades. Vertices on the shared rays are welded, so the blades join up.
+pinwheel.radial_array(count: 8, around: (400, 300), angle: 360.deg)
+
+# Colour every second blade differently.
+pinwheel.faces.every(2, offset: 1).fill = #3b8ea5
+
+pinwheel.stroke = #2b2b2b
+pinwheel.stroke_width = 3
+
+scene "Spin" for 4.seconds:
+    main:
+        together:
+            pinwheel.rotate_by(360.deg) over 4.seconds ease linear
+            pinwheel.keyframes over 4.seconds:
+                at 0.s: scale = 1
+                at 2.s: scale = 1.25 ease ease_in_out
+                at 4.s: scale = 1 ease ease_in_out

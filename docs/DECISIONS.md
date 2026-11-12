@@ -224,3 +224,79 @@ judgement calls I expect you to want to look at.
     (`E-TYP-003`).
 53. **Known limitation.** `smooth` after `mirror` needs the seam dissolved first (`leaf.e5.dissolve()`), which
     the leaf example does. There is still no per-face colour, so an inset ring and the inner face share one fill.
+
+## Round 3: per-face colour, shape transforms, keyframes and the layer fold, radial_array
+
+54. **Per-face and per-edge style.** A face has its own `fill`; an edge its own `stroke` and `stroke_width`.
+    `none` (a new literal) clears it, and an element without its own style uses the shape's. Assignment works
+    on one element or on a whole list (`s.faces.where(...).fill = #f00`) and is a zero-time staged write at
+    runtime. Colour is **not** animatable yet (no tints or fades).
+55. **Style inheritance.** A new element copies the style of its parent when the parent is of the same kind,
+    so these keep their colour: the ring faces made by `inset`, mirrored and `radial_array` copies, the faces of
+    a subdivided face grid, and the two halves of a subdivided edge. Two special cases: `smooth` gives the
+    corner edges the style of the edge they were cut from, and `bevel` / `round` give the new edge the style of
+    the lower-numbered edge at the corner. Faces and edges made from an element of another kind (an extruded
+    face, the spokes of an inset) start unstyled. `dissolve` keeps the surviving face's own fill.
+56. **Snapshot style.** Faces carry their *effective* fill (own, else the shape's) and edges their effective
+    stroke and width, so the renderer reads colour straight from the snapshot and has no fallback logic. The
+    shape-level `fill` / `stroke` are still reported.
+57. **Shape transform.** A shape has `position` (a translation, default (0, 0)), `scale` (default (1, 1)),
+    `rotation` (an Angle, default 0) and `pivot`. Vertex coordinates stay local; the runtime resolves
+    `scale` about the pivot, then `rotation` about the pivot (clockwise on screen, like every Angle), then
+    `position`, and the snapshot is in world space (vertices, edge points and face segments).
+    Handles are transformed point by point (an affine map keeps a Bézier a Bézier exactly, even under
+    non-uniform scale). A negative scale reverses the winding; faces are filled with the non-zero rule, so that
+    is harmless. An identity transform is applied exactly (no round-off), so programs that never use a
+    transform are bit-for-bit unchanged.
+58. **Pivot (approved: bounding-box centre).** An unset pivot is the centre of the bounding box of the shape's
+    live vertices, **frozen when the build phase ends** (and again after each scene's `setup:`, for shapes made
+    there). Later edits or animation of vertices do not move it. `s.pivot = (x, y)` sets it explicitly and is
+    never replaced; `s.pivot = none` goes back to automatic. Curve handles do not count towards the box.
+59. **Rotation interpolates linearly (approved deviation from spec 7.3).** The spec lerps angles by the
+    shortest arc, which would make `rotate_by(360.deg)` do nothing. Rotation is stored as an unbounded
+    number of turns and actions and keys interpolate it linearly, so a full spin, or `rotate_by(720.deg)`, works.
+60. **Shape actions.** `s.move_to((x, y))` / `s.move_by(dx, dy)` change `position`, `s.scale_to(f)` (a number or
+    `(sx, sy)`), `s.rotate_to(a)` and `s.rotate_by(a)` change the rest transform. Without `over` they are
+    instant (build time) or staged zero-time writes (runtime); with `over` they are timed actions that commit
+    their final value to rest when they finish. Note that a *shape's* `move_to` sets its `position`, while
+    an *element's* `move_to` moves vertices in local space. A shape's transform has its own channel
+    (`body`), so a transform action runs alongside vertex actions; two transform actions queue.
+61. **The layer fold is real now (spec 7.2 / 7.3).** Every scalar (a vertex x or y, a transform component) is
+    resolved each tick from its rest value and its contributions, sorted by `(layer, priority, start tick, id)`;
+    `override` is `lerp(v, value, weight)`, `add` is `v + weight * value`, `multiply` is
+    `v * lerp(1, value, weight)`. Layer 1 holds actions (always weight 1), layer 3 keyframes; layers 2
+    (procedural) and 4 (locks) are reserved. A unit test reproduces the worked example of 7.10 (397.1, and 414.2
+    without the keyframe set). `multiply` exists in the fold but nothing produces it yet.
+62. **Keyframes (spec 7.7).** `target.keyframes over D:` followed by `at TIME: property = value [ease E]`
+    lines (an `at` block may also hold several property lines). Targets: one vertex, a selection (every vertex
+    of its elements, a shared vertex keyed once) or a shape. Properties: `position`, `position.x`,
+    `position.y` (vertices and shapes), `scale`, `scale.x`, `scale.y` and `rotation` (shapes only: `E-NAM-003`
+    for a vertex). Keys are grouped per scalar. The easing of a key shapes the segment that ends at it, and the
+    default is **`linear`** (spec 7.4/7.7), unlike moves, which default to `ease_in_out`.
+63. **Keyframe range.** A key set contributes from its first to its **last key tick inclusive** and then lets go:
+    the layer below shows through again (nothing is committed to rest, unlike an action). `hold_before` extends
+    the first value back to the start of the statement, `hold_after` extends the last value until the scene
+    ends, `blend_in: D` ramps the weight from 0 to 1 over D after the start and `blend_out: D` from 1 to 0 over D
+    before the end. The statement blocks for `over` D (and `E-TYP-001` if a key is later than D), so the next
+    statement starts when the last key is reached. A key set is a layer, not an action, so it never waits for a
+    channel and stacks on top of a running action (keyframes win while they are active).
+64. **`+=` keys (approved extension).** `at 1.s: position.y += 10` adds an offset on top of the layers below
+    (layer-3 `add`), which is what a selection needs, because an absolute `=` would put every selected vertex at
+    the same place. One property cannot mix `=` and `+=` within a statement (`E-TYP-001`). Two keys for one
+    property at the same time are `E-PRP-003`.
+65. **`timeline:` (spec 4.9 / 7.7).** A scene item with `at TIME:` blocks in **absolute scene time** and full
+    targets (`s.v[1].position.x = 0`, `s.rotation = 90.deg`, `s.vertices.position.y += 10`); a timeline line
+    without a target is `E-TYP-001`. Its key sets are registered at tick 0, after `setup:`. Values are
+    evaluated once, when the key sets are registered, not every tick. Markers are not implemented.
+66. **`radial_array(count, around, angle = 360.deg, faces:, weld:)` (approved).** Adds copies of the whole shape
+    or of the given faces, rotated about `around`, *inside the same shape*; `count` includes the original. A full
+    turn (|angle| of 360° or more) uses `count` equal steps and closes the ring; a smaller angle spreads the
+    copies over the arc, so `count: 4, angle: 90.deg` has steps of 30° and ends exactly at 90°. Vertices that
+    land within `weld` (default 1e-6) of an existing vertex are shared, and so are straight edges between shared
+    vertices, so neighbouring copies join. Curved edges are always duplicated. New elements are created in
+    source-ID order, copy by copy, with the source as `parent`, and inherit its style. It is a topology
+    operation (`E-SHP-003` at runtime). The weld scan is quadratic in the vertex count.
+67. **Not in this round:** procedural modifiers (`wobble`, `noise`) and locks, colour animation, a linear
+    `array`, and markers in `timeline:`.
+68. **Golden file.** The snapshot gained fields (transform, per-face and per-edge style), so the flower's hash
+    changed. Its geometry digest did not: only the `hash` line of the golden file differs.

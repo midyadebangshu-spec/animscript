@@ -82,6 +82,25 @@ fn walk_stmt(it: &Interp, s: &Stmt, out: &mut Vec<Diagnostic>) {
             walk_block(it, body, out);
         }
         StmtKind::Together(b) => walk_block(it, b, out),
+        StmtKind::Keyframes {
+            target,
+            over,
+            opts,
+            keys,
+        } => {
+            walk_expr(it, target, out);
+            walk_expr(it, over, out);
+            for e in [&opts.blend_in, &opts.blend_out].into_iter().flatten() {
+                walk_expr(it, e, out);
+            }
+            for k in keys {
+                walk_expr(it, &k.at, out);
+                for a in &k.assigns {
+                    walk_expr(it, &a.lhs, out);
+                    walk_expr(it, &a.value, out);
+                }
+            }
+        }
         StmtKind::ShapeDecl { name, .. } => out.push(
             Diagnostic::new(
                 "E-SHP-003",

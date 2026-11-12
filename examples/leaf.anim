@@ -25,6 +25,9 @@ leaf.fill = #7fb85a
 leaf.stroke = #2f6b2a
 leaf.stroke_width = 2
 
+# Per-face colour: the inner face (f1) is lighter than the border ring around it.
+leaf.f1.fill = #b9e08f
+
 # The central vein is just a line.
 shape vein = line((400, 60), (400, 540))
 vein.stroke = #2f6b2a

@@ -17,14 +17,22 @@ fn pt(p: &P) -> J {
     json!([p[0], p[1]])
 }
 
-/// The complete description of one tick. Vertex positions and curve handles are fully resolved here,
-/// so a renderer only fills faces and strokes edges: it contains no shape logic.
+/// Values the runtime resolved this tick: local vertex positions and shape transforms.
+#[derive(Default, Clone, Debug)]
+pub struct Resolved {
+    pub verts: BTreeMap<String, BTreeMap<u32, P>>,
+    pub tf: BTreeMap<String, Transform>,
+}
+
+/// The complete description of one tick. Vertex positions, curve handles and styles are fully resolved
+/// here (in world space, after the shape transform), so a renderer only fills faces and strokes edges:
+/// it contains no shape logic.
 pub fn build_snapshot(
     it: &Interp,
     scene: &str,
     tick: i64,
     project_tick: i64,
-    resolved: &BTreeMap<String, BTreeMap<u32, P>>,
+    resolved: &Resolved,
 ) -> J {
     let mut order: Vec<&String> = it.shape_order.iter().collect();
     order.sort_by_key(|n| it.shapes[*n].z); // stable: declaration order breaks ties
@@ -32,12 +40,14 @@ pub fn build_snapshot(
         .iter()
         .map(|n| {
             let sh = &it.shapes[*n];
-            let ov = resolved.get(*n);
+            let ov = resolved.verts.get(*n);
+            let tf = resolved.tf.get(*n).copied().unwrap_or_else(|| sh.transform());
+            let w = |p: &P| pt(&tf.apply(*p));
             let vertices: Vec<J> = sh
                 .live_ids(Kind::V)
                 .into_iter()
                 .map(|i| {
-                    let p = ov.and_then(|m| m.get(&i).copied()).unwrap_or_else(|| sh.pos(i));
+                    let p = tf.apply(ov.and_then(|m| m.get(&i).copied()).unwrap_or_else(|| sh.pos(i)));
                     json!([i, p[0], p[1]])
                 })
                 .collect();
@@ -52,20 +62,26 @@ pub fn build_snapshot(
                         Curve::Quad(_) => "quadratic",
                         Curve::Cubic(..) => "cubic",
                     };
-                    json!({"id": i, "a": ed.a, "b": ed.b, "kind": kind, "pts": pts.iter().map(pt).collect::<Vec<_>>()})
+                    json!({
+                        "id": i, "a": ed.a, "b": ed.b, "kind": kind,
+                        "stroke": ed.stroke.or(sh.stroke).map(hex),
+                        "stroke_width": ed.width.unwrap_or(sh.stroke_width),
+                        "pts": pts.iter().map(&w).collect::<Vec<_>>(),
+                    })
                 })
                 .collect();
             let faces: Vec<J> = sh
                 .live_ids(Kind::F)
                 .into_iter()
                 .map(|i| {
-                    let segs: Vec<J> = sh.face_segments_with(i, ov).iter().map(|s| J::Array(s.iter().map(pt).collect())).collect();
-                    json!({"id": i, "segments": segs})
+                    let segs: Vec<J> = sh.face_segments_with(i, ov).iter().map(|s| J::Array(s.iter().map(&w).collect())).collect();
+                    json!({"id": i, "fill": sh.faces[&i].fill.or(sh.fill).map(hex), "segments": segs})
                 })
                 .collect();
             json!({
                 "id": n, "z": sh.z, "visible": sh.visible,
                 "fill": sh.fill.map(hex), "stroke": sh.stroke.map(hex), "stroke_width": sh.stroke_width,
+                "transform": {"position": pt(&tf.position), "scale": pt(&tf.scale), "rotation": tf.rotation, "pivot": pt(&tf.pivot)},
                 "vertices": vertices, "edges": edges, "faces": faces,
             })
         })

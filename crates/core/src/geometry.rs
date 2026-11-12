@@ -120,6 +120,9 @@ pub struct Edge {
     pub a: u32,
     pub b: u32,
     pub curve: Curve,
+    /// Own stroke colour and width; `None` falls back to the shape's.
+    pub stroke: Option<Color>,
+    pub width: Option<f64>,
     pub meta: Meta,
 }
 #[derive(Clone, Debug)]
@@ -127,6 +130,8 @@ pub struct Face {
     pub id: u32,
     /// Ordered loop of `(edge id, direction)`; direction `1` traverses a -> b, `-1` traverses b -> a.
     pub loop_: Vec<(u32, i8)>,
+    /// Own fill colour; `None` falls back to the shape's.
+    pub fill: Option<Color>,
     pub meta: Meta,
 }
 
@@ -156,6 +161,42 @@ pub struct Shape {
     pub stroke_width: f64,
     pub z: i64,
     pub visible: bool,
+    /// Transform on top of the local vertex coordinates (applied by the runtime when it resolves a frame).
+    pub position: P,
+    pub scale: P,
+    /// In turns, clockwise on screen.
+    pub rotation: f64,
+    /// `None` until frozen: then the bounding-box centre of the vertices.
+    pub pivot: Option<P>,
+}
+
+/// Scale about the pivot, then rotate about the pivot, then translate by `position`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Transform {
+    pub position: P,
+    pub scale: P,
+    pub rotation: f64,
+    pub pivot: P,
+}
+
+impl Transform {
+    pub fn is_identity(&self) -> bool {
+        self.position == [0.0, 0.0] && self.scale == [1.0, 1.0] && self.rotation == 0.0
+    }
+    pub fn apply(&self, p: P) -> P {
+        if self.is_identity() {
+            return p; // exact, so shapes that never use a transform are bit-for-bit unchanged
+        }
+        let (dx, dy) = (
+            (p[0] - self.pivot[0]) * self.scale[0],
+            (p[1] - self.pivot[1]) * self.scale[1],
+        );
+        let (s, c) = (self.rotation * std::f64::consts::TAU).sin_cos();
+        [
+            self.pivot[0] + dx * c - dy * s + self.position[0],
+            self.pivot[1] + dx * s + dy * c + self.position[1],
+        ]
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -340,6 +381,10 @@ impl Shape {
             stroke_width: 2.0,
             z: 0,
             visible: true,
+            position: [0.0, 0.0],
+            scale: [1.0, 1.0],
+            rotation: 0.0,
+            pivot: None,
         }
     }
 
@@ -511,10 +556,13 @@ impl Shape {
                 a,
                 b,
                 curve: Curve::Straight,
+                stroke: None,
+                width: None,
                 meta: Meta::new(parent),
             },
         );
         self.link(parent, e(id));
+        self.inherit_style(parent, e(id));
         id
     }
     fn new_face(&mut self, loop_: Vec<(u32, i8)>, parent: Option<ElemRef>) -> u32 {
@@ -525,11 +573,39 @@ impl Shape {
             Face {
                 id,
                 loop_,
+                fill: None,
                 meta: Meta::new(parent),
             },
         );
         self.link(parent, f(id));
+        self.inherit_style(parent, f(id));
         id
+    }
+    /// A new element copies the style of its parent when the parent is of the same kind.
+    fn inherit_style(&mut self, parent: Option<ElemRef>, child: ElemRef) {
+        let Some(p) = parent else { return };
+        if p.kind != child.kind {
+            return;
+        }
+        match p.kind {
+            Kind::E => {
+                let (s, w) = (self.edges[&p.id].stroke, self.edges[&p.id].width);
+                let c = self.edges.get_mut(&child.id).unwrap();
+                c.stroke = s;
+                c.width = w;
+            }
+            Kind::F => {
+                let fl = self.faces[&p.id].fill;
+                self.faces.get_mut(&child.id).unwrap().fill = fl;
+            }
+            Kind::V => {}
+        }
+    }
+    fn copy_edge_style(&mut self, from: u32, to: u32) {
+        let (s, w) = (self.edges[&from].stroke, self.edges[&from].width);
+        let c = self.edges.get_mut(&to).unwrap();
+        c.stroke = s;
+        c.width = w;
     }
     fn retire(&mut self, r: ElemRef, state: State, note: String) {
         if let Some(m) = self.meta_mut(r) {
@@ -1135,6 +1211,7 @@ impl Shape {
             }
         }
         let ne = self.new_edge(va, vb, Some(r));
+        self.copy_edge_style(ea, ne);
         if rounded {
             self.edges.get_mut(&ne).unwrap().curve = Curve::Quad(to_local(qa, qb, pv));
         }
@@ -1281,6 +1358,7 @@ impl Shape {
                 let inner = self.new_edge(qs[i], rs[i], Some(e(ring.edges[i].0)));
                 let corner =
                     self.new_edge(rs[i], qs[(i + 1) % n], Some(v(ring.verts[(i + 1) % n])));
+                self.copy_edge_style(ring.edges[i].0, corner);
                 new_loop.push((inner, 1i8));
                 new_loop.push((corner, 1i8));
             }
@@ -1982,4 +2060,190 @@ pub fn line(a: P, b: P) -> Shape {
     s.new_vertex(b[0], b[1], None);
     s.new_edge(1, 2, None);
     s
+}
+
+// ---------------------------------------------------------------------------------------------
+// Style setters, the pivot, and radial_array
+// ---------------------------------------------------------------------------------------------
+
+impl Shape {
+    /// Set (or, with `None`, reset to the shape's) fill colour of one face.
+    pub fn set_face_fill(&mut self, r: ElemRef, c: Option<Color>) -> Res<()> {
+        self.require_live(r, Some(Kind::F), "fill")?;
+        self.faces.get_mut(&r.id).unwrap().fill = c;
+        Ok(())
+    }
+    pub fn set_edge_stroke(&mut self, r: ElemRef, c: Option<Color>) -> Res<()> {
+        self.require_live(r, Some(Kind::E), "stroke")?;
+        self.edges.get_mut(&r.id).unwrap().stroke = c;
+        Ok(())
+    }
+    pub fn set_edge_width(&mut self, r: ElemRef, w: Option<f64>) -> Res<()> {
+        self.require_live(r, Some(Kind::E), "stroke_width")?;
+        if w.is_some_and(|x| !(x >= 0.0 && x.is_finite())) {
+            return Err(
+                invalid("a stroke width cannot be negative").help("write `stroke_width = 3`")
+            );
+        }
+        self.edges.get_mut(&r.id).unwrap().width = w;
+        Ok(())
+    }
+
+    /// The current transform; an unfrozen pivot follows the bounding-box centre.
+    pub fn transform(&self) -> Transform {
+        Transform {
+            position: self.position,
+            scale: self.scale,
+            rotation: self.rotation,
+            pivot: self.pivot.unwrap_or_else(|| self.bbox_center()),
+        }
+    }
+    /// Fix the pivot at the bounding-box centre unless one was set explicitly.
+    pub fn freeze_pivot(&mut self) {
+        if self.pivot.is_none() {
+            self.pivot = Some(self.bbox_center());
+        }
+    }
+
+    /// Add rotated copies of the whole shape (or of the given faces) about `around`, in the same shape.
+    /// A full turn (`|angle| >= 1`) uses `count` equal steps and closes the ring; a smaller angle spreads the
+    /// `count` copies (the original included) from 0 to `angle`. Vertices that land within `weld` of an existing
+    /// vertex are shared, and so are straight edges between shared vertices, so neighbouring copies join up.
+    pub fn radial_array(
+        &mut self,
+        count: usize,
+        around: P,
+        angle_turns: f64,
+        faces: Option<&[u32]>,
+        weld: f64,
+    ) -> Res<()> {
+        if count < 2 {
+            return Err(invalid("`radial_array` needs a count of at least 2")
+                .help("the count includes the original: `count: 8` makes 7 copies"));
+        }
+        if !(angle_turns.abs() > 1e-12 && angle_turns.is_finite()) {
+            return Err(invalid("`radial_array` needs a non-zero angle")
+                .help("write `angle: 360.deg` for a full ring"));
+        }
+        let src_faces: Vec<u32> = match faces {
+            Some(list) => {
+                for &id in list {
+                    self.get_ref(Kind::F, id)?;
+                    self.require_live(f(id), Some(Kind::F), "radial_array")?;
+                }
+                list.iter()
+                    .copied()
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect()
+            }
+            None => self.live_ids(Kind::F),
+        };
+        let src_edges: Vec<u32> = match faces {
+            Some(_) => src_faces
+                .iter()
+                .flat_map(|fid| self.faces[fid].loop_.iter().map(|x| x.0))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            None => self.live_ids(Kind::E),
+        };
+        let src_verts: Vec<u32> = match faces {
+            Some(_) => src_edges
+                .iter()
+                .flat_map(|eid| [self.edges[eid].a, self.edges[eid].b])
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            None => self.live_ids(Kind::V),
+        };
+        let step = if angle_turns.abs() >= 1.0 - 1e-12 {
+            angle_turns / count as f64
+        } else {
+            angle_turns / (count - 1) as f64
+        };
+        // vertices that already exist, for welding (a simple scan: shapes are small)
+        let mut known: Vec<(u32, P)> = self
+            .live_ids(Kind::V)
+            .into_iter()
+            .map(|i| (i, self.pos(i)))
+            .collect();
+        // straight edges that already exist, by their (sorted) end vertices
+        let mut straight: BTreeMap<(u32, u32), u32> = BTreeMap::new();
+        for eid in self.live_ids(Kind::E) {
+            let ed = &self.edges[&eid];
+            if ed.curve == Curve::Straight {
+                straight
+                    .entry((ed.a.min(ed.b), ed.a.max(ed.b)))
+                    .or_insert(eid);
+            }
+        }
+        for k in 1..count {
+            let (s, c) = (step * k as f64 * std::f64::consts::TAU).sin_cos();
+            let rot = |p: P| -> P {
+                let (dx, dy) = (p[0] - around[0], p[1] - around[1]);
+                [around[0] + dx * c - dy * s, around[1] + dx * s + dy * c]
+            };
+            let mut vmap: BTreeMap<u32, u32> = BTreeMap::new();
+            for &vid in &src_verts {
+                let q = rot(self.pos(vid));
+                let hit = known
+                    .iter()
+                    .find(|(_, p)| (p[0] - q[0]).hypot(p[1] - q[1]) <= weld)
+                    .map(|x| x.0);
+                let id = match hit {
+                    Some(id) => id,
+                    None => {
+                        let id = self.new_vertex(q[0], q[1], Some(v(vid)));
+                        known.push((id, q));
+                        id
+                    }
+                };
+                vmap.insert(vid, id);
+            }
+            let mut emap: BTreeMap<u32, u32> = BTreeMap::new();
+            for &eid in &src_edges {
+                let ed = self.edges[&eid].clone();
+                let (a2, b2) = (vmap[&ed.a], vmap[&ed.b]);
+                if a2 == b2 {
+                    continue; // the edge collapsed onto a single vertex
+                }
+                let key = (a2.min(b2), a2.max(b2));
+                let reuse = if ed.curve == Curve::Straight {
+                    straight.get(&key).copied()
+                } else {
+                    None
+                };
+                let id = match reuse {
+                    Some(id) => id,
+                    None => {
+                        let ne = self.new_edge(a2, b2, Some(e(eid)));
+                        self.edges.get_mut(&ne).unwrap().curve = ed.curve.clone();
+                        if ed.curve == Curve::Straight {
+                            straight.insert(key, ne);
+                        }
+                        ne
+                    }
+                };
+                emap.insert(eid, id);
+            }
+            for &fid in &src_faces {
+                let lp = self.faces[&fid].loop_.clone();
+                if lp.iter().any(|(eid, _)| !emap.contains_key(eid)) {
+                    continue;
+                }
+                let loop_: Vec<(u32, i8)> = lp
+                    .iter()
+                    .map(|&(eid, sgn)| {
+                        let old = &self.edges[&eid];
+                        let from = vmap[&if sgn > 0 { old.a } else { old.b }];
+                        (emap[&eid], self.sign_from(emap[&eid], from))
+                    })
+                    .collect();
+                self.new_face(loop_, Some(f(fid)));
+            }
+        }
+        self.post_edit("radial_array");
+        Ok(())
+    }
 }

@@ -69,6 +69,20 @@ pub enum Staged {
         y: f64,
         by: bool,
     },
+    /// A zero-time change of one component of a shape's transform.
+    Transform {
+        shape: String,
+        prop: PropId,
+        value: f64,
+        by: bool,
+    },
+    /// A fill / stroke / stroke width of one face or edge.
+    ElemStyle {
+        shape: String,
+        r: ElemRef,
+        prop: String,
+        value: Value,
+    },
     Style {
         shape: String,
         prop: String,
@@ -179,6 +193,8 @@ pub struct Interp {
     pub staged: Vec<Staged>,
     pub trace_on: bool,
     pub trace: Vec<String>,
+    /// Key sets registered by `keyframes` statements, waiting for the runtime to pick them up.
+    pub pending_keysets: Vec<KeySetSpec>,
 }
 
 pub const TOPOLOGY_METHODS: &[&str] = &[
@@ -198,6 +214,7 @@ pub const TOPOLOGY_METHODS: &[&str] = &[
     "inset",
     "mirror",
     "flip",
+    "radial_array",
 ];
 
 fn parse_elem_name(n: &str) -> Option<(Kind, u32)> {
@@ -233,6 +250,7 @@ impl Interp {
             staged: vec![],
             trace_on: false,
             trace: vec![],
+            pending_keysets: vec![],
             program: Program::default(),
         };
         if let Some(p) = &program.project {
@@ -273,6 +291,7 @@ impl Interp {
         let mut t = Task::new(0, block, Vars::new(), Mode::Build, false);
         self.run_sync(&mut t)?;
         self.globals = t.vars.scopes[0].clone();
+        self.freeze_pivots();
         Ok(())
     }
 
@@ -502,6 +521,39 @@ impl Interp {
                 let n = self.frames_of(&v, e.span)?;
                 return Ok(Some(Req::Wait(n)));
             }
+            StmtKind::Keyframes {
+                target,
+                over,
+                opts,
+                keys,
+            } => {
+                let tv = self.eval(target, &t.vars, mode)?;
+                if mode != Mode::Run {
+                    return Err(Diagnostic::new("E-SHP-005", "`keyframes` needs a running scene")
+                        .help("use it in `main:` or a rule; at build time just assign the value, e.g. `s.rotation = 45.degrees`"));
+                }
+                let ov = self.eval(over, &t.vars, mode)?;
+                let d = self.frames_of(&ov, over.span)?;
+                let mut blend = [0i64; 2];
+                for (i, e) in [&opts.blend_in, &opts.blend_out].into_iter().enumerate() {
+                    if let Some(e) = e {
+                        let v = self.eval(e, &t.vars, mode)?;
+                        blend[i] = self.frames_of(&v, e.span)?;
+                    }
+                }
+                let specs = self.build_keysets(
+                    Some(&tv),
+                    keys,
+                    Some(d),
+                    &t.vars,
+                    mode,
+                    false,
+                    blend,
+                    (opts.hold_before, opts.hold_after),
+                )?;
+                self.pending_keysets.extend(specs);
+                return Ok(Some(Req::Wait(d)));
+            }
             StmtKind::Together(body) => {
                 let kids: Vec<Block> = body.iter().map(|s| Rc::new(vec![s.clone()])).collect();
                 return Ok(Some(Req::Together(kids)));
@@ -588,8 +640,34 @@ impl Interp {
                 }
             }
             Staged::Style { shape, prop, value } => self.set_style(&shape, &prop, value)?,
+            Staged::Transform {
+                shape,
+                prop,
+                value,
+                by,
+            } => set_transform_prop(self.shapes.get_mut(&shape).unwrap(), prop, value, by),
+            Staged::ElemStyle {
+                shape,
+                r,
+                prop,
+                value,
+            } => self.set_elem_style(&shape, r, &prop, &value)?,
         }
         Ok(())
+    }
+
+    fn set_elem_style(&mut self, shape: &str, r: ElemRef, prop: &str, value: &Value) -> Res<()> {
+        let sh = self.shapes.get_mut(shape).unwrap();
+        match (prop, value) {
+            ("fill", Value::Color(c)) => sh.set_face_fill(r, Some(*c)),
+            ("fill", Value::None) => sh.set_face_fill(r, None),
+            ("stroke", Value::Color(c)) => sh.set_edge_stroke(r, Some(*c)),
+            ("stroke", Value::None) => sh.set_edge_stroke(r, None),
+            ("stroke_width", Value::None) => sh.set_edge_width(r, None),
+            ("stroke_width", v) if v.as_f64().is_some() => sh.set_edge_width(r, v.as_f64()),
+            _ => Err(type_err(format!("cannot set `{prop}` to a {}", value.type_name()))
+                .help("fill and stroke take a colour like #f0a (or `none` to inherit), stroke_width a number")),
+        }
     }
 
     fn set_style(&mut self, shape: &str, prop: &str, value: Value) -> Res<()> {
@@ -602,6 +680,18 @@ impl Interp {
             ("stroke_width", v) if v.as_f64().is_some() => sh.stroke_width = v.as_f64().unwrap(),
             ("z", Value::Int(i)) => sh.z = *i,
             ("visible", Value::Bool(b)) => sh.visible = *b,
+            ("position", Value::Tuple(t)) if t.len() == 2 && t.iter().all(|x| x.as_f64().is_some()) => {
+                sh.position = [t[0].as_f64().unwrap(), t[1].as_f64().unwrap()]
+            }
+            ("scale", v) if v.as_f64().is_some() => sh.scale = [v.as_f64().unwrap(); 2],
+            ("scale", Value::Tuple(t)) if t.len() == 2 && t.iter().all(|x| x.as_f64().is_some()) => {
+                sh.scale = [t[0].as_f64().unwrap(), t[1].as_f64().unwrap()]
+            }
+            ("rotation", Value::Angle(a)) => sh.rotation = *a,
+            ("pivot", Value::Tuple(t)) if t.len() == 2 && t.iter().all(|x| x.as_f64().is_some()) => {
+                sh.pivot = Some([t[0].as_f64().unwrap(), t[1].as_f64().unwrap()])
+            }
+            ("pivot", Value::None) => sh.pivot = None,
             _ => {
                 return Err(type_err(format!("cannot set `{prop}` to a {}", value.type_name()))
                     .help("fill/stroke take a colour like #f0a, stroke_width a number, z an Int, visible a Bool"))
@@ -620,14 +710,23 @@ impl Interp {
             Value::Shape(sn) => {
                 if !matches!(
                     attr.as_str(),
-                    "fill" | "stroke" | "stroke_width" | "z" | "visible"
+                    "fill"
+                        | "stroke"
+                        | "stroke_width"
+                        | "z"
+                        | "visible"
+                        | "position"
+                        | "scale"
+                        | "rotation"
+                        | "pivot"
                 ) {
                     return Err(Diagnostic::new(
                         "E-NAM-003",
                         format!("cannot assign to `{sn}.{attr}`"),
                     )
-                    .help("assignable members: fill, stroke, stroke_width, z, visible"));
+                    .help("assignable members: fill, stroke, stroke_width, z, visible, position, scale, rotation, pivot"));
                 }
+                self.check_style_value(attr, &v)?;
                 self.apply_or_stage(
                     Staged::Style {
                         shape: sn,
@@ -636,6 +735,21 @@ impl Interp {
                     },
                     mode,
                 )
+            }
+            Value::Elem(sn, r) if matches!(attr.as_str(), "fill" | "stroke" | "stroke_width") => {
+                self.assign_elem_style(&sn, r, attr, v, mode)
+            }
+            Value::List(items) if matches!(attr.as_str(), "fill" | "stroke" | "stroke_width") => {
+                for item in items {
+                    let Value::Elem(sn, r) = item else {
+                        return Err(type_err(format!(
+                            "`{attr}` can only be set on faces and edges, found a {} in the list",
+                            item.type_name()
+                        )));
+                    };
+                    self.assign_elem_style(&sn, r, attr, v.clone(), mode)?;
+                }
+                Ok(())
             }
             Value::Elem(sn, r) if attr == "name" => {
                 let Value::Str(name) = v else {
@@ -651,6 +765,61 @@ impl Interp {
                 other.type_name()
             ))),
         }
+    }
+
+    /// Check the value of a shape property assignment now, so a bad value is reported at the assignment.
+    fn check_style_value(&self, prop: &str, v: &Value) -> Res<()> {
+        let pair = |v: &Value| matches!(v, Value::Tuple(t) if t.len() == 2 && t.iter().all(|x| x.as_f64().is_some()));
+        match (prop, v) {
+            ("fill" | "stroke", Value::Color(_) | Value::None) | ("visible", Value::Bool(_)) | ("z", Value::Int(_)) => Ok(()),
+            ("stroke_width", v) if v.as_f64().is_some() => Ok(()),
+            ("position" | "pivot", v) if pair(v) => Ok(()),
+            ("pivot", Value::None) => Ok(()),
+            ("scale", v) if v.as_f64().is_some() || pair(v) => Ok(()),
+            ("rotation", Value::Angle(_)) => Ok(()),
+            ("rotation", Value::Int(_) | Value::Num(_)) => Err(Diagnostic::new("E-TYP-002", "`rotation` needs an Angle, found a bare number")
+                .help("a bare number has no unit; write `90.degrees`")),
+            ("scale" | "position" | "pivot", Value::Tuple(t)) if t.iter().any(|x| matches!(x, Value::Dur(_) | Value::Frames(_) | Value::Angle(_))) => {
+                Err(Diagnostic::new("E-TYP-002", format!("`{prop}` takes plain numbers, found a value with a unit")))
+            }
+            (_, other) => Err(type_err(format!("cannot set `{prop}` to a {}", other.type_name()))
+                .help("fill/stroke take a colour like #f0a or `none`, stroke_width a number, z an Int, visible a Bool, position/pivot a point `(x, y)`, scale a number or `(sx, sy)`, rotation an Angle")),
+        }
+    }
+
+    fn assign_elem_style(
+        &mut self,
+        sn: &str,
+        r: ElemRef,
+        attr: &str,
+        v: Value,
+        mode: Mode,
+    ) -> Res<()> {
+        if r.kind == Kind::V {
+            return Err(
+                Diagnostic::new("E-NAM-003", format!("a vertex has no `{attr}`"))
+                    .help("colour faces with `fill` and edges with `stroke` / `stroke_width`"),
+            );
+        }
+        let needed = if attr == "fill" { Kind::F } else { Kind::E };
+        self.shapes[sn].require_live(r, Some(needed), attr)?;
+        match (attr, &v) {
+            ("fill" | "stroke", Value::Color(_) | Value::None) | ("stroke_width", Value::None) => {}
+            ("stroke_width", x) if x.as_f64().is_some() => {}
+            (_, other) => {
+                return Err(type_err(format!("cannot set `{attr}` to a {}", other.type_name()))
+                    .help("fill and stroke take a colour like #f0a (or `none` to inherit), stroke_width a number"))
+            }
+        }
+        self.apply_or_stage(
+            Staged::ElemStyle {
+                shape: sn.to_string(),
+                r,
+                prop: attr.to_string(),
+                value: v,
+            },
+            mode,
+        )
     }
 
     // ---- helpers -----------------------------------------------------------------------
@@ -980,6 +1149,9 @@ impl Interp {
         if n == "scene" {
             return Ok(Value::SceneObj);
         }
+        if n == "none" {
+            return Ok(Value::None);
+        }
         let mut d = Diagnostic::new("E-NAM-001", format!("unknown name `{n}`"));
         if !self.shape_order.is_empty() {
             d = d.help(format!("shapes in scope: {}", self.shape_order.join(", ")));
@@ -1016,6 +1188,13 @@ impl Interp {
                     "z" => Value::Int(sh.z),
                     "visible" => Value::Bool(sh.visible),
                     "stroke_width" => Value::Num(sh.stroke_width),
+                    "position" => Value::Tuple(vec![Value::Num(sh.position[0]), Value::Num(sh.position[1])]),
+                    "scale" => Value::Tuple(vec![Value::Num(sh.scale[0]), Value::Num(sh.scale[1])]),
+                    "rotation" => Value::Angle(sh.rotation),
+                    "pivot" => {
+                        let p = sh.transform().pivot;
+                        Value::Tuple(vec![Value::Num(p[0]), Value::Num(p[1])])
+                    }
                     "fill" => sh.fill.map(Value::Color).unwrap_or(Value::None),
                     "stroke" => sh.stroke.map(Value::Color).unwrap_or(Value::None),
                     _ => {
@@ -1053,6 +1232,9 @@ impl Interp {
                 match (r.kind, name) {
                     (_, "x") => Ok(Value::Num(sh.move_anchor(r)[0])),
                     (_, "y") => Ok(Value::Num(sh.move_anchor(r)[1])),
+                    (Kind::F, "fill") => Ok(sh.faces[&r.id].fill.map(Value::Color).unwrap_or(Value::None)),
+                    (Kind::E, "stroke") => Ok(sh.edges[&r.id].stroke.map(Value::Color).unwrap_or(Value::None)),
+                    (Kind::E, "stroke_width") => Ok(sh.edges[&r.id].width.map(Value::Num).unwrap_or(Value::None)),
                     (Kind::E, "length") => {
                         let ed = &sh.edges[&r.id];
                         let (a, b) = (sh.pos(ed.a), sh.pos(ed.b));
@@ -1576,13 +1758,13 @@ impl Interp {
                 let theirs = self.shapes[other].live_ids(Kind::V);
                 let targets: Vec<(u32, [f64; 2])> = mine.iter().zip(&theirs).map(|(a, b)| (*a, self.shapes[other].pos(*b))).collect();
                 match self.over_frames(&m, mode, span)? {
-                    Some((frames, ease)) => Ok(Value::Pending(Box::new(ActionReq {
-                        shape: sn.to_string(),
-                        label: format!("{sn}.morph_to({other})"),
+                    Some((frames, ease)) => Ok(Value::Pending(Box::new(ActionReq::vertices(
+                        sn.to_string(),
+                        format!("{sn}.morph_to({other})"),
                         frames,
                         ease,
-                        items: targets.into_iter().map(|(id, p)| (id, Target::To(p))).collect(),
-                    }))),
+                        targets.into_iter().map(|(id, p)| (id, Target::To(p))).collect(),
+                    )))),
                     None => {
                         for (id, p) in targets {
                             self.apply_or_stage(Staged::Move { shape: sn.to_string(), r: v(id), x: p[0], y: p[1], by: false }, mode)?;
@@ -1590,6 +1772,43 @@ impl Interp {
                         Ok(Value::None)
                     }
                 }
+            }
+            "move_to" | "move_by" => {
+                let m = self.bind(name, args, &["x", "y", "over", "ease"], &["x"])?;
+                let p = self.xy(&m)?;
+                let t = |v: f64| if name == "move_by" { Tgt::By(v) } else { Tgt::To(v) };
+                self.shape_transform(sn, name, vec![(PropId::PosX, t(p[0])), (PropId::PosY, t(p[1]))], &m, mode, span)
+            }
+            "scale_to" => {
+                let m = self.bind(name, args, &["factor", "over", "ease"], &["factor"])?;
+                let f = match &m["factor"] {
+                    Value::Tuple(_) => self.point(&m["factor"], "`factor`")?,
+                    other => {
+                        let n = self.num(other, "`factor`")?;
+                        [n, n]
+                    }
+                };
+                self.shape_transform(sn, name, vec![(PropId::ScaleX, Tgt::To(f[0])), (PropId::ScaleY, Tgt::To(f[1]))], &m, mode, span)
+            }
+            "rotate_to" | "rotate_by" => {
+                let m = self.bind(name, args, &["angle", "over", "ease"], &["angle"])?;
+                let a = self.angle(&m["angle"], "`angle`")?;
+                let t = if name == "rotate_by" { Tgt::By(a) } else { Tgt::To(a) };
+                self.shape_transform(sn, name, vec![(PropId::Rot, t)], &m, mode, span)
+            }
+            "radial_array" => {
+                let m = self.bind(name, args, &["count", "around", "angle", "faces", "weld"], &["count", "around"])?;
+                let count = self.count_arg(&m["count"], "`count`")?;
+                let around = self.point(&m["around"], "`around`")?;
+                let angle = m.get("angle").map(|v| self.angle(v, "`angle`")).unwrap_or(Ok(1.0))?;
+                let faces: Option<Vec<u32>> = match m.get("faces") {
+                    None => None,
+                    Some(Value::List(items)) => Some(items.iter().map(|x| self.elem_ref(x, sn, Kind::F, "`faces`").map(|r| r.id)).collect::<Res<_>>()?),
+                    Some(other) => return Err(type_err(format!("`faces` must be a list of faces, found {}", other.type_name()))),
+                };
+                let weld = m.get("weld").map(|v| self.num(v, "`weld`")).unwrap_or(Ok(1e-6))?;
+                self.with_shape(sn, mode, span, |sh| sh.radial_array(count, around, angle, faces.as_deref(), weld))?;
+                Ok(Value::None)
             }
             "flip" => {
                 let m = self.bind(name, args, &["x", "y", "line"], &[])?;
@@ -1666,7 +1885,7 @@ impl Interp {
                             .into_iter()
                             .map(|id| (id, if by { Target::By(p) } else { let q = sh.pos(id); Target::To([q[0] + delta[0], q[1] + delta[1]]) }))
                             .collect();
-                        Ok(Value::Pending(Box::new(ActionReq { shape: sn.to_string(), label: format!("{}.{name}", sh.label(r)), frames, ease, items })))
+                        Ok(Value::Pending(Box::new(ActionReq::vertices(sn.to_string(), format!("{}.{name}", sh.label(r)), frames, ease, items))))
                     }
                     None => {
                         if mode == Mode::Run {
@@ -1986,13 +2205,13 @@ impl Interp {
                         )
                     })
                     .collect();
-                Ok(Value::Pending(Box::new(ActionReq {
-                    shape: sn.clone(),
-                    label: format!("{sn}.{name} ({} elements)", refs.len()),
+                Ok(Value::Pending(Box::new(ActionReq::vertices(
+                    sn.clone(),
+                    format!("{sn}.{name} ({} elements)", refs.len()),
                     frames,
                     ease,
-                    items: targets,
-                })))
+                    targets,
+                ))))
             }
             None => {
                 if mode == Mode::Run {
@@ -2013,5 +2232,348 @@ impl Interp {
                 Ok(Value::None)
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Shape transform actions and keyframes
+// ---------------------------------------------------------------------------------------------
+
+/// Write (or add to) one component of a shape's rest transform.
+pub fn set_transform_prop(sh: &mut Shape, prop: PropId, v: f64, by: bool) {
+    let slot: Option<&mut f64> = match prop {
+        PropId::PosX => Some(&mut sh.position[0]),
+        PropId::PosY => Some(&mut sh.position[1]),
+        PropId::ScaleX => Some(&mut sh.scale[0]),
+        PropId::ScaleY => Some(&mut sh.scale[1]),
+        PropId::Rot => Some(&mut sh.rotation),
+        PropId::Vx(_) | PropId::Vy(_) => None,
+    };
+    if let Some(s) = slot {
+        *s = if by { *s + v } else { v };
+    }
+}
+
+const PROP_ROOTS: &[&str] = &["position", "scale", "rotation"];
+
+fn root_name_of(e: &Expr) -> Option<&str> {
+    match &e.kind {
+        ExprKind::Name(n) => Some(n),
+        ExprKind::Member(o, _) | ExprKind::Index(o, _) => root_name_of(o),
+        _ => None,
+    }
+}
+
+impl Interp {
+    /// Pivots default to the bounding-box centre when the build phase ends.
+    pub fn freeze_pivots(&mut self) {
+        for sh in self.shapes.values_mut() {
+            sh.freeze_pivot();
+        }
+    }
+
+    fn shape_transform(
+        &mut self,
+        sn: &str,
+        label: &str,
+        comps: Vec<(PropId, Tgt)>,
+        m: &HashMap<&'static str, Value>,
+        mode: Mode,
+        span: Span,
+    ) -> Res<Value> {
+        match self.over_frames(m, mode, span)? {
+            Some((frames, ease)) => Ok(Value::Pending(Box::new(ActionReq {
+                shape: sn.to_string(),
+                label: format!("{sn}.{label}"),
+                frames,
+                ease,
+                channels: vec![BODY],
+                comps,
+            }))),
+            None => {
+                for (prop, t) in comps {
+                    let (value, by) = match t {
+                        Tgt::To(v) => (v, false),
+                        Tgt::By(v) => (v, true),
+                    };
+                    self.apply_or_stage(
+                        Staged::Transform {
+                            shape: sn.to_string(),
+                            prop,
+                            value,
+                            by,
+                        },
+                        mode,
+                    )?;
+                }
+                Ok(Value::None)
+            }
+        }
+    }
+
+    /// Split `target.position.y` into the target expression and the property path `["position", "y"]`.
+    /// A bare `position.y` (inside a `keyframes` block) has no target.
+    fn split_prop_path<'a>(&self, e: &'a Expr) -> Res<(Option<&'a Expr>, Vec<String>)> {
+        let is_prop = |n: &str| matches!(n, "position" | "scale" | "rotation" | "x" | "y");
+        let mut names: Vec<String> = vec![];
+        let mut cur = e;
+        while let ExprKind::Member(o, n) = &cur.kind {
+            if names.len() < 2 && is_prop(n) {
+                names.push(n.clone());
+                cur = o;
+            } else {
+                break;
+            }
+        }
+        names.reverse();
+        let mut target = Some(cur);
+        if let ExprKind::Name(n) = &cur.kind {
+            if PROP_ROOTS.contains(&n.as_str())
+                && !names
+                    .first()
+                    .is_some_and(|f| PROP_ROOTS.contains(&f.as_str()))
+            {
+                names.insert(0, n.clone());
+                target = None;
+            }
+        }
+        let valid = matches!(
+            names
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .as_slice(),
+            ["rotation"]
+                | ["position"]
+                | ["scale"]
+                | ["position", "x" | "y"]
+                | ["scale", "x" | "y"]
+        );
+        if !valid {
+            let shown = if names.is_empty() {
+                root_name_of(e).unwrap_or("?").to_string()
+            } else {
+                names.join(".")
+            };
+            return Err(Diagnostic::new("E-NAM-003", format!("`{shown}` is not an animatable property"))
+                .at(e.span)
+                .help("properties: position, position.x, position.y, scale, scale.x, scale.y, rotation (vertices have position only)"));
+        }
+        Ok((target, names))
+    }
+
+    /// The scalars a key assignment sets: `(shape, property, value)`.
+    fn key_scalars(
+        &self,
+        target: &Value,
+        path: &[String],
+        val: &Value,
+        span: Span,
+    ) -> Res<Vec<(String, PropId, f64)>> {
+        let (p0, comp) = (path[0].as_str(), path.get(1).map(|s| s.as_str()));
+        let pair = |v: &Value| -> Res<[f64; 2]> {
+            match v {
+                Value::Tuple(t) if t.len() == 2 => Ok([
+                    self.num(&t[0], "a coordinate")?,
+                    self.num(&t[1], "a coordinate")?,
+                ]),
+                other => Err(type_err(format!(
+                    "`{}` needs a point like `(x, y)`, found {}",
+                    path.join("."),
+                    other.type_name()
+                ))),
+            }
+        };
+        match target {
+            Value::Shape(sn) => {
+                let s = |p: PropId, x: f64| (sn.clone(), p, x);
+                Ok(match (p0, comp) {
+                    ("position", None) => {
+                        let p = pair(val)?;
+                        vec![s(PropId::PosX, p[0]), s(PropId::PosY, p[1])]
+                    }
+                    ("position", Some(c)) => vec![s(
+                        if c == "x" { PropId::PosX } else { PropId::PosY },
+                        self.num(val, "a coordinate")?,
+                    )],
+                    ("scale", None) => match val {
+                        Value::Tuple(_) => {
+                            let p = pair(val)?;
+                            vec![s(PropId::ScaleX, p[0]), s(PropId::ScaleY, p[1])]
+                        }
+                        other => {
+                            let n = self.num(other, "`scale`")?;
+                            vec![s(PropId::ScaleX, n), s(PropId::ScaleY, n)]
+                        }
+                    },
+                    ("scale", Some(c)) => vec![s(
+                        if c == "x" {
+                            PropId::ScaleX
+                        } else {
+                            PropId::ScaleY
+                        },
+                        self.num(val, "a scale")?,
+                    )],
+                    _ => vec![s(PropId::Rot, self.angle(val, "`rotation`")?)],
+                })
+            }
+            Value::Elem(..) | Value::List(_) => {
+                let refs: Vec<(String, ElemRef)> = match target {
+                    Value::Elem(sn, r) => vec![(sn.clone(), *r)],
+                    Value::List(items) => items
+                        .iter()
+                        .map(|i| match i {
+                            Value::Elem(sn, r) => Ok((sn.clone(), *r)),
+                            o => Err(type_err(format!("keyframes apply to vertices, edges, faces or a shape, found a {} in the list", o.type_name()))),
+                        })
+                        .collect::<Res<_>>()?,
+                    _ => unreachable!(),
+                };
+                if p0 != "position" {
+                    return Err(Diagnostic::new("E-NAM-003", format!("a vertex has no `{p0}`"))
+                        .at(span)
+                        .help("vertices animate `position`; `rotation` and `scale` belong to the whole shape: `shape.keyframes over ...`"));
+                }
+                let xy: Option<[f64; 2]> = if comp.is_none() {
+                    Some(pair(val)?)
+                } else {
+                    None
+                };
+                let one = if comp.is_some() {
+                    Some(self.num(val, "a coordinate")?)
+                } else {
+                    None
+                };
+                let mut seen: BTreeSet<(String, u32)> = BTreeSet::new();
+                let mut out = vec![];
+                for (sn, r) in refs {
+                    self.shapes[&sn].require_live(r, None, "keyframes")?;
+                    for vid in self.shapes[&sn].element_vertices(r) {
+                        if !seen.insert((sn.clone(), vid)) {
+                            continue; // a vertex shared by several selected elements is keyed once
+                        }
+                        match (comp, xy, one) {
+                            (None, Some(p), _) => {
+                                out.push((sn.clone(), PropId::Vx(vid), p[0]));
+                                out.push((sn.clone(), PropId::Vy(vid), p[1]));
+                            }
+                            (Some("x"), _, Some(x)) => out.push((sn.clone(), PropId::Vx(vid), x)),
+                            (_, _, Some(y)) => out.push((sn.clone(), PropId::Vy(vid), y)),
+                            _ => {}
+                        }
+                    }
+                }
+                Ok(out)
+            }
+            other => Err(type_err(format!(
+                "keyframes apply to a vertex, a selection or a shape, found {}",
+                other.type_name()
+            ))
+            .help("for example `s.v[2].keyframes over 1.second:` or `s.keyframes over 1.second:`")),
+        }
+    }
+
+    /// Turn key blocks into key sets (one per shape property). `limit` is the `over` duration of a
+    /// relative `keyframes` statement; `absolute` marks a scene-level `timeline:`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_keysets(
+        &mut self,
+        implicit: Option<&Value>,
+        keys: &[KeyBlock],
+        limit: Option<i64>,
+        vars: &Vars,
+        mode: Mode,
+        absolute: bool,
+        blend: [i64; 2],
+        hold: (bool, bool),
+    ) -> Res<Vec<KeySetSpec>> {
+        type Group = (bool, Vec<(i64, f64, Ease)>);
+        let mut groups: BTreeMap<(String, PropId), Group> = BTreeMap::new();
+        for kb in keys {
+            let atv = self.eval(&kb.at, vars, mode)?;
+            let at = self.frames_of(&atv, kb.at.span)?;
+            if let Some(lim) = limit {
+                if at > lim {
+                    return Err(type_err(format!("a key at {at} frames lies beyond the `over` duration of {lim} frames"))
+                        .at(kb.span)
+                        .help("make `over` as long as the last key, e.g. `keyframes over 2.seconds:` with a key `at 2.s:`"));
+                }
+            }
+            for a in &kb.assigns {
+                let (texpr, path) = self.split_prop_path(&a.lhs)?;
+                let tv = match (texpr, implicit) {
+                    (Some(e), None) => self.eval(e, vars, mode)?,
+                    (None, Some(v)) => v.clone(),
+                    (None, None) => {
+                        return Err(type_err("a timeline key needs a target").at(a.span).help("write the target too: `s.v[1].position.y = 100`, `s.rotation = 90.deg`"))
+                    }
+                    (Some(_), Some(_)) => {
+                        return Err(type_err("inside `keyframes` write just the property, without a target").at(a.span).help("for example `at 1.s: position.y = 100`"))
+                    }
+                };
+                let val = self.eval(&a.value, vars, mode)?;
+                let ease = match &a.ease {
+                    None => Ease::Linear,
+                    Some(e) => match self.eval(e, vars, mode)? {
+                        Value::Ease(x) => x,
+                        o => {
+                            return Err(type_err(format!(
+                                "`ease` must be an easing such as `ease_out`, found {}",
+                                o.type_name()
+                            ))
+                            .at(e.span))
+                        }
+                    },
+                };
+                for (shape, prop, x) in self
+                    .key_scalars(&tv, &path, &val, a.span)
+                    .map_err(|d| d.or_at(a.span))?
+                {
+                    match groups.get_mut(&(shape.clone(), prop)) {
+                        Some((add, list)) => {
+                            if *add != a.add {
+                                return Err(type_err(format!(
+                                    "`{}` mixes `=` and `+=` keys",
+                                    path.join(".")
+                                ))
+                                .at(a.span)
+                                .help(
+                                    "use `=` for absolute values or `+=` for offsets, not both",
+                                ));
+                            }
+                            if list.iter().any(|k| k.0 == at) {
+                                return Err(Diagnostic::new(
+                                    "E-PRP-003",
+                                    format!("two keys for `{}` at the same time", path.join(".")),
+                                )
+                                .at(a.span)
+                                .help("keys of one property must be at different times"));
+                            }
+                            list.push((at, x, ease));
+                        }
+                        None => {
+                            groups.insert((shape, prop), (a.add, vec![(at, x, ease)]));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(groups
+            .into_iter()
+            .map(|((shape, prop), (add, mut list))| {
+                list.sort_by_key(|k| k.0);
+                KeySetSpec {
+                    shape,
+                    prop,
+                    add,
+                    keys: list,
+                    absolute,
+                    hold_before: hold.0,
+                    hold_after: hold.1,
+                    blend_in: blend[0],
+                    blend_out: blend[1],
+                }
+            })
+            .collect())
     }
 }

@@ -83,30 +83,33 @@ pub fn render(snapshot: &Value, scale: f32, debug: bool) -> Result<Pixmap, Strin
         if sh["visible"] == Value::Bool(false) {
             continue;
         }
-        if let Some(color) = sh["fill"].as_str().and_then(parse_hex) {
+        // every face is filled with its own resolved colour, every edge stroked with its own
+        for face in sh["faces"].as_array().into_iter().flatten() {
+            let Some(color) = face["fill"].as_str().and_then(parse_hex) else {
+                continue;
+            };
             let mut paint = Paint::default();
             paint.set_color(color);
             paint.anti_alias = true;
-            for face in sh["faces"].as_array().into_iter().flatten() {
-                if let Some(path) = face_path(face) {
-                    pm.fill_path(&path, &paint, FillRule::Winding, tf, None);
-                }
+            if let Some(path) = face_path(face) {
+                pm.fill_path(&path, &paint, FillRule::Winding, tf, None);
             }
         }
-        if let Some(color) = sh["stroke"].as_str().and_then(parse_hex) {
+        for edge in sh["edges"].as_array().into_iter().flatten() {
+            let Some(color) = edge["stroke"].as_str().and_then(parse_hex) else {
+                continue;
+            };
             let mut paint = Paint::default();
             paint.set_color(color);
             paint.anti_alias = true;
             let stroke = Stroke {
-                width: sh["stroke_width"].as_f64().unwrap_or(2.0) as f32,
+                width: edge["stroke_width"].as_f64().unwrap_or(2.0) as f32,
                 line_cap: LineCap::Round,
                 line_join: LineJoin::Round,
                 ..Stroke::default()
             };
-            for edge in sh["edges"].as_array().into_iter().flatten() {
-                if let Some(path) = edge_path(edge) {
-                    pm.stroke_path(&path, &paint, &stroke, tf, None);
-                }
+            if let Some(path) = edge_path(edge) {
+                pm.stroke_path(&path, &paint, &stroke, tf, None);
             }
         }
         if debug {

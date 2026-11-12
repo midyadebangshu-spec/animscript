@@ -950,6 +950,7 @@ sq1.mid.bend(10.degrees)
 | `f.inset(amount)` | Shrink a face inward, leaving a ring of new faces (the face keeps its ID as the inner face) |
 | `s.mirror(x: 400)` | Add a reflected copy joined to the shape (also `y:`, `line: ((x1, y1), (x2, y2))`, `faces:`, `weld:`) |
 | `s.flip(x: 400)` | Reflect the whole shape in place (same axes) |
+| `s.radial_array(count: 8, around: (400, 300))` | Add rotated copies around a point, welded where they touch (also `angle:`, `faces:`, `weld:`) |
 | `a.morph_to(b)` | Move every vertex of `a` to the matching vertex of `b` |
 
 Edges are straight by default. Deleting a vertex deletes its edges and the faces using them; deleting an edge
@@ -989,6 +990,80 @@ removes an element that is later in the list (deleting a vertex also removes its
 
 At runtime, selections and lambdas are fine (they only read) and `list.move_by(...) over 0.3.seconds` is one
 action on all of its vertices.
+
+### Colour per face and per edge
+
+```anim
+flower.fill = #f4a6c0               # the shape's default fill
+flower.f1.fill = #b9e08f            # one face
+flower.faces.every(2, offset: 1).fill = #3b8ea5
+flower.e2.stroke = #ff0000          # one edge (also stroke_width)
+flower.e2.stroke_width = 6
+flower.f1.fill = none               # back to the shape's colour
+```
+
+A face or edge without its own colour uses the shape's. New faces and edges copy the colour of the element they
+came from, so an inset ring, a mirrored copy or a `radial_array` copy keeps its colour. Colours can also be set at
+runtime (an instant change); fading between colours is not available yet.
+
+### Position, scale and rotation
+
+Every shape has a transform on top of its vertices: `position` (a shift), `scale` and `rotation`, applied around
+the shape's `pivot`. The pivot is the centre of the shape's bounding box, fixed when the build phase ends; set your
+own with `s.pivot = (x, y)`.
+
+```anim
+s.position = (40, 0)
+s.scale = 1.5                       # or (sx, sy)
+s.rotation = 45.degrees
+
+s.move_to((100, 50))                # these four are timed with `over`
+s.move_by(10, 0) over 0.5.seconds
+s.scale_to(2) over 1.second ease ease_out
+s.rotate_by(360.deg) over 4.seconds ease linear     # rotation is linear, so full spins work
+```
+
+Without `over` they are instant. A shape's `move_to` moves its `position`; an element's (`s.v1.move_to`) edits the
+vertex itself. The transform runs beside vertex animation, and everything in a frame is resolved in a fixed order.
+
+### Keyframes and timelines
+
+Keys give exact values at exact times. A key set only works from its first to its last key, then lets go: the value
+underneath (the rest value or a running action) shows through again.
+
+```anim
+s.v[2].keyframes over 1.second:             # a statement in main: or a rule; blocks for 1 second
+    at 0.s: position.y = 0                  # relative to the start of the statement
+    at 0.5.s: position.y = 100 ease ease_out
+    at 1.s: position.y = 60                 # the default easing is linear
+
+pinwheel.keyframes over 4.seconds:          # a shape: position, scale and rotation
+    at 0.s: scale = 1
+    at 2.s: scale = 1.25 ease ease_in_out
+    at 4.s: scale = 1
+
+s.vertices.keyframes over 1.second:         # `+=` adds an offset: good for groups
+    at 0.s: position.y += 0
+    at 0.5.s: position.y += 10
+    at 1.s: position.y += 0
+```
+
+Options (one per line inside the block): `hold_before`, `hold_after` (keep the first or last value outside the
+range), `blend_in: 12f` and `blend_out: 12f` (fade the whole set in or out). Two keys for one property at the
+same time are `E-PRP-003`; a key later than the `over` time, or mixing `=` with `+=`, is `E-TYP-001`.
+
+A scene can also list keys in absolute scene time:
+
+```anim
+scene "Sway" for 4.seconds:
+    timeline:
+        at 12f:
+            s.v[1].position.x = 0
+            s.rotation = 0.deg
+        at 2.seconds:
+            s.v[1].position.x = 100 ease linear
+            s.rotation = 90.deg
+```
 
 ### Two modes
 
@@ -1091,6 +1166,27 @@ leaf.smooth(2)
 
 # 5. Inset the face: an inner leaf plus a ring of border faces.
 leaf.f1.inset(10)
+```
+
+### Worked example: a pinwheel
+
+`examples/pinwheel.anim` uses `radial_array`, per-face colour, a shape transform and keyframes:
+
+```anim
+shape pinwheel = polygon([(400, 300), (600, 300), (400 + 200 * cos(45.deg), 300 + 200 * sin(45.deg))])
+pinwheel.e2.bend(-25.degrees)
+pinwheel.f1.fill = #e4572e
+pinwheel.radial_array(count: 8, around: (400, 300), angle: 360.deg)
+pinwheel.faces.every(2, offset: 1).fill = #3b8ea5
+
+scene "Spin" for 4.seconds:
+    main:
+        together:
+            pinwheel.rotate_by(360.deg) over 4.seconds ease linear
+            pinwheel.keyframes over 4.seconds:
+                at 0.s: scale = 1
+                at 2.s: scale = 1.25 ease ease_in_out
+                at 4.s: scale = 1 ease ease_in_out
 ```
 
 ---
