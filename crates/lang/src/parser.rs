@@ -151,6 +151,20 @@ impl Parser {
                     let w = self.world()?;
                     prog.world = Some(w);
                 }
+                T::Ident(s) if s == "emitter" && matches!(&self.peek_at(1).t, T::Ident(_)) => {
+                    let start = self.next().span;
+                    let name = self.ident("an emitter name")?;
+                    let mut attrs = vec![];
+                    self.attrs(|p, key, span| {
+                        attrs.push((key.to_string(), p.expr()?, span));
+                        Ok(())
+                    })?;
+                    prog.emitters.push(EmitterDecl {
+                        name,
+                        attrs,
+                        span: start,
+                    });
+                }
                 T::Ident(s) if s == "prop" || s == "character" => {
                     let e = self.entity()?;
                     prog.entities.push(e);

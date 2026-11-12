@@ -443,6 +443,8 @@ pub enum Value {
     Rect([f64; 4]),
     /// A physics joint, by index.
     Joint(usize),
+    /// A particle emitter, by name.
+    Emitter(String),
 }
 
 /// A lambda with the variables visible where it was written (captured by value).
@@ -482,6 +484,7 @@ impl Value {
             Value::Handle(_) => "Handle",
             Value::Rect(_) => "Region",
             Value::Joint(_) => "Joint",
+            Value::Emitter(_) => "Emitter",
         }
     }
     pub fn as_f64(&self) -> Option<f64> {

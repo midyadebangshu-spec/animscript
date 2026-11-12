@@ -471,6 +471,47 @@ impl World {
         }
         out.into_iter().collect()
     }
+    /// The nearest non-sensor fixture a circle (centre and radius in metres) touches or will touch
+    /// within `margin`: `(normal pointing from the circle into the fixture, separation, velocity of
+    /// the fixture at the contact point)`. Used by particles, which never push anything back.
+    pub fn collide_circle(
+        &self,
+        center: Vec2,
+        radius: f64,
+        margin: f64,
+    ) -> Option<(Vec2, f64, Vec2)> {
+        let circle = Shape::Circle {
+            center: Vec2::ZERO,
+            radius,
+        };
+        let xc = Xf {
+            p: center,
+            q: Rot::IDENTITY,
+        };
+        let mut best: Option<(Vec2, f64, Vec2)> = None;
+        for f in self.fixtures.iter().filter(|f| !f.sensor) {
+            let b = &self.bodies[f.body];
+            let xf = Xf { p: b.p, q: b.q };
+            let r = radius + margin;
+            let bb = f.shape.aabb(&xf);
+            if center.x < bb.lo.x - r
+                || center.x > bb.hi.x + r
+                || center.y < bb.lo.y - r
+                || center.y > bb.hi.y + r
+            {
+                continue;
+            }
+            let Some(m) = collide(&circle, &xc, &f.shape, &xf, margin) else {
+                continue;
+            };
+            for pt in &m.points {
+                if best.is_none_or(|bst| pt.sep < bst.1) {
+                    best = Some((m.normal, pt.sep, b.v + cross_sv(b.w, pt.point - b.c)));
+                }
+            }
+        }
+        best
+    }
     /// All contact points of touching, non-sensor contacts (for the snapshot and debug drawing).
     pub fn contact_infos(&self) -> Vec<ContactInfo> {
         let mut out = vec![];
@@ -546,6 +587,21 @@ impl World {
                 mp.normal_impulse = cp.ni;
                 mp.tangent_impulse = cp.ti;
             }
+        }
+        // a contact the solver pushed on is touching, even when the impact happened inside this step
+        let hit: Vec<(usize, usize)> = self
+            .contacts
+            .iter()
+            .filter(|(_, c)| {
+                !c.sensor && !c.touching && c.manifold.points.iter().any(|p| p.normal_impulse > 0.0)
+            })
+            .map(|(k, _)| *k)
+            .collect();
+        for k in hit {
+            let c = self.contacts.get_mut(&k).expect("listed");
+            c.touching = true;
+            let (a, b) = (c.ba, c.bb);
+            self.touch_change(a, b, false, true);
         }
         for b in &mut self.bodies {
             if b.is_active() {

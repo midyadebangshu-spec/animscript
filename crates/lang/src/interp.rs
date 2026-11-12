@@ -210,6 +210,8 @@ pub struct Interp {
     pub world_cfg: crate::phys::WorldCfg,
     pub decls: crate::phys::Decls,
     pub phys: Option<crate::phys::Physics>,
+    pub emitters: BTreeMap<String, crate::particles::EmitterCfg>,
+    pub parts: BTreeMap<String, animscript_physics::Emitter>,
 }
 
 pub const TOPOLOGY_METHODS: &[&str] = &[
@@ -275,6 +277,8 @@ impl Interp {
             world_cfg: Default::default(),
             decls: Default::default(),
             phys: None,
+            emitters: BTreeMap::new(),
+            parts: BTreeMap::new(),
             program: Program::default(),
         };
         if let Some(p) = &program.project {
@@ -318,6 +322,7 @@ impl Interp {
         self.run_sync(&mut t)?;
         self.globals = t.vars.scopes[0].clone();
         self.freeze_pivots();
+        self.eval_emitters()?;
         Ok(())
     }
 
@@ -1240,6 +1245,9 @@ impl Interp {
         if self.entities.contains_key(n) {
             return Ok(Value::Entity(n.to_string()));
         }
+        if self.emitters.contains_key(n) {
+            return Ok(Value::Emitter(n.to_string()));
+        }
         if let Some(e) = Ease::from_name(n) {
             return Ok(Value::Ease(e));
         }
@@ -1401,6 +1409,7 @@ impl Interp {
                         .help("this build supports `scene.starts`"),
                 ),
             },
+            Value::Emitter(en) if name == "count" => Ok(Value::Int(self.emitter_count(&en) as i64)),
             Value::Tuple(t) if t.len() == 2 && (name == "x" || name == "y") => {
                 Ok(t[usize::from(name == "y")].clone())
             }
@@ -1839,6 +1848,10 @@ impl Interp {
         if let (Value::Shape(sn), true) = (&obj, Interp::is_body_method(name)) {
             let sn = sn.clone();
             return self.body_method(&sn, name, args, mode);
+        }
+        if let Value::Emitter(en) = &obj {
+            let en = en.clone();
+            return self.emitter_method(&en, name, args);
         }
         if let Value::Joint(j) = obj {
             return self.joint_method(j, name, args, mode);

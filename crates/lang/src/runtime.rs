@@ -194,6 +194,7 @@ impl Runtime {
         self.handles.clear();
         self.it.scene_name = sc.name.clone();
         self.it.decls.start_scene();
+        self.it.reset_particles();
         self.it.mod_counts.clear();
         self.pending.clear();
         self.channels.clear();
@@ -1022,11 +1023,13 @@ impl Runtime {
                 }
             }
         }
+        resolved.particles = self.it.particles_tick(tick, &resolved.tf);
         self.resolved = resolved;
     }
 
     fn end_scene(&mut self) {
         self.it.end_physics();
+        self.it.parts.clear();
         let acts = std::mem::take(&mut self.acts);
         for a in acts.values() {
             self.commit(a, true); // cancelled actions keep their last sampled value

@@ -28,6 +28,8 @@ pub struct Resolved {
     pub opacity: BTreeMap<String, f64>,
     /// The physics section of the snapshot (contacts, joints, sleep flags), when a world exists.
     pub physics: Option<J>,
+    /// Live particles per emitter, when the program declares emitters.
+    pub particles: Option<J>,
 }
 
 /// The complete description of one tick. Vertex positions, curve handles and styles are fully resolved
@@ -126,6 +128,9 @@ pub fn build_snapshot(
     });
     if let Some(p) = &resolved.physics {
         snap["physics"] = p.clone();
+    }
+    if let Some(p) = &resolved.particles {
+        snap["particles"] = p.clone();
     }
     snap
 }

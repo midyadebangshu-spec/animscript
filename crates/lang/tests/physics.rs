@@ -216,3 +216,19 @@ fn bad_bodies_and_joints_are_rejected() {
     assert_eq!(err("shape s = square(size: 10)\nscene \"s\" for 1.frame:\n    main:\n        s.body()\n        wait 1.frame\n").code, "E-SHP-003");
     // bodies are made while building
 }
+
+#[test]
+fn a_fast_bounce_still_counts_as_touching_for_that_tick() {
+    // restitution 0.8: each contact begins and ends within one frame, yet every landing must fire the rule
+    let text = src("shape ball = circle(16, radius: 25, at: (400, 100))\nshape ground = rectangle(width: 800, height: 40, at: (400, 580))\nground.body(kind: static, restitution: 0.8)\nball.body(restitution: 0.8)\nscene \"s\" for 6.seconds:\n    whenever ball.touches(ground):\n        ball.fill_to(#ff0000) over 1.frame\n");
+    let r = run(&text, &RunOptions { trace: true })
+        .unwrap_or_else(|d| panic!("{}", d.render(Some(&text), "t")));
+    let fires: Vec<i64> = r
+        .trace
+        .iter()
+        .filter(|l| l.contains("FIRE"))
+        .map(|l| l.split_whitespace().nth(1).unwrap().parse().unwrap())
+        .collect();
+    assert!(fires.len() >= 3, "{fires:?}");
+    assert!((20..=27).contains(&fires[0]), "{fires:?}");
+}

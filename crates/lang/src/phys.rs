@@ -118,7 +118,7 @@ impl Decls {
 /// The live world of the running scene.
 pub struct Physics {
     pub world: ph::World,
-    ppm: f64,
+    pub(crate) ppm: f64,
     steps: usize,
     names: Vec<String>,
     ids: BTreeMap<String, usize>,
@@ -127,6 +127,8 @@ pub struct Physics {
     angle: BTreeMap<String, f64>,
     last: BTreeMap<String, f64>,
     touching: BTreeSet<(usize, usize)>,
+    /// Pairs whose contact began during the last frame, even if it already ended again.
+    began: BTreeSet<(usize, usize)>,
 }
 
 pub struct TickPoses {
@@ -339,7 +341,10 @@ impl Interp {
                 if name == "touches" {
                     let t = self.phys.as_ref().is_some_and(|ph| {
                         match (ph.ids.get(sn), ph.ids.get(other)) {
-                            (Some(a), Some(b)) => ph.touching.contains(&(*a.min(b), *a.max(b))),
+                            (Some(a), Some(b)) => {
+                                let k = (*a.min(b), *a.max(b));
+                                ph.touching.contains(&k) || ph.began.contains(&k)
+                            }
                             _ => false,
                         }
                     });
@@ -758,6 +763,7 @@ impl Interp {
             angle: BTreeMap::new(),
             last: BTreeMap::new(),
             touching: BTreeSet::new(),
+            began: BTreeSet::new(),
         };
         let decls: Vec<BodyDecl> = self.decls.bodies.iter().map(|b| b.1.clone()).collect();
         for d in &decls {
@@ -963,6 +969,7 @@ impl Interp {
         let Some(ph) = self.phys.as_mut() else {
             return TickPoses { dynamic: vec![] };
         };
+        ph.began.clear();
         if tick > 0 {
             let dt = 1.0 / fps;
             for (name, pose) in kin {
@@ -976,6 +983,7 @@ impl Interp {
                 for e in ph.world.take_events() {
                     if e.begin {
                         ph.touching.insert((e.a, e.b));
+                        ph.began.insert((e.a, e.b));
                     } else {
                         ph.touching.remove(&(e.a, e.b));
                         leaves.push(leave_key(&ph.names[e.a], &ph.names[e.b]));

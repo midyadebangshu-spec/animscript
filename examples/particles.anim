@@ -1,0 +1,56 @@
+project "Particles":
+    anim_version: "0.1"
+    canvas: 800x600
+    fps: 24
+    seed: 11
+    background: #1d2433
+
+world:
+    gravity: (0, 9.8)
+    scale: 100
+
+shape ground = rectangle(width: 760, height: 30, at: (400, 570))
+shape ball = circle(20, radius: 30, at: (520, 80))
+ground.fill = #3a4256
+ball.fill = #e0674f
+ground.body(kind: static)
+ball.body(restitution: 0.7)
+
+# a fountain on the left: droplets arc up, hit the ground and splash
+emitter fountain:
+    at: (150, 555)
+    rate: 90
+    lifetime: (1.2, 1.8)
+    speed: (320, 420)
+    angle: (-105.deg, -75.deg)
+    gravity: (0, 600)
+    size: (3, 4.5)
+    size_end: 1
+    color: #8fd0ff
+    color_end: #3d7bd9
+    opacity: 1
+    opacity_end: 0.2
+    collide: true
+    restitution: 0.35
+
+# sparks thrown up every time the ball lands
+emitter sparks:
+    at: ball
+    lifetime: (0.4, 0.8)
+    speed: (120, 320)
+    angle: (-160.deg, -20.deg)
+    gravity: (0, 500)
+    size: (2, 4)
+    size_end: 0
+    color: #ffe08a
+    color_end: #ff4d2e
+    opacity_end: 0
+    collide: true
+    restitution: 0.5
+
+scene "Particles" for 6.seconds:
+    whenever ball.touches(ground):
+        sparks.burst(36)
+    main:
+        fountain.start()
+        wait 6.seconds

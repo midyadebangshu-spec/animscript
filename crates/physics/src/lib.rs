@@ -7,12 +7,14 @@
 mod collide;
 mod joint;
 mod math;
+mod particles;
 mod shape;
 mod world;
 
 pub use collide::{collide, Manifold, ManifoldPoint};
 pub use joint::{Joint, JointDef, JointKind};
 pub use math::{cross_sv, v2, Rot, Vec2, Xf};
+pub use particles::{Emitter, EmitterDef, Particle};
 pub use shape::{decompose, find_pairs, Aabb, MassData, Polygon, Shape};
 pub use world::{
     Body, BodyDef, BodyId, BodyKind, ContactEvent, ContactInfo, FixtureDef, JointId, World,

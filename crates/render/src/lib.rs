@@ -183,6 +183,24 @@ pub fn render_with(
             }
         }
     }
+    for em in snapshot["particles"].as_array().into_iter().flatten() {
+        for it in em["items"].as_array().into_iter().flatten() {
+            let Some(color) = it[3].as_str().and_then(parse_hex) else {
+                continue;
+            };
+            let (x, y, r) = (
+                it[0].as_f64().unwrap_or(0.0) as f32,
+                it[1].as_f64().unwrap_or(0.0) as f32,
+                it[2].as_f64().unwrap_or(0.0) as f32,
+            );
+            let mut paint = Paint::default();
+            paint.set_color(color);
+            paint.anti_alias = true;
+            if let Some(c) = PathBuilder::from_circle(x, y, r.max(0.01)) {
+                pm.fill_path(&c, &paint, FillRule::Winding, tf, None);
+            }
+        }
+    }
     if debug_physics {
         draw_physics(&mut pm, &snapshot["physics"], tf);
     }

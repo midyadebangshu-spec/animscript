@@ -439,3 +439,44 @@ judgement calls I expect you to want to look at.
 98. **Not yet.** Continuous collision for very fast thin bodies, collision filtering by category, body
     reading while building (`velocity` before the scene runs reads zero), face holes, and soft bodies, fluids,
     particles and character rigs (the next rounds).
+
+## Round 6: particles
+
+99. **Declaration.** `emitter name:` is a top-level block of `key: value` lines (like `world:`), evaluated once
+    while building, so `at: ball` may name a shape and values may use earlier `let`s. An emitter is a value:
+    `name.start()`, `name.stop()`, `name.burst(n)` and the member `name.count` work anywhere, including
+    `main:` and rules. Settings: `at`, `rate`, `lifetime`, `speed`, `angle`, `size`, `size_end`, `color`,
+    `color_end`, `opacity`, `opacity_end`, `gravity`, `drag`, `restitution`, `collide`, `max`. Unknown ones are
+    `E-PTC-001`; `at` that is neither a point nor a shape is `E-PTC-002`.
+100. **Ranges and ends.** A range is a `(min, max)` pair (or one number); there is no `+-` operator. The value a
+    property has at the end of a particle's life is a separate setting (`size_end`, `color_end`,
+    `opacity_end`) instead of an arrow. Lifetimes accept durations (`0.5.seconds`, `12.frames`) or seconds as
+    numbers; angles must be angles (`-90.deg`); an angle of 0 points right and positive angles turn clockwise
+    on screen. Sizes are radii in pixels. Speeds are px/s and gravity px/s^2.
+101. **Randomness.** Each attribute of each particle is a pure function of (project seed, scene name, emitter
+    name, spawn index, attribute) through SplitMix64, so a change in one emitter never disturbs another and
+    the same program always gives the same particles. The `seed:` in `project` changes them.
+102. **Emission.** While started, particle number `k` is born at the first step where
+    `rate * active_time >= k`, so the rate is exact (no drift, no carried fraction); `burst(n)` adds `n` at the
+    next step. Emitters start stopped at each scene start. Stopping lets live particles finish. Over the `max`
+    cap (default 1000; at most 20000 over all emitters) spawns are skipped but still use up an index.
+103. **Where they are born.** A point, or for `at: shape` a random point inside the shape's faces (rejection
+    sampling in its bounding box, 16 tries, then the centre) using the shape's resolved pose of that tick, so
+    particles follow a moving or simulated shape. A shape with no faces emits from its centre.
+104. **Stepping.** After the rigid bodies have been stepped for the frame, each emitter takes the same
+    `substeps` per frame: gravity, then drag (`v / (1 + drag * dt)`), then position. At tick 0 emitters only
+    spawn (a burst at the start shows at once). Particles are stepped against the bodies' poses *after* the
+    frame's physics, not interleaved with it.
+105. **Collision.** `collide: true` makes particles circles that bounce off every non-sensor fixture with their
+    own `restitution` (default 0.4) and no friction, are pushed out of penetration, and take the velocity of a
+    moving body at the contact point; an approaching particle is placed on the surface instead of bouncing
+    early. They never push bodies and never collide with each other. Very fast particles can still pass through
+    something thinner than `speed * dt`. Without a physics world nothing happens.
+106. **Output.** The snapshot has a `particles` list (absent when the program declares no emitters) of
+    `{name, items: [[x, y, radius, "#rrggbb[aa]"], ...]}` in spawn order, included in the hash. Colours are
+    interpolated in linear light like colour animation; opacity multiplies alpha. The renderer draws filled
+    circles over the shapes (under the debug overlay).
+107. **Engine fix found on the way.** A fast bounce begins and ends its contact inside one frame, and the
+    touching test (closest point within 1 cm at the start of a step) never saw it, so `touches` rules missed
+    every bounce. A contact the solver pushed on now counts as touching, and `touches` is also true for a tick
+    in which a contact began, even if it already ended.

@@ -151,6 +151,14 @@ pub struct WorldDecl {
     pub span: Span,
 }
 
+/// An `emitter name:` block: `key: expression` lines evaluated while building.
+#[derive(Clone, Debug)]
+pub struct EmitterDecl {
+    pub name: String,
+    pub attrs: Vec<(String, Expr, Span)>,
+    pub span: Span,
+}
+
 #[derive(Clone, Debug)]
 pub struct EntityDecl {
     pub kind: String,
@@ -196,6 +204,7 @@ pub struct Scene {
 pub struct Program {
     pub project: Option<Project>,
     pub world: Option<WorldDecl>,
+    pub emitters: Vec<EmitterDecl>,
     pub entities: Vec<EntityDecl>,
     pub top: Vec<Stmt>,
     pub scenes: Vec<Rc<Scene>>,

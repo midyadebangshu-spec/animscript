@@ -550,3 +550,47 @@ fn a_pile_of_two_hundred_bodies_simulates_within_budget() {
         );
     }
 }
+
+#[test]
+fn a_fast_bounce_reports_begin_and_end() {
+    let mut w = world();
+    let g = w.create_body(&BodyDef {
+        position: v2(0.0, 5.5),
+        ..BodyDef::default()
+    });
+    w.add_fixture(
+        g,
+        &FixtureDef {
+            restitution: 0.9,
+            ..FixtureDef::new(Shape::boxed(50.0, 0.5))
+        },
+    );
+    let ball = w.create_body(&BodyDef {
+        kind: BodyKind::Dynamic,
+        position: v2(0.0, 1.0),
+        ..BodyDef::default()
+    });
+    w.add_fixture(
+        ball,
+        &FixtureDef {
+            restitution: 0.9,
+            ..FixtureDef::new(Shape::Circle {
+                center: v2(0.0, 0.0),
+                radius: 0.25,
+            })
+        },
+    );
+    let (mut begins, mut ends) = (0, 0);
+    for _ in 0..(3.5 / DT) as usize {
+        w.step(DT);
+        for e in w.take_events() {
+            if e.begin {
+                begins += 1;
+            } else {
+                ends += 1;
+            }
+        }
+    }
+    // it lands at about 0.9 s and again about 2.6 s: two impacts, each one a begin and an end
+    assert!(begins >= 2 && ends >= 2, "{begins} begins, {ends} ends");
+}

@@ -1386,6 +1386,56 @@ and whether they are awake, touching contacts, joint anchors); it is part of the
 New errors: `E-PHY-001` (a body that cannot exist), `E-PHY-002` (bad joint arguments), warning `W-PHY-001`
 (bodies overlap at the start of a scene). Worked example: `examples/physics.anim`.
 
+## 13c. Particles
+
+An **emitter** throws many small seeded circles: sparks, dust, water, confetti. Declare it once at the top
+level; control it with `start()`, `stop()` and `burst(n)`.
+
+```anim
+emitter fountain:
+    at: (150, 555)                  # a point, or a shape (born inside it, following it)
+    rate: 90                        # particles per second while started
+    lifetime: (1.2, 1.8)            # seconds, picked per particle: (shortest, longest)
+    speed: (320, 420)               # px/s
+    angle: (-105.deg, -75.deg)      # 0 points right; -90.deg is up
+    gravity: (0, 600)               # px/s^2
+    size: (3, 4.5)                  # radius in px at birth ...
+    size_end: 1                     # ... and at the end of its life
+    color: #8fd0ff
+    color_end: #3d7bd9
+    opacity: 1
+    opacity_end: 0.2
+    collide: true                   # bounce off bodies
+    restitution: 0.35
+
+scene "s" for 6.seconds:
+    whenever ball.touches(ground):
+        sparks.burst(36)            # exactly 36, at once
+    main:
+        fountain.start()
+        wait 3.seconds
+        fountain.stop()             # the ones in the air finish their life
+```
+
+| Setting | Meaning | Default |
+|---|---|---|
+| `at` | a point `(x, y)` or a shape | `(0, 0)` |
+| `rate` | particles per second while started (0 = only bursts) | `0` |
+| `lifetime` | seconds, number or `(min, max)` | `1` |
+| `speed`, `angle` | number or `(min, max)` pair | `0`, a full circle |
+| `size`, `size_end` | radius in px; end value over the life | `3`, same as `size` |
+| `color`, `color_end` | colour over the life (in linear light) | white |
+| `opacity`, `opacity_end` | 0 to 1 over the life | `1` |
+| `gravity`, `drag` | px/s^2 vector; slows down like air | none |
+| `collide`, `restitution` | bounce off physics bodies | `false`, `0.4` |
+| `max` | most live particles (all emitters together: 20000) | `1000` |
+
+- Everything random is seeded: the same program (and project `seed:`) always draws the same particles.
+- Particles bounce off bodies but never push them, and they do not collide with each other.
+- `name.count` is the number of live particles.
+- Emitters start stopped at the start of every scene.
+- Errors: `E-PTC-001` (bad setting), `E-PTC-002` (`at` is not a point or shape). Example: `examples/particles.anim`.
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,
