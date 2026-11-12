@@ -1,0 +1,28 @@
+project "Springs":
+    anim_version: "0.1"
+    canvas: 640x480
+    fps: 24
+    background: #f4f1ea
+
+world:
+    gravity: (0, 9.8)
+    scale: 100
+
+shape ground = rectangle(width: 600, height: 40, at: (320, 460))
+shape platform = rectangle(width: 220, height: 16, at: (320, 330))
+shape ball = circle(24, radius: 28, at: (300, 30))
+ground.fill = #6b5b4b
+platform.fill = #4f8fe0
+ball.fill = #e0674f
+
+ground.body(kind: static)
+platform.body(density: 1.5, friction: 0.8)
+ball.body(restitution: 0.4, friction: 0.5)
+
+# two springs under the platform, anchored on the ground (the blue lines)
+let left = distance(ground, platform, anchor_a: (240, 440), anchor_b: (240, 338), spring: (2.5, 0.12))
+let right = distance(ground, platform, anchor_a: (400, 440), anchor_b: (400, 338), spring: (2.5, 0.12))
+
+scene "Springs" for 6.seconds:
+    main:
+        wait 6.seconds
