@@ -1,0 +1,53 @@
+project "Breathing":
+    anim_version: "0.1"
+    canvas: 800x600
+    fps: 24
+    seed: 11
+    background: #fdf6e3
+
+## A flower that breathes: every vertex wobbles, the whole shape drifts with noise, the colour shifts,
+## the scale pops with a spring, and a seed falls and bounces.
+
+# The flower: a square, cut and pushed into eight petals, then rounded (see flower.anim).
+shape flower = square(size: 200, at: (400, 300))
+for i in 1..4:
+    flower.e[i].subdivide(4)
+let c = (400, 300)
+let ring = flower.f1.vertices
+for i in 0..15:
+    let a = 225.degrees - i * 22.5.degrees
+    if i % 2 == 0:
+        ring[i].move_to(c + unit_vector(a) * 190)
+    else:
+        ring[i].move_to(c + unit_vector(a) * 95)
+ring.every(2).bevel(38)
+flower.smooth(2)
+flower.fill = #f4a6c0
+flower.stroke = #b83a6b
+flower.stroke_width = 3
+
+shape heart = circle(16, radius: 45, at: (400, 300))
+heart.smooth(1)
+heart.fill = #f7c548
+heart.stroke = #c98a0a
+heart.stroke_width = 3
+heart.z = 1
+
+shape seed = circle(10, radius: 12, at: (690, 90))
+seed.fill = #7a4a2b
+seed.stroke = #4a2b15
+seed.stroke_width = 2
+seed.z = 2
+
+scene "Breathe" for 5.seconds:
+    main:
+        # open-ended: these run until the scene ends or they are cancelled
+        start flower.vertices.wobble(amount: 2, speed: 0.6)
+        start flower.noise(property: rotation, amount: 5.deg, speed: 1)
+        start flower.fill_to(#ffd1dc) over 5.seconds ease ease_in_out
+        start heart.fade_to(0.55) over 2.5.seconds ease ease_in_out
+        start seed.fall(floor: 420, gravity: 900, bounce: 0.5) over 4.seconds
+        # a spring pop, then settle
+        flower.scale_to(1.15) over 1.second ease spring(2, 5)
+        flower.scale_to(1.0) over 1.second ease ease_in_out
+        wait 3.seconds

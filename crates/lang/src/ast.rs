@@ -79,6 +79,15 @@ pub enum StmtKind {
     },
     Wait(Expr),
     Together(Block),
+    /// `[let name =] start CALL`: begin an action or modifier without waiting for it.
+    Start {
+        name: Option<String>,
+        call: Expr,
+        over: Option<Expr>,
+        ease: Option<Expr>,
+    },
+    Cancel(Expr),
+    Await(Expr),
     /// `target.keyframes over D:` followed by key blocks.
     Keyframes {
         target: Expr,

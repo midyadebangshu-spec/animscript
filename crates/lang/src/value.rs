@@ -98,6 +98,11 @@ impl Rat {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Ease {
+    /// A damped spring: `bounces` overshoots, decaying with `damping`, landing exactly on 1.
+    Spring {
+        bounces: f64,
+        damping: f64,
+    },
     Linear,
     In,
     Out,
@@ -157,6 +162,12 @@ impl Ease {
                     1.0
                 }
             }
+            Ease::Spring { bounces, damping } => {
+                let raw = |q: f64| {
+                    1.0 - (-damping * q).exp() * (std::f64::consts::TAU * bounces * q).cos()
+                };
+                raw(p) / raw(1.0)
+            }
         }
     }
 }
@@ -177,6 +188,157 @@ pub enum PropId {
     ScaleX,
     ScaleY,
     Rot,
+    /// One component (0 r, 1 g, 2 b, 3 a; linear light) of a face's own fill.
+    FillC(u32, u8),
+    /// ... of an edge's own stroke colour.
+    StrokeC(u32, u8),
+    /// ... of the shape's fill, stroke colour and tint.
+    ShapeFillC(u8),
+    ShapeStrokeC(u8),
+    TintC(u8),
+    /// An edge's own stroke width and the shape's.
+    EdgeWidth(u32),
+    ShapeWidth,
+    Opacity,
+}
+
+impl PropId {
+    pub fn is_colour(self) -> bool {
+        matches!(
+            self,
+            PropId::FillC(..)
+                | PropId::StrokeC(..)
+                | PropId::ShapeFillC(_)
+                | PropId::ShapeStrokeC(_)
+                | PropId::TintC(_)
+        )
+    }
+}
+
+// Channels other than vertex ids (which are small): each colour and width has its own.
+pub fn face_fill_channel(id: u32) -> u32 {
+    0x4000_0000 | id
+}
+pub fn edge_stroke_channel(id: u32) -> u32 {
+    0x6000_0000 | id
+}
+pub fn edge_width_channel(id: u32) -> u32 {
+    0x5000_0000 | id
+}
+pub const CH_SHAPE_FILL: u32 = 0x7000_0001;
+pub const CH_SHAPE_STROKE: u32 = 0x7000_0002;
+pub const CH_OPACITY: u32 = 0x7000_0003;
+pub const CH_TINT: u32 = 0x7000_0004;
+pub const CH_SHAPE_WIDTH: u32 = 0x7000_0005;
+
+/// How a scalar moves during an action: eased between `from` and `to`, or along an analytic path.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Motion {
+    Eased,
+    /// Constant acceleration `g` from speed `v0`, optionally bouncing on a floor with restitution.
+    Fall {
+        v0: f64,
+        g: f64,
+        floor: Option<f64>,
+        restitution: f64,
+    },
+    /// Constant speed `v`, reflected between the walls `lo` and `hi`.
+    Reflect {
+        lo: f64,
+        hi: f64,
+        v: f64,
+    },
+}
+
+/// The value of a physics-style motion `t` seconds after it started at `x0` (stateless and exact).
+pub fn motion_value(m: &Motion, x0: f64, t: f64) -> f64 {
+    match *m {
+        Motion::Eased => x0,
+        Motion::Reflect { lo, hi, v } => {
+            let w = hi - lo;
+            if w <= 0.0 {
+                return lo;
+            }
+            let u = (x0.clamp(lo, hi) - lo + v * t).rem_euclid(2.0 * w);
+            lo + if u > w { 2.0 * w - u } else { u }
+        }
+        Motion::Fall {
+            v0,
+            g,
+            floor,
+            restitution,
+        } => {
+            let Some(f) = floor else {
+                return x0 + v0 * t + 0.5 * g * t * t;
+            };
+            let (mut p, mut v, mut left) = (x0, v0, t);
+            if p >= f {
+                p = f;
+                if v > 0.0 {
+                    v *= -restitution;
+                    if v.abs() < 0.5 {
+                        return f;
+                    }
+                }
+            }
+            if g <= 0.0 {
+                return p + v * left;
+            }
+            for _ in 0..200 {
+                let disc = v * v + 2.0 * g * (f - p);
+                let tau = (-v + disc.max(0.0).sqrt()) / g;
+                if left <= tau {
+                    return p + v * left + 0.5 * g * left * left;
+                }
+                left -= tau;
+                let hit = v + g * tau;
+                p = f;
+                v = -restitution * hit;
+                if restitution == 0.0 || v.abs() < 0.5 {
+                    return f;
+                }
+            }
+            f
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModKind {
+    Wobble,
+    Noise,
+}
+
+/// One scalar driven by a procedural modifier.
+#[derive(Clone, Debug)]
+pub struct ModComp {
+    pub prop: PropId,
+    pub amount: f64,
+    /// Cycles per second (wobble) or lattice steps per second (noise).
+    pub speed: f64,
+    /// The seeded stream (spec 6.11); a pure function of it and the time gives the value.
+    pub seed: u64,
+    pub phase: f64,
+}
+
+/// A procedural modifier (layer 2): adds an offset on top of the layers below.
+#[derive(Clone, Debug)]
+pub struct ModReq {
+    pub shape: String,
+    pub label: String,
+    pub kind: ModKind,
+    pub comps: Vec<ModComp>,
+    /// `None` runs until cancelled or the scene ends.
+    pub frames: Option<i64>,
+    pub blend_in: i64,
+    pub blend_out: i64,
+}
+
+/// What a `start` statement launches without blocking.
+#[derive(Clone, Debug)]
+pub enum StartReq {
+    Act(ActionReq),
+    Mod(ModReq),
 }
 
 /// A scalar target: an absolute value or a change relative to the value when the action starts.
@@ -199,6 +361,8 @@ pub struct ActionReq {
     /// Channels occupied for the whole duration (acquired atomically).
     pub channels: Vec<u32>,
     pub comps: Vec<(PropId, Tgt)>,
+    /// Parallel to `comps`, or empty when every component is eased.
+    pub motions: Vec<Motion>,
 }
 
 impl ActionReq {
@@ -226,6 +390,7 @@ impl ActionReq {
             ease,
             channels: items.iter().map(|x| x.0).collect(),
             comps,
+            motions: vec![],
         }
     }
 }
@@ -270,6 +435,12 @@ pub enum Value {
     Fresh(Box<Shape>),
     Pending(Box<ActionReq>),
     Lambda(Rc<LambdaData>),
+    /// A modifier waiting for the statement that called it to run it.
+    Modifier(Box<ModReq>),
+    /// A running action or modifier started with `start`.
+    Handle(u32),
+    /// `rect(x, y, w, h)`.
+    Rect([f64; 4]),
 }
 
 /// A lambda with the variables visible where it was written (captured by value).
@@ -305,6 +476,9 @@ impl Value {
             Value::SceneObj => "Scene",
             Value::Pending(_) => "Action",
             Value::Lambda(_) => "Lambda",
+            Value::Modifier(_) => "Modifier",
+            Value::Handle(_) => "Handle",
+            Value::Rect(_) => "Region",
         }
     }
     pub fn as_f64(&self) -> Option<f64> {

@@ -461,6 +461,10 @@ impl Parser {
                 self.next();
                 let name = self.ident("a name")?;
                 self.expect_op("=")?;
+                if self.at_ident("start") {
+                    self.next();
+                    return self.start_stmt(Some(name), start);
+                }
                 let e = self.expr()?;
                 self.end_stmt()?;
                 return Ok(mk(StmtKind::Let(name, e), self.prev_span()));
@@ -533,6 +537,21 @@ impl Parser {
                 self.next();
                 let body = self.block()?;
                 return Ok(mk(StmtKind::Together(body), start));
+            }
+            "start" => {
+                self.next();
+                return self.start_stmt(None, start);
+            }
+            "cancel" | "await" => {
+                self.next();
+                let e = self.expr()?;
+                self.end_stmt()?;
+                let kind = if kw == "cancel" {
+                    StmtKind::Cancel(e)
+                } else {
+                    StmtKind::Await(e)
+                };
+                return Ok(mk(kind, self.prev_span()));
             }
             "wait" => {
                 self.next();
@@ -626,6 +645,30 @@ impl Parser {
             return Ok(l);
         }
         self.binary(0)
+    }
+
+    /// After `start`: the call, then the optional `over` / `ease` modifiers.
+    fn start_stmt(&mut self, name: Option<String>, start: Span) -> Res<Stmt> {
+        let call = self.expr()?;
+        let (mut over, mut ease) = (None, None);
+        if self.at_ident("over") {
+            self.next();
+            over = Some(self.expr()?);
+        }
+        if self.at_ident("ease") {
+            self.next();
+            ease = Some(self.expr()?);
+        }
+        self.end_stmt()?;
+        Ok(Stmt {
+            kind: StmtKind::Start {
+                name,
+                call,
+                over,
+                ease,
+            },
+            span: start.to(self.prev_span()),
+        })
     }
 
     /// The indented body of `keyframes over D:` or `timeline:`: `at TIME:` blocks and, for `keyframes`,

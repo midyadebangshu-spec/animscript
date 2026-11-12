@@ -168,6 +168,10 @@ pub struct Shape {
     pub rotation: f64,
     /// `None` until frozen: then the bounding-box centre of the vertices.
     pub pivot: Option<P>,
+    /// Multiplies the alpha of every fill and stroke (0 to 1).
+    pub opacity: f64,
+    /// Multiplies the colour of every fill and stroke (white = no change).
+    pub tint: Color,
 }
 
 /// Scale about the pivot, then rotate about the pivot, then translate by `position`.
@@ -385,6 +389,8 @@ impl Shape {
             scale: [1.0, 1.0],
             rotation: 0.0,
             pivot: None,
+            opacity: 1.0,
+            tint: [255, 255, 255, 255],
         }
     }
 

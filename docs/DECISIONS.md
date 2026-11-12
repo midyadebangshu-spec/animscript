@@ -300,3 +300,72 @@ judgement calls I expect you to want to look at.
     `array`, and markers in `timeline:`.
 68. **Golden file.** The snapshot gained fields (transform, per-face and per-edge style), so the flower's hash
     changed. Its geometry digest did not: only the `hash` line of the golden file differs.
+
+## Round 4: colour animation, procedural modifiers, spring and physics-style motion, handles
+
+69. **Colour animation (approved: linear light).** Colours are written and stored as 8-bit sRGB. Animation
+    treats each colour as four scalars (r, g, b, a) in **linear light** (alpha is already linear), as spec 3.1 /
+    7.3 require, blends them through the layer fold, and converts back to 8-bit sRGB rounding half to even
+    (`color.rs`). `to_linear` / `to_srgb8` round-trip every 8-bit value exactly, so an unanimated colour comes
+    out bit-for-bit as written. The linear midpoint of black and white is `#bcbcbc`, not `#808080`. Rest colours
+    stay 8-bit (approved): a finished colour action commits a rounded 8-bit colour.
+70. **What is animatable.** A face's own `fill` (`fill_to`), an edge's own `stroke` (`stroke_to`) and
+    `stroke_width` (`width_to`), the shape's `fill`, `stroke`, `stroke_width`, and two new shape properties
+    (approved): `opacity` (0 to 1, `fade_to`) and `tint` (`tint_to`, default white). Each has its own channel
+    (so two `fill_to` on one face queue, but colour actions run beside vertex moves). A selection
+    (`s.faces.fill_to(...)`) is one action. Without `over`, each is an instant (build time) or staged
+    (runtime) assignment.
+71. **From `none`.** A fill that is not set at all fades in from transparent without a colour shift: the
+    rgb start at the target and only alpha animates from 0. `fill_to(none)` is `E-TYP-001` (use `fade_to`).
+72. **Colour pipeline.** An element's colour is its own (animated or not), else the shape's (animated or not);
+    then `tint` multiplies rgb and alpha and `opacity` multiplies alpha, and the result is converted to hex
+    (`#rrggbb`, or `#rrggbbaa` when not opaque). The snapshot carries the effective colour of every face and
+    edge plus the shape's `opacity` and `tint`. Opacity covers strokes too. Tint and opacity at their
+    defaults multiply by exactly 1.0, so existing output is unchanged.
+73. **Colour keyframes.** `fill`, `stroke`, `stroke_width`, `opacity` and `tint` can be keyed like position.
+    `fill` needs faces and `stroke` / `stroke_width` edges (`E-SHP-005` for the wrong kind, `E-NAM-003` for a
+    vertex); the shape accepts all five. `+=` is not allowed for colours (`E-TYP-001`) but is for
+    `stroke_width` and `opacity`.
+74. **Procedural modifiers are layer 2 (approved: wobble and noise).** `target.wobble(amount, speed = 1,
+    axis = both, sync = false, phase, property, blend_in, blend_out)` and `.noise(...)` add an offset on top of
+    everything below and under keyframes. Wobble is `amount * sin(2 pi (speed * t + phase))` (speed in cycles per
+    second); noise is `amount * value_noise(speed * t)` (speed in lattice steps per second). `t` is seconds since
+    the modifier started. Targets: a vertex or selection (position, in local space, before the shape transform;
+    `axis: x | y | both`), or a shape with `property: position | scale | rotation | opacity` (a uniform scale shares
+    one stream; `rotation` takes an Angle amount). A modifier is active for ticks `[start, start + D)` and then
+    lets go; `blend_in` / `blend_out` fade it. Modifiers on colours are not supported, except `opacity`.
+75. **Independent phases (approved).** Each vertex (and each axis) gets its own seeded phase or noise stream
+    unless `sync: true`, which shares one stream per axis across the selection. `phase:` (in turns) overrides the
+    seeded phase of a wobble.
+76. **Randomness deviates from the spec's PCG32.** Streams are named
+    `"<scene>/<shape>/<target>/<kind>#<n>/<axis>"`, hashed (FNV-1a) with the project seed, and read through
+    *pure, counter-based* functions (SplitMix64 for `hash01`, smoothstep value noise on top), not a sequential
+    generator. So any frame can be computed on its own, and an unrelated modifier, rule or shape never changes the
+    numbers of an existing one (spec test T14; `n` counts calls on the same target and kind, not calls overall).
+    The builtins `noise("name", t)` (in [-1, 1]) and `random("name", index = 0)` (in [0, 1)) read the same
+    streams. **Needs review** if you want literal PCG32.
+77. **Handles (approved).** `let h = start CALL [over D] [ease E]` (or a bare `start CALL`) begins a timed
+    action or a modifier without blocking, `cancel h` stops it and `await h` blocks until it ends. `over`-less
+    modifiers are open-ended and need `start`; as a plain statement an open-ended modifier is `E-TYP-003`.
+    Cancelling an action keeps the last value it sampled (spec 7.6); cancelling a modifier just removes it.
+    Awaiting something already finished or cancelled returns at once; awaiting an open-ended modifier is
+    `E-RUN-006` (new). Started actions use the same channels and queue as any action. `start` works on actions
+    and modifiers, not on `keyframes`. Handles last until the scene ends.
+78. **Spring easing (approved).** `spring(bounces = 3, damping = 5)` is an easing value:
+    `f(p) = (1 - e^(-d p) cos(2 pi n p)) / (1 - e^(-d) cos(2 pi n))`, so it overshoots `n`-ish times,
+    starts at 0 and lands **exactly** on 1. It is stateless (no integration) and needs `damping > 0` and a
+    settling value above 0.2 (`E-TYP-001` otherwise). `ease_out_back(k)` and `cubic_bezier` are still not
+    available as calls.
+79. **Physics-style motion (approved: included).** `fall(floor, gravity = 980, bounce = 0, velocity = (0, 0))`
+    and `bounce_in(rect(x, y, w, h), velocity)` are **layer-1 override actions** (they commit where they end,
+    which a falling object should), not layer-2 modifiers as the spec's wording suggests. Both need `over`. The
+    paths are analytic and stateless: free fall with constant acceleration, bouncing on a floor with a
+    restitution of 0 to 1 (a bounce slower than 0.5 px/s stops it; at most 200 bounces), and constant velocity
+    reflected between four walls (a triangle wave). The floor is in the property's own units: the local y of a
+    vertex, or the `position.y` of a shape (so `shape.fall(floor: 400)` lets the shape drop 400 px). Only fixed
+    floors and walls are supported: **no collisions between bodies**, no rotation, and the speed at the end is not
+    kept. **Needs review** if you expect a real physics engine (the spec defers that to 0.4).
+80. **Constants.** In argument position the names `x`, `y`, `both`, `position`, `scale`, `rotation` and
+    `opacity` stand for themselves (`axis: y`, `property: rotation`) when no variable of that name exists.
+81. **Golden file.** The snapshot gained `opacity` and `tint` (and per-element colours are now computed in
+    linear light), so the flower's hash changed again; its geometry digest did not.

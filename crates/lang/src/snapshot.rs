@@ -1,4 +1,5 @@
 //! FrameSnapshots (spec §14.2) and the snapshot hash (spec §13.3).
+use crate::color::{to_linear, to_srgb8};
 use crate::interp::Interp;
 use animscript_core::*;
 use serde_json::{json, Map, Value as J};
@@ -6,13 +7,7 @@ use std::collections::BTreeMap;
 
 pub const QUANTUM: f64 = 1e-6;
 
-fn hex(c: [u8; 4]) -> String {
-    if c[3] == 255 {
-        format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
-    } else {
-        format!("#{:02x}{:02x}{:02x}{:02x}", c[0], c[1], c[2], c[3])
-    }
-}
+use crate::color::hex;
 fn pt(p: &P) -> J {
     json!([p[0], p[1]])
 }
@@ -22,6 +17,15 @@ fn pt(p: &P) -> J {
 pub struct Resolved {
     pub verts: BTreeMap<String, BTreeMap<u32, P>>,
     pub tf: BTreeMap<String, Transform>,
+    /// Linear-light colours of faces and edges whose own colour is animated.
+    pub fills: BTreeMap<(String, u32), [f64; 4]>,
+    pub strokes: BTreeMap<(String, u32), [f64; 4]>,
+    pub widths: BTreeMap<(String, u32), f64>,
+    pub shape_fill: BTreeMap<String, [f64; 4]>,
+    pub shape_stroke: BTreeMap<String, [f64; 4]>,
+    pub tint: BTreeMap<String, [f64; 4]>,
+    pub shape_width: BTreeMap<String, f64>,
+    pub opacity: BTreeMap<String, f64>,
 }
 
 /// The complete description of one tick. Vertex positions, curve handles and styles are fully resolved
@@ -42,6 +46,18 @@ pub fn build_snapshot(
             let sh = &it.shapes[*n];
             let ov = resolved.verts.get(*n);
             let tf = resolved.tf.get(*n).copied().unwrap_or_else(|| sh.transform());
+            let opacity = resolved.opacity.get(*n).copied().unwrap_or(sh.opacity).clamp(0.0, 1.0);
+            let tint = resolved.tint.get(*n).copied().unwrap_or_else(|| to_linear(sh.tint));
+            // an element's colour: its own (animated or not), else the shape's (animated or not); then tint and opacity
+            let finish = |c: Option<[f64; 4]>| -> J {
+                match c {
+                    None => J::Null,
+                    Some(c) => J::String(hex(to_srgb8([c[0] * tint[0], c[1] * tint[1], c[2] * tint[2], c[3] * tint[3] * opacity]))),
+                }
+            };
+            let shape_fill = resolved.shape_fill.get(*n).copied().or_else(|| sh.fill.map(to_linear));
+            let shape_stroke = resolved.shape_stroke.get(*n).copied().or_else(|| sh.stroke.map(to_linear));
+            let shape_width = resolved.shape_width.get(*n).copied().unwrap_or(sh.stroke_width);
             let w = |p: &P| pt(&tf.apply(*p));
             let vertices: Vec<J> = sh
                 .live_ids(Kind::V)
@@ -64,8 +80,8 @@ pub fn build_snapshot(
                     };
                     json!({
                         "id": i, "a": ed.a, "b": ed.b, "kind": kind,
-                        "stroke": ed.stroke.or(sh.stroke).map(hex),
-                        "stroke_width": ed.width.unwrap_or(sh.stroke_width),
+                        "stroke": finish(resolved.strokes.get(&((*n).clone(), i)).copied().or_else(|| ed.stroke.map(to_linear)).or(shape_stroke)),
+                        "stroke_width": resolved.widths.get(&((*n).clone(), i)).copied().or(ed.width).unwrap_or(shape_width),
                         "pts": pts.iter().map(&w).collect::<Vec<_>>(),
                     })
                 })
@@ -75,12 +91,13 @@ pub fn build_snapshot(
                 .into_iter()
                 .map(|i| {
                     let segs: Vec<J> = sh.face_segments_with(i, ov).iter().map(|s| J::Array(s.iter().map(&w).collect())).collect();
-                    json!({"id": i, "fill": sh.faces[&i].fill.or(sh.fill).map(hex), "segments": segs})
+                    json!({"id": i, "fill": finish(resolved.fills.get(&((*n).clone(), i)).copied().or_else(|| sh.faces[&i].fill.map(to_linear)).or(shape_fill)), "segments": segs})
                 })
                 .collect();
             json!({
                 "id": n, "z": sh.z, "visible": sh.visible,
                 "fill": sh.fill.map(hex), "stroke": sh.stroke.map(hex), "stroke_width": sh.stroke_width,
+                "opacity": opacity, "tint": hex(to_srgb8(tint)),
                 "transform": {"position": pt(&tf.position), "scale": pt(&tf.scale), "rotation": tf.rotation, "pivot": pt(&tf.pivot)},
                 "vertices": vertices, "edges": edges, "faces": faces,
             })

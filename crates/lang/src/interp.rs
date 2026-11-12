@@ -1,5 +1,7 @@
 //! Expression evaluation, statement execution (as resumable tasks) and the shape methods.
 use crate::ast::*;
+use crate::color::to_linear;
+use crate::procedural::{hash01, stream_seed, value_noise};
 use crate::value::*;
 use animscript_core::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -93,6 +95,8 @@ pub enum Staged {
 #[derive(Clone, Debug)]
 pub enum Req {
     Wait(i64),
+    /// Suspend until a started action or modifier ends.
+    Await(u32),
     Act(ActionReq),
     Together(Vec<Block>),
 }
@@ -195,6 +199,14 @@ pub struct Interp {
     pub trace: Vec<String>,
     /// Key sets registered by `keyframes` statements, waiting for the runtime to pick them up.
     pub pending_keysets: Vec<KeySetSpec>,
+    /// `(handle, request)` pairs waiting for the runtime; handle 0 means "no handle" (a blocking modifier).
+    pub pending_starts: Vec<(u32, StartReq)>,
+    pub pending_cancels: Vec<u32>,
+    pub next_handle: u32,
+    /// The project seed and the running scene's name feed the names of random streams.
+    pub seed: i64,
+    pub scene_name: String,
+    pub mod_counts: BTreeMap<String, u32>,
 }
 
 pub const TOPOLOGY_METHODS: &[&str] = &[
@@ -251,6 +263,12 @@ impl Interp {
             trace_on: false,
             trace: vec![],
             pending_keysets: vec![],
+            pending_starts: vec![],
+            pending_cancels: vec![],
+            next_handle: 0,
+            seed: 0,
+            scene_name: String::new(),
+            mod_counts: BTreeMap::new(),
             program: Program::default(),
         };
         if let Some(p) = &program.project {
@@ -261,6 +279,7 @@ impl Interp {
             }
             it.fps = Rat::new(p.fps.0 as i128, p.fps.1 as i128);
             it.canvas = p.canvas;
+            it.seed = p.seed;
             it.background = p.background;
         }
         for e in &program.entities {
@@ -463,6 +482,14 @@ impl Interp {
                 };
                 match v {
                     Value::Pending(req) => return Ok(Some(Req::Act(*req))),
+                    Value::Modifier(m) => {
+                        let Some(frames) = m.frames else {
+                            return Err(Diagnostic::new("E-TYP-003", "an open-ended modifier needs `over` or `start`")
+                                .help("write `... over 2.seconds`, or `let h = start ...` and later `cancel h`"));
+                        };
+                        self.pending_starts.push((0, StartReq::Mod(*m)));
+                        return Ok(Some(Req::Wait(frames)));
+                    }
                     Value::Fresh(_) => {
                         return Err(type_err(
                             "a new shape must be declared with `shape name = ...`",
@@ -521,6 +548,62 @@ impl Interp {
                 let n = self.frames_of(&v, e.span)?;
                 return Ok(Some(Req::Wait(n)));
             }
+            StmtKind::Start {
+                name,
+                call,
+                over,
+                ease,
+            } => {
+                let mut extra = vec![];
+                if let Some(o) = over {
+                    extra.push((Some("over".to_string()), self.eval(o, &t.vars, mode)?));
+                }
+                if let Some(o) = ease {
+                    extra.push((Some("ease".to_string()), self.eval(o, &t.vars, mode)?));
+                }
+                let ExprKind::Call(f, args) = &call.kind else {
+                    return Err(Diagnostic::new("E-SYN-001", "`start` needs a call")
+                        .at(call.span)
+                        .help("for example `start s.rotate_by(90.deg) over 1.second`"));
+                };
+                let req =
+                    match self.eval_call(call, f, args, extra, &t.vars, mode)? {
+                        Value::Pending(a) => StartReq::Act(*a),
+                        Value::Modifier(m) => StartReq::Mod(*m),
+                        other => return Err(type_err(format!(
+                            "`start` needs a timed action or a modifier, found {}",
+                            other.type_name()
+                        ))
+                        .at(call.span)
+                        .help(
+                            "give an action `over` a duration, or use a modifier such as `wobble`",
+                        )),
+                    };
+                self.next_handle += 1;
+                let h = self.next_handle;
+                self.pending_starts.push((h, req));
+                if let Some(n) = name {
+                    t.vars.define(n, Value::Handle(h));
+                }
+            }
+            StmtKind::Cancel(e) => match self.eval(e, &t.vars, mode)? {
+                Value::Handle(h) => self.pending_cancels.push(h),
+                other => {
+                    return Err(type_err(format!(
+                        "`cancel` needs a handle from `start`, found {}",
+                        other.type_name()
+                    )))
+                }
+            },
+            StmtKind::Await(e) => match self.eval(e, &t.vars, mode)? {
+                Value::Handle(h) => return Ok(Some(Req::Await(h))),
+                other => {
+                    return Err(type_err(format!(
+                        "`await` needs a handle from `start`, found {}",
+                        other.type_name()
+                    )))
+                }
+            },
             StmtKind::Keyframes {
                 target,
                 over,
@@ -680,6 +763,8 @@ impl Interp {
             ("stroke_width", v) if v.as_f64().is_some() => sh.stroke_width = v.as_f64().unwrap(),
             ("z", Value::Int(i)) => sh.z = *i,
             ("visible", Value::Bool(b)) => sh.visible = *b,
+            ("opacity", v) if v.as_f64().is_some() => sh.opacity = v.as_f64().unwrap().clamp(0.0, 1.0),
+            ("tint", Value::Color(c)) => sh.tint = *c,
             ("position", Value::Tuple(t)) if t.len() == 2 && t.iter().all(|x| x.as_f64().is_some()) => {
                 sh.position = [t[0].as_f64().unwrap(), t[1].as_f64().unwrap()]
             }
@@ -719,12 +804,14 @@ impl Interp {
                         | "scale"
                         | "rotation"
                         | "pivot"
+                        | "opacity"
+                        | "tint"
                 ) {
                     return Err(Diagnostic::new(
                         "E-NAM-003",
                         format!("cannot assign to `{sn}.{attr}`"),
                     )
-                    .help("assignable members: fill, stroke, stroke_width, z, visible, position, scale, rotation, pivot"));
+                    .help("assignable members: fill, stroke, stroke_width, z, visible, position, scale, rotation, pivot, opacity, tint"));
                 }
                 self.check_style_value(attr, &v)?;
                 self.apply_or_stage(
@@ -777,6 +864,9 @@ impl Interp {
             ("pivot", Value::None) => Ok(()),
             ("scale", v) if v.as_f64().is_some() || pair(v) => Ok(()),
             ("rotation", Value::Angle(_)) => Ok(()),
+            ("opacity", v) if v.as_f64().is_some_and(|o| (0.0..=1.0).contains(&o)) => Ok(()),
+            ("opacity", Value::Int(_) | Value::Num(_)) => Err(type_err("`opacity` must be between 0 and 1").help("0 is invisible, 1 is solid")),
+            ("tint", Value::Color(_)) => Ok(()),
             ("rotation", Value::Int(_) | Value::Num(_)) => Err(Diagnostic::new("E-TYP-002", "`rotation` needs an Angle, found a bare number")
                 .help("a bare number has no unit; write `90.degrees`")),
             ("scale" | "position" | "pivot", Value::Tuple(t)) if t.iter().any(|x| matches!(x, Value::Dur(_) | Value::Frames(_) | Value::Angle(_))) => {
@@ -1152,6 +1242,13 @@ impl Interp {
         if n == "none" {
             return Ok(Value::None);
         }
+        // names that stand for themselves in arguments such as `axis: y` or `property: rotation`
+        if matches!(
+            n,
+            "x" | "y" | "both" | "position" | "scale" | "rotation" | "opacity"
+        ) {
+            return Ok(Value::Str(n.to_string()));
+        }
         let mut d = Diagnostic::new("E-NAM-001", format!("unknown name `{n}`"));
         if !self.shape_order.is_empty() {
             d = d.help(format!("shapes in scope: {}", self.shape_order.join(", ")));
@@ -1191,6 +1288,8 @@ impl Interp {
                     "position" => Value::Tuple(vec![Value::Num(sh.position[0]), Value::Num(sh.position[1])]),
                     "scale" => Value::Tuple(vec![Value::Num(sh.scale[0]), Value::Num(sh.scale[1])]),
                     "rotation" => Value::Angle(sh.rotation),
+                    "opacity" => Value::Num(sh.opacity),
+                    "tint" => Value::Color(sh.tint),
                     "pivot" => {
                         let p = sh.transform().pivot;
                         Value::Tuple(vec![Value::Num(p[0]), Value::Num(p[1])])
@@ -1626,6 +1725,38 @@ impl Interp {
                 let n = self.frames_of(&m["d"].clone(), Span::new(1, 1, 1))?;
                 Ok(Value::Int(n))
             }
+            "spring" => {
+                let m = self.bind(name, args, &["bounces", "damping"], &[])?;
+                let bounces = m.get("bounces").map(|v| self.num(v, "`bounces`")).unwrap_or(Ok(3.0))?;
+                let damping = m.get("damping").map(|v| self.num(v, "`damping`")).unwrap_or(Ok(5.0))?;
+                let end = 1.0 - (-damping).exp() * (std::f64::consts::TAU * bounces).cos();
+                if !(damping > 0.0 && bounces >= 0.0 && end > 0.2) {
+                    return Err(type_err("a spring needs damping above 0, bounces of 0 or more, and a settling value that is not too small")
+                        .help("try `spring(3, 5)`: three bounces, damping 5"));
+                }
+                Ok(Value::Ease(Ease::Spring { bounces, damping }))
+            }
+            "rect" => {
+                let m = self.bind(name, args, &["x", "y", "w", "h"], &["x", "y", "w", "h"])?;
+                let n = |k: &str| self.num(&m[k], "a rectangle value");
+                let (x, y, w, h) = (n("x")?, n("y")?, n("w")?, n("h")?);
+                if !(w > 0.0 && h > 0.0) {
+                    return Err(type_err("a rectangle needs a positive width and height"));
+                }
+                Ok(Value::Rect([x, y, w, h]))
+            }
+            "noise" => {
+                let m = self.bind(name, args, &["seed_name", "t"], &["seed_name", "t"])?;
+                let Value::Str(s) = &m["seed_name"] else { return Err(type_err("`noise` needs the stream name as a string")) };
+                let t = self.num(&m["t"], "`t`")?;
+                Ok(Value::Num(value_noise(stream_seed(self.seed, s), t)))
+            }
+            "random" => {
+                let m = self.bind(name, args, &["seed_name", "index"], &["seed_name"])?;
+                let Value::Str(s) = &m["seed_name"] else { return Err(type_err("`random` needs the stream name as a string")) };
+                let i = m.get("index").map(|v| self.int(v, "`index`")).unwrap_or(Ok(0))?;
+                Ok(Value::Num(hash01(stream_seed(self.seed, s), i)))
+            }
             "len" => {
                 let m = self.bind(name, args, &["of"], &["of"])?;
                 match &m["of"] {
@@ -1680,6 +1811,14 @@ impl Interp {
     ) -> Res<Value> {
         if TOPOLOGY_METHODS.contains(&name) {
             self.guard_topology(mode, name)?;
+        }
+        match name {
+            "wobble" | "noise" => return self.modifier_method(obj, name, args, span, mode),
+            "fall" | "bounce_in" => return self.physics_method(obj, name, args, span, mode),
+            "fill_to" | "stroke_to" | "width_to" | "fade_to" | "tint_to" => {
+                return self.colour_method(obj, name, args, span, mode)
+            }
+            _ => {}
         }
         match obj {
             Value::Shape(sn) => self.shape_method(&sn, name, args, span, mode),
@@ -2247,14 +2386,23 @@ pub fn set_transform_prop(sh: &mut Shape, prop: PropId, v: f64, by: bool) {
         PropId::ScaleX => Some(&mut sh.scale[0]),
         PropId::ScaleY => Some(&mut sh.scale[1]),
         PropId::Rot => Some(&mut sh.rotation),
-        PropId::Vx(_) | PropId::Vy(_) => None,
+        _ => None,
     };
     if let Some(s) = slot {
         *s = if by { *s + v } else { v };
     }
 }
 
-const PROP_ROOTS: &[&str] = &["position", "scale", "rotation"];
+const PROP_ROOTS: &[&str] = &[
+    "position",
+    "scale",
+    "rotation",
+    "fill",
+    "stroke",
+    "stroke_width",
+    "opacity",
+    "tint",
+];
 
 fn root_name_of(e: &Expr) -> Option<&str> {
     match &e.kind {
@@ -2289,6 +2437,7 @@ impl Interp {
                 ease,
                 channels: vec![BODY],
                 comps,
+                motions: vec![],
             }))),
             None => {
                 for (prop, t) in comps {
@@ -2314,7 +2463,21 @@ impl Interp {
     /// Split `target.position.y` into the target expression and the property path `["position", "y"]`.
     /// A bare `position.y` (inside a `keyframes` block) has no target.
     fn split_prop_path<'a>(&self, e: &'a Expr) -> Res<(Option<&'a Expr>, Vec<String>)> {
-        let is_prop = |n: &str| matches!(n, "position" | "scale" | "rotation" | "x" | "y");
+        let is_prop = |n: &str| {
+            matches!(
+                n,
+                "position"
+                    | "scale"
+                    | "rotation"
+                    | "fill"
+                    | "stroke"
+                    | "stroke_width"
+                    | "opacity"
+                    | "tint"
+                    | "x"
+                    | "y"
+            )
+        };
         let mut names: Vec<String> = vec![];
         let mut cur = e;
         while let ExprKind::Member(o, n) = &cur.kind {
@@ -2348,6 +2511,11 @@ impl Interp {
                 | ["scale"]
                 | ["position", "x" | "y"]
                 | ["scale", "x" | "y"]
+                | ["fill"]
+                | ["stroke"]
+                | ["stroke_width"]
+                | ["opacity"]
+                | ["tint"]
         );
         if !valid {
             let shown = if names.is_empty() {
@@ -2357,7 +2525,7 @@ impl Interp {
             };
             return Err(Diagnostic::new("E-NAM-003", format!("`{shown}` is not an animatable property"))
                 .at(e.span)
-                .help("properties: position, position.x, position.y, scale, scale.x, scale.y, rotation (vertices have position only)"));
+                .help("properties: position, position.x, position.y, scale, scale.x, scale.y, rotation (vertices have position only); colours: fill, stroke, tint; also stroke_width and opacity"));
         }
         Ok((target, names))
     }
@@ -2414,6 +2582,23 @@ impl Interp {
                         },
                         self.num(val, "a scale")?,
                     )],
+                    ("fill" | "stroke" | "tint", None) => {
+                        let c = self.colour_arg(val, &format!("`{p0}`"))?;
+                        (0..4)
+                            .map(|i| {
+                                let id = match p0 {
+                                    "fill" => PropId::ShapeFillC(i as u8),
+                                    "stroke" => PropId::ShapeStrokeC(i as u8),
+                                    _ => PropId::TintC(i as u8),
+                                };
+                                s(id, c[i])
+                            })
+                            .collect()
+                    }
+                    ("stroke_width", None) => {
+                        vec![s(PropId::ShapeWidth, self.num(val, "a width")?)]
+                    }
+                    ("opacity", None) => vec![s(PropId::Opacity, self.num(val, "`opacity`")?)],
                     _ => vec![s(PropId::Rot, self.angle(val, "`rotation`")?)],
                 })
             }
@@ -2429,6 +2614,45 @@ impl Interp {
                         .collect::<Res<_>>()?,
                     _ => unreachable!(),
                 };
+                if matches!(p0, "fill" | "stroke" | "stroke_width") {
+                    let needed = if p0 == "fill" { Kind::F } else { Kind::E };
+                    let mut out = vec![];
+                    let mut seen: BTreeSet<(String, ElemRef)> = BTreeSet::new();
+                    for (sn, r) in &refs {
+                        if r.kind == Kind::V {
+                            return Err(Diagnostic::new(
+                                "E-NAM-003",
+                                format!("a vertex has no `{p0}`"),
+                            )
+                            .at(span)
+                            .help(
+                                "colour faces with `fill` and edges with `stroke` / `stroke_width`",
+                            ));
+                        }
+                        self.shapes[sn].require_live(*r, Some(needed), "keyframes")?;
+                        if !seen.insert((sn.clone(), *r)) {
+                            continue;
+                        }
+                        match p0 {
+                            "fill" => {
+                                for (i, c) in self.colour_arg(val, "`fill`")?.iter().enumerate() {
+                                    out.push((sn.clone(), PropId::FillC(r.id, i as u8), *c));
+                                }
+                            }
+                            "stroke" => {
+                                for (i, c) in self.colour_arg(val, "`stroke`")?.iter().enumerate() {
+                                    out.push((sn.clone(), PropId::StrokeC(r.id, i as u8), *c));
+                                }
+                            }
+                            _ => out.push((
+                                sn.clone(),
+                                PropId::EdgeWidth(r.id),
+                                self.num(val, "a width")?,
+                            )),
+                        }
+                    }
+                    return Ok(out);
+                }
                 if p0 != "position" {
                     return Err(Diagnostic::new("E-NAM-003", format!("a vertex has no `{p0}`"))
                         .at(span)
@@ -2525,10 +2749,15 @@ impl Interp {
                         }
                     },
                 };
-                for (shape, prop, x) in self
+                let comps = self
                     .key_scalars(&tv, &path, &val, a.span)
-                    .map_err(|d| d.or_at(a.span))?
-                {
+                    .map_err(|d| d.or_at(a.span))?;
+                if a.add && comps.iter().any(|c| c.1.is_colour()) {
+                    return Err(type_err("colours cannot be offset with `+=`")
+                        .at(a.span)
+                        .help("use `=` with a colour, e.g. `at 1.s: fill = #ff0000`"));
+                }
+                for (shape, prop, x) in comps {
                     match groups.get_mut(&(shape.clone(), prop)) {
                         Some((add, list)) => {
                             if *add != a.add {
@@ -2575,5 +2804,640 @@ impl Interp {
                 }
             })
             .collect())
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Colour actions, procedural modifiers, physics-style actions
+// ---------------------------------------------------------------------------------------------
+
+type Bound = HashMap<&'static str, Value>;
+
+impl Interp {
+    /// A colour argument as linear-light RGBA.
+    fn colour_arg(&self, v: &Value, what: &str) -> Res<[f64; 4]> {
+        match v {
+            Value::Color(c) => Ok(to_linear(*c)),
+            Value::None => Err(type_err(format!("{what} needs a colour, not `none`"))
+                .help("to fade something out animate `opacity` with `fade_to(0)`")),
+            o => Err(type_err(format!(
+                "{what} must be a colour like #f0a, found {}",
+                o.type_name()
+            ))),
+        }
+    }
+
+    /// A timed action when `over` is given, otherwise the instant effect (applied now or staged).
+    #[allow(clippy::too_many_arguments)]
+    fn style_action(
+        &mut self,
+        sn: &str,
+        label: &str,
+        comps: Vec<(PropId, Tgt)>,
+        channels: Vec<u32>,
+        m: &Bound,
+        mode: Mode,
+        span: Span,
+        instant: Vec<Staged>,
+    ) -> Res<Value> {
+        match self.over_frames(m, mode, span)? {
+            Some((frames, ease)) => Ok(Value::Pending(Box::new(ActionReq {
+                shape: sn.to_string(),
+                label: format!("{sn}.{label}"),
+                frames,
+                ease,
+                channels,
+                comps,
+                motions: vec![],
+            }))),
+            None => {
+                for s in instant {
+                    self.apply_or_stage(s, mode)?;
+                }
+                Ok(Value::None)
+            }
+        }
+    }
+
+    fn colour_method(
+        &mut self,
+        obj: Value,
+        name: &str,
+        args: Vec<(Option<String>, Value)>,
+        span: Span,
+        mode: Mode,
+    ) -> Res<Value> {
+        match obj {
+            Value::Shape(sn) => self.shape_colour(&sn, name, args, span, mode),
+            Value::Elem(sn, r) => self.group_colour(&[Value::Elem(sn, r)], name, args, span, mode),
+            Value::List(items) => self.group_colour(&items, name, args, span, mode),
+            other => Err(Diagnostic::new(
+                "E-NAM-003",
+                format!("a {} has no operation `{name}`", other.type_name()),
+            )),
+        }
+    }
+
+    fn shape_colour(
+        &mut self,
+        sn: &str,
+        name: &str,
+        args: Vec<(Option<String>, Value)>,
+        span: Span,
+        mode: Mode,
+    ) -> Res<Value> {
+        let shape = sn.to_string();
+        match name {
+            "fill_to" | "stroke_to" | "tint_to" => {
+                let m = self.bind(name, args, &["color", "over", "ease"], &["color"])?;
+                let c = self.colour_arg(&m["color"], "the colour")?;
+                let (ctor, chan, prop): (fn(u8) -> PropId, u32, &str) = match name {
+                    "fill_to" => (PropId::ShapeFillC, CH_SHAPE_FILL, "fill"),
+                    "stroke_to" => (PropId::ShapeStrokeC, CH_SHAPE_STROKE, "stroke"),
+                    _ => (PropId::TintC, CH_TINT, "tint"),
+                };
+                let comps = (0..4).map(|i| (ctor(i as u8), Tgt::To(c[i]))).collect();
+                let instant = vec![Staged::Style {
+                    shape: shape.clone(),
+                    prop: prop.to_string(),
+                    value: m["color"].clone(),
+                }];
+                self.style_action(sn, name, comps, vec![chan], &m, mode, span, instant)
+            }
+            "width_to" => {
+                let m = self.bind(name, args, &["width", "over", "ease"], &["width"])?;
+                let w = self.num(&m["width"], "`width`")?;
+                let instant = vec![Staged::Style {
+                    shape: shape.clone(),
+                    prop: "stroke_width".into(),
+                    value: Value::Num(w),
+                }];
+                self.style_action(
+                    sn,
+                    name,
+                    vec![(PropId::ShapeWidth, Tgt::To(w))],
+                    vec![CH_SHAPE_WIDTH],
+                    &m,
+                    mode,
+                    span,
+                    instant,
+                )
+            }
+            "fade_to" => {
+                let m = self.bind(name, args, &["opacity", "over", "ease"], &["opacity"])?;
+                let o = self.num(&m["opacity"], "`opacity`")?;
+                if !(0.0..=1.0).contains(&o) {
+                    return Err(type_err("`opacity` must be between 0 and 1")
+                        .help("0 is invisible, 1 is solid"));
+                }
+                let instant = vec![Staged::Style {
+                    shape: shape.clone(),
+                    prop: "opacity".into(),
+                    value: Value::Num(o),
+                }];
+                self.style_action(
+                    sn,
+                    name,
+                    vec![(PropId::Opacity, Tgt::To(o))],
+                    vec![CH_OPACITY],
+                    &m,
+                    mode,
+                    span,
+                    instant,
+                )
+            }
+            _ => Err(Diagnostic::new(
+                "E-NAM-003",
+                format!("shape `{sn}` has no operation `{name}`"),
+            )),
+        }
+    }
+
+    /// `fill_to` on faces, `stroke_to` / `width_to` on edges: one element or a whole selection as one action.
+    fn group_colour(
+        &mut self,
+        items: &[Value],
+        name: &str,
+        args: Vec<(Option<String>, Value)>,
+        span: Span,
+        mode: Mode,
+    ) -> Res<Value> {
+        let needed = match name {
+            "fill_to" => Kind::F,
+            "stroke_to" | "width_to" => Kind::E,
+            _ => {
+                return Err(Diagnostic::new(
+                    "E-NAM-003",
+                    format!("`{name}` works on a shape, not on its elements"),
+                )
+                .help("elements take `fill_to` (faces), `stroke_to` and `width_to` (edges)"))
+            }
+        };
+        let m = if name == "width_to" {
+            self.bind(name, args, &["width", "over", "ease"], &["width"])?
+        } else {
+            self.bind(name, args, &["color", "over", "ease"], &["color"])?
+        };
+        let col = if name == "width_to" {
+            None
+        } else {
+            Some(self.colour_arg(&m["color"], "the colour")?)
+        };
+        let w = if name == "width_to" {
+            Some(self.num(&m["width"], "`width`")?)
+        } else {
+            None
+        };
+        let mut sn: Option<String> = None;
+        let (mut comps, mut channels, mut instant) = (vec![], vec![], vec![]);
+        for item in items {
+            let Value::Elem(s, r) = item else {
+                return Err(type_err(format!(
+                    "`{name}` applies to a list of faces or edges, found a {} in the list",
+                    item.type_name()
+                )));
+            };
+            if sn.as_ref().is_some_and(|x| x != s) {
+                return Err(type_err(
+                    "a selection coloured together must come from one shape",
+                ));
+            }
+            self.shapes[s].require_live(*r, Some(needed), name)?;
+            sn = Some(s.clone());
+            match (name, col, w) {
+                ("fill_to", Some(c), _) => {
+                    comps.extend((0..4).map(|i| (PropId::FillC(r.id, i as u8), Tgt::To(c[i]))));
+                    channels.push(face_fill_channel(r.id));
+                    instant.push(Staged::ElemStyle {
+                        shape: s.clone(),
+                        r: *r,
+                        prop: "fill".into(),
+                        value: m["color"].clone(),
+                    });
+                }
+                ("stroke_to", Some(c), _) => {
+                    comps.extend((0..4).map(|i| (PropId::StrokeC(r.id, i as u8), Tgt::To(c[i]))));
+                    channels.push(edge_stroke_channel(r.id));
+                    instant.push(Staged::ElemStyle {
+                        shape: s.clone(),
+                        r: *r,
+                        prop: "stroke".into(),
+                        value: m["color"].clone(),
+                    });
+                }
+                (_, _, Some(w)) => {
+                    comps.push((PropId::EdgeWidth(r.id), Tgt::To(w)));
+                    channels.push(edge_width_channel(r.id));
+                    instant.push(Staged::ElemStyle {
+                        shape: s.clone(),
+                        r: *r,
+                        prop: "stroke_width".into(),
+                        value: Value::Num(w),
+                    });
+                }
+                _ => {}
+            }
+        }
+        let Some(sn) = sn else { return Ok(Value::None) };
+        let label = if items.len() == 1 {
+            self.shapes[&sn].label(match &items[0] {
+                Value::Elem(_, r) => *r,
+                _ => unreachable!(),
+            }) + "."
+                + name
+        } else {
+            format!("{sn}.{name} ({} elements)", items.len())
+        };
+        match self.over_frames(&m, mode, span)? {
+            Some((frames, ease)) => Ok(Value::Pending(Box::new(ActionReq {
+                shape: sn,
+                label,
+                frames,
+                ease,
+                channels,
+                comps,
+                motions: vec![],
+            }))),
+            None => {
+                for s in instant {
+                    self.apply_or_stage(s, mode)?;
+                }
+                Ok(Value::None)
+            }
+        }
+    }
+
+    /// The vertices a modifier or physics action drives: every vertex of the element(s), once each.
+    fn target_vertices(&self, obj: &Value, what: &str) -> Res<Option<(String, Vec<u32>)>> {
+        let refs: Vec<(String, ElemRef)> = match obj {
+            Value::Elem(s, r) => vec![(s.clone(), *r)],
+            Value::List(items) => items
+                .iter()
+                .map(|i| match i {
+                    Value::Elem(s, r) => Ok((s.clone(), *r)),
+                    o => Err(type_err(format!(
+                        "`{what}` applies to elements, found a {} in the list",
+                        o.type_name()
+                    ))),
+                })
+                .collect::<Res<_>>()?,
+            _ => return Ok(None),
+        };
+        let mut shape: Option<String> = None;
+        let mut ids: BTreeSet<u32> = BTreeSet::new();
+        for (s, r) in &refs {
+            if shape.as_ref().is_some_and(|x| x != s) {
+                return Err(type_err(format!(
+                    "a selection given to `{what}` must come from one shape"
+                )));
+            }
+            self.shapes[s].require_live(*r, None, what)?;
+            ids.extend(self.shapes[s].element_vertices(*r));
+            shape = Some(s.clone());
+        }
+        Ok(shape.map(|s| (s, ids.into_iter().collect())))
+    }
+
+    /// The next stream seed for a base name: calls on the same target and kind are numbered, so
+    /// unrelated modifiers elsewhere never change this one's numbers.
+    fn mod_seed(&mut self, base: &str) -> u64 {
+        let n = self.mod_counts.entry(base.to_string()).or_insert(0);
+        let k = *n;
+        *n += 1;
+        stream_seed(self.seed, &format!("{base}#{k}"))
+    }
+
+    fn axis_arg(&self, m: &Bound) -> Res<&'static str> {
+        match m.get("axis") {
+            None => Ok("both"),
+            Some(Value::Str(s)) => match s.as_str() {
+                "x" => Ok("x"),
+                "y" => Ok("y"),
+                "both" => Ok("both"),
+                o => Err(type_err(format!(
+                    "`axis` must be x, y or both, found \"{o}\""
+                ))),
+            },
+            Some(o) => Err(type_err(format!(
+                "`axis` must be x, y or both, found {}",
+                o.type_name()
+            ))),
+        }
+    }
+
+    fn modifier_method(
+        &mut self,
+        obj: Value,
+        name: &str,
+        args: Vec<(Option<String>, Value)>,
+        span: Span,
+        mode: Mode,
+    ) -> Res<Value> {
+        let kind = if name == "wobble" {
+            ModKind::Wobble
+        } else {
+            ModKind::Noise
+        };
+        let m = self.bind(
+            name,
+            args,
+            &[
+                "amount",
+                "speed",
+                "axis",
+                "sync",
+                "phase",
+                "property",
+                "blend_in",
+                "blend_out",
+                "over",
+            ],
+            &["amount"],
+        )?;
+        if mode != Mode::Run {
+            return Err(
+                Diagnostic::new("E-SHP-005", format!("`{name}` needs a running scene"))
+                    .help("use it in `main:` or a rule; modifiers add motion over time"),
+            );
+        }
+        let speed = m
+            .get("speed")
+            .map(|v| self.num(v, "`speed`"))
+            .unwrap_or(Ok(1.0))?;
+        let sync = match m.get("sync") {
+            None => false,
+            Some(Value::Bool(b)) => *b,
+            Some(o) => {
+                return Err(type_err(format!(
+                    "`sync` must be true or false, found {}",
+                    o.type_name()
+                )))
+            }
+        };
+        let explicit_phase = m.get("phase").map(|v| self.num(v, "`phase`")).transpose()?;
+        let frames = match m.get("over") {
+            Some(v) => Some(self.frames_of(&v.clone(), span)?),
+            None => None,
+        };
+        let blend = |me: &mut Interp, k: &str| -> Res<i64> {
+            match m.get(k) {
+                Some(v) => me.frames_of(&v.clone(), span),
+                None => Ok(0),
+            }
+        };
+        let (blend_in, blend_out) = (blend(self, "blend_in")?, blend(self, "blend_out")?);
+        let mut comps: Vec<ModComp> = vec![];
+        let scene = self.scene_name.clone();
+        let shape_name;
+        if let Some((sn, vids)) = self.target_vertices(&obj, name)? {
+            if m.contains_key("property") {
+                return Err(type_err("`property:` is for shapes")
+                    .help("a vertex always animates its position; pick `axis: x`, `y` or `both`"));
+            }
+            let amount = self.num(&m["amount"], "`amount`")?;
+            let axis = self.axis_arg(&m)?;
+            let axes: Vec<&str> = if axis == "both" {
+                vec!["x", "y"]
+            } else {
+                vec![axis]
+            };
+            shape_name = sn.clone();
+            let sync_seeds: BTreeMap<&str, u64> = if sync {
+                axes.iter()
+                    .map(|a| (*a, self.mod_seed(&format!("{scene}/{sn}/sync/{a}/{name}"))))
+                    .collect()
+            } else {
+                BTreeMap::new()
+            };
+            for vid in vids {
+                for a in &axes {
+                    let seed = if sync {
+                        sync_seeds[a]
+                    } else {
+                        self.mod_seed(&format!("{scene}/{sn}/v{vid}/{a}/{name}"))
+                    };
+                    let prop = if *a == "x" {
+                        PropId::Vx(vid)
+                    } else {
+                        PropId::Vy(vid)
+                    };
+                    comps.push(ModComp {
+                        prop,
+                        amount,
+                        speed,
+                        seed,
+                        phase: explicit_phase.unwrap_or_else(|| hash01(seed, 0)),
+                    });
+                }
+            }
+        } else if let Value::Shape(sn) = &obj {
+            shape_name = sn.clone();
+            let prop = match m.get("property") {
+                Some(Value::Str(p))
+                    if matches!(p.as_str(), "position" | "scale" | "rotation" | "opacity") =>
+                {
+                    p.clone()
+                }
+                Some(o) => {
+                    return Err(type_err(format!(
+                        "`property` must be position, scale, rotation or opacity, found {}",
+                        match o {
+                            Value::Str(s) => format!("\"{s}\""),
+                            o => o.type_name().to_string(),
+                        }
+                    )))
+                }
+                None => {
+                    return Err(
+                        Diagnostic::new("E-TYP-003", "a shape modifier needs `property:`").help(
+                            "for example `property: rotation`, `scale`, `position` or `opacity`",
+                        ),
+                    )
+                }
+            };
+            let amount = if prop == "rotation" {
+                self.angle(&m["amount"], "`amount`")?
+            } else {
+                self.num(&m["amount"], "`amount`")?
+            };
+            let mk = |me: &mut Interp, id: PropId, label: &str| {
+                let seed = me.mod_seed(&format!("{scene}/{sn}/{label}/{name}"));
+                ModComp {
+                    prop: id,
+                    amount,
+                    speed,
+                    seed,
+                    phase: explicit_phase.unwrap_or_else(|| hash01(seed, 0)),
+                }
+            };
+            match prop.as_str() {
+                "position" => {
+                    let axis = self.axis_arg(&m)?;
+                    for a in if axis == "both" {
+                        vec!["x", "y"]
+                    } else {
+                        vec![axis]
+                    } {
+                        let c = mk(
+                            self,
+                            if a == "x" { PropId::PosX } else { PropId::PosY },
+                            &format!("position/{a}"),
+                        );
+                        comps.push(c);
+                    }
+                }
+                "scale" => {
+                    // a uniform scale: both components share one stream
+                    let c = mk(self, PropId::ScaleX, "scale");
+                    comps.push(ModComp {
+                        prop: PropId::ScaleY,
+                        ..c.clone()
+                    });
+                    comps.push(c);
+                }
+                "rotation" => {
+                    let c = mk(self, PropId::Rot, "rotation");
+                    comps.push(c);
+                }
+                _ => {
+                    let c = mk(self, PropId::Opacity, "opacity");
+                    comps.push(c);
+                }
+            }
+        } else {
+            return Err(Diagnostic::new(
+                "E-NAM-003",
+                format!("a {} has no operation `{name}`", obj.type_name()),
+            ));
+        }
+        Ok(Value::Modifier(Box::new(ModReq {
+            label: format!("{shape_name}.{name}"),
+            shape: shape_name,
+            kind,
+            comps,
+            frames,
+            blend_in,
+            blend_out,
+        })))
+    }
+
+    fn physics_method(
+        &mut self,
+        obj: Value,
+        name: &str,
+        args: Vec<(Option<String>, Value)>,
+        span: Span,
+        mode: Mode,
+    ) -> Res<Value> {
+        let m = if name == "fall" {
+            self.bind(
+                name,
+                args,
+                &["floor", "gravity", "bounce", "velocity", "over", "ease"],
+                &[],
+            )?
+        } else {
+            self.bind(
+                name,
+                args,
+                &["region", "velocity", "over", "ease"],
+                &["region"],
+            )?
+        };
+        let Some((frames, ease)) = self.over_frames(&m, mode, span)? else {
+            return Err(
+                Diagnostic::new("E-TYP-003", format!("`{name}` needs `over`"))
+                    .help("it runs for a while: `... over 2.seconds`"),
+            );
+        };
+        let vel = match m.get("velocity") {
+            None => [0.0, 0.0],
+            Some(v) => self.point(v, "`velocity`")?,
+        };
+        let (floor, gravity, bounce) = if name == "fall" {
+            let floor = m.get("floor").map(|v| self.num(v, "`floor`")).transpose()?;
+            let g = m
+                .get("gravity")
+                .map(|v| self.num(v, "`gravity`"))
+                .unwrap_or(Ok(980.0))?;
+            let b = m
+                .get("bounce")
+                .map(|v| self.num(v, "`bounce`"))
+                .unwrap_or(Ok(0.0))?;
+            if !(0.0..=1.0).contains(&b) {
+                return Err(type_err("`bounce` must be between 0 (no bounce) and 1")
+                    .help("0.5 loses half the speed at every bounce"));
+            }
+            (floor, g, b)
+        } else {
+            (None, 0.0, 0.0)
+        };
+        let region = if name == "bounce_in" {
+            match &m["region"] {
+                Value::Rect(r) => Some(*r),
+                o => {
+                    return Err(type_err(format!(
+                        "`region` must be a rectangle such as `rect(x, y, w, h)`, found {}",
+                        o.type_name()
+                    )))
+                }
+            }
+        } else {
+            None
+        };
+        let motion = |axis: usize, v: f64| -> Motion {
+            match region {
+                Some(r) => Motion::Reflect {
+                    lo: r[axis],
+                    hi: r[axis] + r[axis + 2],
+                    v,
+                },
+                None if axis == 1 => Motion::Fall {
+                    v0: v,
+                    g: gravity,
+                    floor,
+                    restitution: bounce,
+                },
+                None => Motion::Fall {
+                    v0: v,
+                    g: 0.0,
+                    floor: None,
+                    restitution: 0.0,
+                },
+            }
+        };
+        let (shape, props, channels): (String, Vec<[PropId; 2]>, Vec<u32>) =
+            if let Some((sn, vids)) = self.target_vertices(&obj, name)? {
+                (
+                    sn,
+                    vids.iter()
+                        .map(|v| [PropId::Vx(*v), PropId::Vy(*v)])
+                        .collect(),
+                    vids,
+                )
+            } else if let Value::Shape(sn) = &obj {
+                (sn.clone(), vec![[PropId::PosX, PropId::PosY]], vec![BODY])
+            } else {
+                return Err(Diagnostic::new(
+                    "E-NAM-003",
+                    format!("a {} has no operation `{name}`", obj.type_name()),
+                ));
+            };
+        let (mut comps, mut motions) = (vec![], vec![]);
+        for [px, py] in props {
+            comps.push((px, Tgt::To(0.0)));
+            motions.push(motion(0, vel[0]));
+            comps.push((py, Tgt::To(0.0)));
+            motions.push(motion(1, vel[1]));
+        }
+        Ok(Value::Pending(Box::new(ActionReq {
+            label: format!("{shape}.{name}"),
+            shape,
+            frames,
+            ease,
+            channels,
+            comps,
+            motions,
+        })))
     }
 }

@@ -3,10 +3,12 @@
 
 pub mod ast;
 pub mod check;
+pub mod color;
 pub mod interp;
 pub mod layers;
 pub mod lexer;
 pub mod parser;
+pub mod procedural;
 pub mod runtime;
 pub mod snapshot;
 pub mod value;

@@ -81,6 +81,15 @@ fn walk_stmt(it: &Interp, s: &Stmt, out: &mut Vec<Diagnostic>) {
             walk_expr(it, count, out);
             walk_block(it, body, out);
         }
+        StmtKind::Start {
+            call, over, ease, ..
+        } => {
+            walk_expr(it, call, out);
+            for e in [over, ease].into_iter().flatten() {
+                walk_expr(it, e, out);
+            }
+        }
+        StmtKind::Cancel(e) | StmtKind::Await(e) => walk_expr(it, e, out),
         StmtKind::Together(b) => walk_block(it, b, out),
         StmtKind::Keyframes {
             target,

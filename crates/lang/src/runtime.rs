@@ -1,9 +1,11 @@
 //! The tick loop (spec §6.2, reduced to what the shape system needs): ingest, delta cycles with
 //! rule dispatch and task stepping, action sampling, property resolution and snapshots.
 use crate::ast::*;
+use crate::color::{to_linear, to_srgb8};
 use crate::interp::*;
 use crate::layers::{fold, BlendMode, Contribution};
 use crate::parser::parse;
+use crate::procedural::value_noise;
 use crate::snapshot::{build_snapshot, snapshot_hash, Resolved};
 use crate::value::*;
 use animscript_core::*;
@@ -27,6 +29,7 @@ struct ActComp {
     prop: PropId,
     from: f64,
     to: f64,
+    motion: Motion,
 }
 struct Act {
     id: u32,
@@ -39,6 +42,8 @@ struct Act {
     ease: Ease,
     prio: i64,
     last: BTreeMap<PropId, f64>,
+    /// Tasks suspended in `await` on this action.
+    waiters: Vec<u32>,
 }
 /// A layer-3 contribution: keys for one scalar between `from` and `to` (inclusive; `None` = until the scene ends).
 struct KeySet {
@@ -52,11 +57,32 @@ struct KeySet {
     blend_in: i64,
     blend_out: i64,
 }
+/// A layer-2 contribution: a procedural modifier running from `from` until `to` (exclusive; `None` = until cancelled).
+struct ModSet {
+    id: u32,
+    shape: String,
+    kind: ModKind,
+    comps: Vec<ModComp>,
+    from: i64,
+    to: Option<i64>,
+    blend_in: i64,
+    blend_out: i64,
+}
+#[derive(Clone, Copy, Debug)]
+enum HandleState {
+    /// Waiting for its channels.
+    Queued,
+    Act(u32),
+    Mod(u32),
+}
 struct PendingAct {
     req: ActionReq,
     task: u32,
     prio: i64,
     seq: u64,
+    /// The `start` handle of this action (0 = none) and tasks waiting for it.
+    handle: u32,
+    waiters: Vec<u32>,
 }
 #[derive(Default, Clone)]
 struct RuleSt {
@@ -77,6 +103,8 @@ pub struct Runtime {
     rules: Vec<RuleSt>,
     resolved: Resolved,
     keysets: Vec<KeySet>,
+    modsets: Vec<ModSet>,
+    handles: BTreeMap<u32, HandleState>,
     main_task: Option<u32>,
     main_done: bool,
     project_tick: i64,
@@ -125,6 +153,8 @@ impl Runtime {
             rules: vec![],
             resolved: Resolved::default(),
             keysets: vec![],
+            modsets: vec![],
+            handles: BTreeMap::new(),
             main_task: None,
             main_done: false,
             project_tick: 0,
@@ -160,6 +190,10 @@ impl Runtime {
         self.tasks.clear();
         self.acts.clear();
         self.keysets.clear();
+        self.modsets.clear();
+        self.handles.clear();
+        self.it.scene_name = sc.name.clone();
+        self.it.mod_counts.clear();
         self.pending.clear();
         self.channels.clear();
         self.rules = vec![RuleSt::default(); sc.rules.len()];
@@ -240,6 +274,30 @@ impl Runtime {
             .all(|c| !self.channels.contains_key(&(req.shape.clone(), *c)))
     }
 
+    /// The current colour (linear light) a colour property starts from: its own, else the shape's.
+    fn colour_rest(&self, shape: &str, prop: PropId) -> Option<[f64; 4]> {
+        let sh = &self.it.shapes[shape];
+        match prop {
+            PropId::FillC(f, _) => sh.faces[&f].fill.or(sh.fill).map(to_linear),
+            PropId::StrokeC(e, _) => sh.edges[&e].stroke.or(sh.stroke).map(to_linear),
+            PropId::ShapeFillC(_) => sh.fill.map(to_linear),
+            PropId::ShapeStrokeC(_) => sh.stroke.map(to_linear),
+            PropId::TintC(_) => Some(to_linear(sh.tint)),
+            _ => None,
+        }
+    }
+
+    fn colour_comp(prop: PropId) -> usize {
+        match prop {
+            PropId::FillC(_, c)
+            | PropId::StrokeC(_, c)
+            | PropId::ShapeFillC(c)
+            | PropId::ShapeStrokeC(c)
+            | PropId::TintC(c) => c as usize,
+            _ => 0,
+        }
+    }
+
     /// The rest (layer 0) value of one scalar property.
     fn rest_value(&self, shape: &str, prop: PropId) -> f64 {
         let sh = &self.it.shapes[shape];
@@ -251,10 +309,40 @@ impl Runtime {
             PropId::ScaleX => sh.scale[0],
             PropId::ScaleY => sh.scale[1],
             PropId::Rot => sh.rotation,
+            PropId::EdgeWidth(e) => sh.edges[&e].width.unwrap_or(sh.stroke_width),
+            PropId::ShapeWidth => sh.stroke_width,
+            PropId::Opacity => sh.opacity,
+            c => self
+                .colour_rest(shape, c)
+                .map_or(0.0, |col| col[Self::colour_comp(c)]),
         }
     }
 
     fn set_rest(&mut self, shape: &str, prop: PropId, v: f64) {
+        if prop.is_colour() {
+            let mut col = self.colour_rest(shape, prop).unwrap_or([0.0; 4]);
+            col[Self::colour_comp(prop)] = v;
+            let c8 = to_srgb8(col);
+            let Some(sh) = self.it.shapes.get_mut(shape) else {
+                return;
+            };
+            match prop {
+                PropId::FillC(f, _) => {
+                    if let Some(x) = sh.faces.get_mut(&f) {
+                        x.fill = Some(c8);
+                    }
+                }
+                PropId::StrokeC(e, _) => {
+                    if let Some(x) = sh.edges.get_mut(&e) {
+                        x.stroke = Some(c8);
+                    }
+                }
+                PropId::ShapeFillC(_) => sh.fill = Some(c8),
+                PropId::ShapeStrokeC(_) => sh.stroke = Some(c8),
+                _ => sh.tint = c8,
+            }
+            return;
+        }
         let Some(sh) = self.it.shapes.get_mut(shape) else {
             return;
         };
@@ -269,6 +357,13 @@ impl Runtime {
                     x.y = v;
                 }
             }
+            PropId::EdgeWidth(e) => {
+                if let Some(x) = sh.edges.get_mut(&e) {
+                    x.width = Some(v.max(0.0));
+                }
+            }
+            PropId::ShapeWidth => sh.stroke_width = v.max(0.0),
+            PropId::Opacity => sh.opacity = v.clamp(0.0, 1.0),
             other => set_transform_prop(sh, other, v, false),
         }
     }
@@ -279,6 +374,7 @@ impl Runtime {
         let tick = self.it.tick;
         // key sets past their last tick simply stop: the layer below shows through again
         self.keysets.retain(|k| k.to.is_none_or(|t| tick <= t));
+        self.modsets.retain(|m| m.to.is_none_or(|t| tick < t));
         let done: Vec<u32> = self
             .acts
             .values()
@@ -290,8 +386,10 @@ impl Runtime {
             self.commit(&a, false);
             self.it
                 .trace_line("ACT-", &format!("{} {}", a.shape, a.comps.len()));
-            if let Some(t) = self.tasks.get_mut(&a.task) {
-                t.state = TaskState::Ready;
+            for w in a.waiters.iter().chain(std::iter::once(&a.task)) {
+                if let Some(t) = self.tasks.get_mut(w) {
+                    t.state = TaskState::Ready;
+                }
             }
         }
         for t in self.tasks.values_mut() {
@@ -327,25 +425,39 @@ impl Runtime {
         }
     }
 
-    fn start_action(&mut self, p: PendingAct) {
+    fn start_action(&mut self, p: PendingAct) -> u32 {
         let tick = self.it.tick;
-        let comps: Vec<ActComp> = p
-            .req
-            .comps
-            .iter()
-            .map(|(prop, t)| {
-                let from = self.rest_value(&p.req.shape, *prop);
-                let to = match t {
+        let fps = self.it.fps.to_f64();
+        let dur_secs = p.req.frames as f64 / fps;
+        let mut comps: Vec<ActComp> = vec![];
+        for (i, (prop, t)) in p.req.comps.iter().enumerate() {
+            let motion = p.req.motions.get(i).copied().unwrap_or(Motion::Eased);
+            let from = self.rest_value(&p.req.shape, *prop);
+            let to = if motion != Motion::Eased {
+                motion_value(&motion, from, dur_secs)
+            } else {
+                match t {
                     Tgt::To(v) => *v,
                     Tgt::By(d) => from + d,
-                };
-                ActComp {
-                    prop: *prop,
-                    from,
-                    to,
                 }
-            })
-            .collect();
+            };
+            comps.push(ActComp {
+                prop: *prop,
+                from,
+                to,
+                motion,
+            });
+        }
+        // animating a colour that is not set yet fades in from transparent, without a colour shift
+        for c in comps.iter_mut() {
+            if c.prop.is_colour() && self.colour_rest(&p.req.shape, c.prop).is_none() {
+                c.from = if Self::colour_comp(c.prop) == 3 {
+                    0.0
+                } else {
+                    c.to
+                };
+            }
+        }
         let id = self.next_act;
         self.next_act += 1;
         for ch in &p.req.channels {
@@ -356,6 +468,9 @@ impl Runtime {
             "ACT+",
             &format!("T{} {} [{} -> {}]", p.task, p.req.label, tick, end),
         );
+        if p.handle != 0 {
+            self.handles.insert(p.handle, HandleState::Act(id));
+        }
         self.acts.insert(
             id,
             Act {
@@ -369,16 +484,108 @@ impl Runtime {
                 ease: p.req.ease,
                 prio: p.prio,
                 last: BTreeMap::new(),
+                waiters: p.waiters,
             },
         );
+        id
     }
 
-    /// Pick up key sets registered by `keyframes` statements during the last step.
+    /// Pick up what the last step produced: key sets, started actions and modifiers, cancellations.
     fn take_keysets(&mut self) {
         let specs = std::mem::take(&mut self.it.pending_keysets);
         let base = self.it.tick;
         for s in specs {
             self.add_keyset(s, base);
+        }
+        for (h, req) in std::mem::take(&mut self.it.pending_starts) {
+            match req {
+                StartReq::Act(a) => {
+                    let p = PendingAct {
+                        req: a,
+                        task: 0,
+                        prio: 0,
+                        seq: self.seq,
+                        handle: h,
+                        waiters: vec![],
+                    };
+                    self.seq += 1;
+                    if self.key_free(&p.req) {
+                        self.start_action(p);
+                    } else {
+                        if h != 0 {
+                            self.handles.insert(h, HandleState::Queued);
+                        }
+                        self.pending.push(p);
+                    }
+                }
+                StartReq::Mod(m) => self.start_mod(m, h),
+            }
+        }
+        for h in std::mem::take(&mut self.it.pending_cancels) {
+            self.cancel_handle(h);
+        }
+    }
+
+    fn start_mod(&mut self, m: ModReq, handle: u32) {
+        let tick = self.it.tick;
+        let id = self.next_act;
+        self.next_act += 1;
+        let to = m.frames.map(|f| tick + f);
+        self.it.trace_line(
+            "MOD+",
+            &format!(
+                "{} [{} -> {}]",
+                m.label,
+                tick,
+                to.map_or("open".to_string(), |t| t.to_string())
+            ),
+        );
+        if handle != 0 {
+            self.handles.insert(handle, HandleState::Mod(id));
+        }
+        self.modsets.push(ModSet {
+            id,
+            shape: m.shape,
+            kind: m.kind,
+            comps: m.comps,
+            from: tick,
+            to,
+            blend_in: m.blend_in,
+            blend_out: m.blend_out,
+        });
+    }
+
+    /// `cancel h`: an action keeps the last value it sampled (spec 7.6), a modifier simply stops.
+    fn cancel_handle(&mut self, h: u32) {
+        match self.handles.remove(&h) {
+            Some(HandleState::Act(id)) => {
+                if let Some(a) = self.acts.remove(&id) {
+                    self.commit(&a, true);
+                    for w in &a.waiters {
+                        if let Some(t) = self.tasks.get_mut(w) {
+                            t.state = TaskState::Ready;
+                        }
+                    }
+                }
+            }
+            Some(HandleState::Mod(id)) => self.modsets.retain(|m| m.id != id),
+            Some(HandleState::Queued) => {
+                let mut woken = vec![];
+                self.pending.retain(|p| {
+                    if p.handle == h {
+                        woken.extend(p.waiters.iter().copied());
+                        false
+                    } else {
+                        true
+                    }
+                });
+                for w in woken {
+                    if let Some(t) = self.tasks.get_mut(&w) {
+                        t.state = TaskState::Ready;
+                    }
+                }
+            }
+            None => {}
         }
     }
 
@@ -543,6 +750,8 @@ impl Runtime {
                         task: id,
                         prio: t.priority,
                         seq: self.seq,
+                        handle: 0,
+                        waiters: vec![],
                     };
                     self.seq += 1;
                     self.tasks.insert(id, t);
@@ -551,6 +760,33 @@ impl Runtime {
                     } else {
                         self.pending.push(p); // queue policy: waits for every channel at once
                     }
+                }
+                Step::Blocked(Req::Await(h)) => {
+                    let tick = self.it.tick;
+                    match self.handles.get(&h).copied() {
+                        Some(HandleState::Act(aid)) if self.acts.contains_key(&aid) => {
+                            self.acts.get_mut(&aid).unwrap().waiters.push(id);
+                            t.state = TaskState::BlockedAct;
+                        }
+                        Some(HandleState::Queued) => {
+                            if let Some(p) = self.pending.iter_mut().find(|p| p.handle == h) {
+                                p.waiters.push(id);
+                            }
+                            t.state = TaskState::BlockedAct;
+                        }
+                        Some(HandleState::Mod(mid)) if self.modsets.iter().any(|m| m.id == mid) => {
+                            let to = self.modsets.iter().find(|m| m.id == mid).and_then(|m| m.to);
+                            let Some(to) = to else {
+                                return Err(Diagnostic::new("E-RUN-006", "`await` on a modifier that never ends")
+                                    .help("give the modifier `over` a duration, or `cancel` it instead of awaiting it"));
+                            };
+                            t.state = TaskState::Waiting;
+                            t.wake = to;
+                            let _ = tick;
+                        }
+                        _ => t.state = TaskState::Ready, // already finished or cancelled
+                    }
+                    self.tasks.insert(id, t);
                 }
                 Step::Blocked(Req::Together(blocks)) => {
                     t.pending = blocks.len() as u32;
@@ -594,16 +830,23 @@ impl Runtime {
 
     // ---- phases 6-7 --------------------------------------------------------------------
 
-    /// Sample every running action and key set at this tick and resolve every touched scalar through the
-    /// layer fold (spec 7.3): the rest value, then the contributions in `(layer, priority, start, id)` order.
+    /// Sample every running action, modifier and key set at this tick and resolve every touched scalar
+    /// through the layer fold (spec 7.3): the rest value, then the contributions in
+    /// `(layer, priority, start, id)` order.
     fn advance_actions(&mut self) {
         let tick = self.it.tick;
+        let fps = self.it.fps.to_f64();
         let mut by_prop: BTreeMap<(String, PropId), Vec<Contribution>> = BTreeMap::new();
         for a in self.acts.values_mut() {
             let p = (tick - a.start) as f64 / (a.end - a.start) as f64;
             let e = a.ease.apply(p);
+            let secs = (tick - a.start) as f64 / fps;
             for c in &a.comps {
-                let value = c.from + (c.to - c.from) * e;
+                let value = if c.motion == Motion::Eased {
+                    c.from + (c.to - c.from) * e
+                } else {
+                    motion_value(&c.motion, c.from, secs)
+                };
                 a.last.insert(c.prop, value);
                 by_prop
                     .entry((a.shape.clone(), c.prop))
@@ -615,6 +858,39 @@ impl Runtime {
                         priority: a.prio,
                         start: a.start,
                         id: a.id,
+                        value,
+                    });
+            }
+        }
+        for m in &self.modsets {
+            if tick < m.from || m.to.is_some_and(|t| tick >= t) {
+                continue;
+            }
+            let secs = (tick - m.from) as f64 / fps;
+            let mut w = 1.0f64;
+            if m.blend_in > 0 {
+                w = w.min((tick - m.from) as f64 / m.blend_in as f64);
+            }
+            if let (true, Some(to)) = (m.blend_out > 0, m.to) {
+                w = w.min((to - tick) as f64 / m.blend_out as f64);
+            }
+            for c in &m.comps {
+                let value = match m.kind {
+                    ModKind::Wobble => {
+                        c.amount * (std::f64::consts::TAU * (c.speed * secs + c.phase)).sin()
+                    }
+                    ModKind::Noise => c.amount * value_noise(c.seed, c.speed * secs),
+                };
+                by_prop
+                    .entry((m.shape.clone(), c.prop))
+                    .or_default()
+                    .push(Contribution {
+                        layer: 2,
+                        mode: BlendMode::Add,
+                        weight: w.clamp(0.0, 1.0),
+                        priority: 0,
+                        start: m.from,
+                        id: m.id,
                         value,
                     });
             }
@@ -650,6 +926,12 @@ impl Runtime {
         let mut resolved = Resolved::default();
         for ((shape, prop), mut contribs) in by_prop {
             let v = fold(self.rest_value(&shape, prop), &mut contribs);
+            let base = if prop.is_colour() {
+                self.colour_rest(&shape, prop).unwrap_or([0.0; 4])
+            } else {
+                [0.0; 4]
+            };
+            let comp = Self::colour_comp(prop);
             let sh = &self.it.shapes[&shape];
             match prop {
                 PropId::Vx(i) | PropId::Vy(i) => {
@@ -665,18 +947,40 @@ impl Runtime {
                         p[1] = v;
                     }
                 }
-                other => {
+                PropId::PosX | PropId::PosY | PropId::ScaleX | PropId::ScaleY | PropId::Rot => {
                     let t = resolved
                         .tf
                         .entry(shape.clone())
                         .or_insert_with(|| sh.transform());
-                    match other {
+                    match prop {
                         PropId::PosX => t.position[0] = v,
                         PropId::PosY => t.position[1] = v,
                         PropId::ScaleX => t.scale[0] = v,
                         PropId::ScaleY => t.scale[1] = v,
                         _ => t.rotation = v,
                     }
+                }
+                PropId::FillC(f, _) => {
+                    resolved.fills.entry((shape.clone(), f)).or_insert(base)[comp] = v
+                }
+                PropId::StrokeC(e, _) => {
+                    resolved.strokes.entry((shape.clone(), e)).or_insert(base)[comp] = v
+                }
+                PropId::ShapeFillC(_) => {
+                    resolved.shape_fill.entry(shape.clone()).or_insert(base)[comp] = v
+                }
+                PropId::ShapeStrokeC(_) => {
+                    resolved.shape_stroke.entry(shape.clone()).or_insert(base)[comp] = v
+                }
+                PropId::TintC(_) => resolved.tint.entry(shape.clone()).or_insert(base)[comp] = v,
+                PropId::EdgeWidth(e) => {
+                    resolved.widths.insert((shape.clone(), e), v.max(0.0));
+                }
+                PropId::ShapeWidth => {
+                    resolved.shape_width.insert(shape.clone(), v.max(0.0));
+                }
+                PropId::Opacity => {
+                    resolved.opacity.insert(shape.clone(), v.clamp(0.0, 1.0));
                 }
             }
         }
@@ -694,6 +998,8 @@ impl Runtime {
         self.it.staged.clear();
         self.it.events.clear();
         self.keysets.clear();
+        self.modsets.clear();
+        self.handles.clear();
         self.resolved = Resolved::default();
     }
 }

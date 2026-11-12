@@ -1065,6 +1065,69 @@ scene "Sway" for 4.seconds:
             s.rotation = 90.deg
 ```
 
+### Colour animation
+
+Colours blend in linear light, which is how light really mixes (a black to white fade is `#bcbcbc` at the
+middle, brighter than a plain `#808080`). The result is rounded to 8 bits.
+
+```anim
+s.f1.fill_to(#ff0000) over 1.second ease ease_out      # one face
+s.faces.fill_to(#ffffff) over 1.second                 # a selection: one action
+s.e1.stroke_to(#00ff00) over 1.second
+s.e1.width_to(6) over 1.second
+s.fill_to(#101010) over 1.second                       # the shape's colour (faces without their own follow)
+s.fade_to(0.5) over 1.second                           # opacity: 0 invisible, 1 solid (covers strokes too)
+s.tint_to(#ff8800) over 1.second                       # multiplies every colour; white = no change
+s.opacity = 0.5                                        # or set them directly
+s.tint = #ff8800
+```
+
+A colour that is not set yet fades in from transparent without a colour shift. Colours can be keyed too:
+`at 1.s: fill = #ff0000`, `stroke`, `stroke_width`, `opacity`, `tint` (but not with `+=`, except
+`stroke_width` and `opacity`).
+
+### Procedural modifiers
+
+A modifier adds motion on top of whatever else is happening (layer 2: above actions, below keyframes).
+
+```anim
+s.vertices.wobble(amount: 4, speed: 1.5) over 3.seconds    # a sine sway; every vertex has its own phase
+s.v[2].wobble(amount: 10, axis: y, sync: true, phase: 0) over 2.seconds
+s.vertices.noise(amount: 3, speed: 2) over 3.seconds       # smooth random drift
+flower.wobble(property: scale, amount: 0.05, speed: 2) over 4.seconds
+flower.noise(property: rotation, amount: 6.deg) over 4.seconds   # also position and opacity
+```
+
+`amount` is in pixels for positions, an Angle for `rotation`, a plain number for `scale` and `opacity`.
+`speed` is cycles per second (wobble) or noise steps per second. `axis: x | y | both` picks the direction,
+`sync: true` makes a whole selection move together, and `blend_in: 0.5.seconds` / `blend_out:` fade a modifier in
+and out. Randomness is seeded by the project `seed`, and adding another modifier elsewhere never changes an
+existing one. `noise("name", t)` and `random("name", i)` give the same kind of numbers directly.
+
+### Springs and physics
+
+```anim
+s.move_by(100, 0) over 1.second ease spring(2, 4)        # overshoots, then lands exactly (bounces, damping)
+s.v[1].fall(floor: 400, gravity: 900, bounce: 0.5) over 3.seconds
+ball.fall(floor: 300, bounce: 0.6, velocity: (40, 0)) over 4.seconds     # a shape: floor is its position.y
+s.v[1].bounce_in(rect(-60, -100, 120, 200), velocity: (60, 40)) over 4.seconds
+```
+
+`fall` and `bounce_in` are actions: the thing ends up where it stopped. They know fixed floors and walls only;
+bodies do not collide with each other.
+
+### start, cancel and await
+
+`over` blocks until the thing finishes. To keep going, or to run something open-ended, use `start`:
+
+```anim
+let h = start s.vertices.wobble(amount: 3)          # no `over`: runs until cancelled or the scene ends
+let r = start s.rotate_by(360.deg) over 4.seconds   # an action that runs while the script continues
+wait 2.seconds
+cancel h                                            # a modifier stops; an action keeps its last value
+await r                                             # wait for the rotation to finish
+```
+
 ### Two modes
 
 1. **Authoring-time** operations change topology (`subdivide`, `extrude`, `bevel`, `round`, `smooth`, `merge`,
@@ -1115,6 +1178,7 @@ Helpers: `unit_vector(angle)`, `direction_to(a, b)`, `distance(a, b)`, `center(s
 | `E-SHP-002` | Unknown vertex/edge/face ID, or one that was deleted or replaced |
 | `E-SHP-003` | Operation not allowed at runtime (topology change after setup); also caught by `anim check` |
 | `E-SHP-004` | Duplicate semantic name |
+| `E-RUN-006` | `await` on a modifier that never ends |
 | `E-SHP-005` | Invalid argument or operation not applicable (e.g. bevel radius longer than the edge, dissolving an edge that is not between two faces, inset too large) |
 | `W-SHP-010` | Degenerate face (zero area) or self-intersection after an edit |
 
@@ -1187,6 +1251,25 @@ scene "Spin" for 4.seconds:
                 at 0.s: scale = 1
                 at 2.s: scale = 1.25 ease ease_in_out
                 at 4.s: scale = 1 ease ease_in_out
+```
+
+### Worked example: a breathing flower
+
+`examples/breathing.anim` (frames: `examples/breathing_t0.png`, `examples/breathing_t72.png`) combines them: every
+petal vertex wobbles, the whole flower drifts with noise, its colour shifts, its centre fades, it pops with a
+spring, and a seed falls and bounces.
+
+```anim
+scene "Breathe" for 5.seconds:
+    main:
+        start flower.vertices.wobble(amount: 2, speed: 0.6)
+        start flower.noise(property: rotation, amount: 5.deg, speed: 1)
+        start flower.fill_to(#ffd1dc) over 5.seconds ease ease_in_out
+        start heart.fade_to(0.55) over 2.5.seconds ease ease_in_out
+        start seed.fall(floor: 420, gravity: 900, bounce: 0.5) over 4.seconds
+        flower.scale_to(1.15) over 1.second ease spring(2, 5)
+        flower.scale_to(1.0) over 1.second ease ease_in_out
+        wait 3.seconds
 ```
 
 ---
