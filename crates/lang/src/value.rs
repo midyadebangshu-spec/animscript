@@ -1,7 +1,7 @@
 //! Runtime values, exact rationals for durations, and easing functions.
 use crate::ast::Expr;
 use crate::interp::Vars;
-use animscript_core::{ElemRef, Kind, Shape};
+use animscript_core::{ElemRef, ImageFill, Kind, Shape};
 use std::rc::Rc;
 
 /// An exact rational number (durations are exact; spec §3.1, §5.3).
@@ -447,6 +447,8 @@ pub enum Value {
     Emitter(String),
     /// A fluid, by name.
     Fluid(String),
+    /// A loaded picture, for `shape.fill = image("file.png")`.
+    Image(ImageFill),
 }
 
 /// A lambda with the variables visible where it was written (captured by value).
@@ -488,6 +490,7 @@ impl Value {
             Value::Joint(_) => "Joint",
             Value::Emitter(_) => "Emitter",
             Value::Fluid(_) => "Fluid",
+            Value::Image(_) => "Image",
         }
     }
     pub fn as_f64(&self) -> Option<f64> {

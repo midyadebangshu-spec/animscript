@@ -1,5 +1,5 @@
 //! The `anim` command line: check, run, render.
-use animscript_lang::{check, run, RunOptions};
+use animscript_lang::{check_in, run_in, RunOptions};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -61,6 +61,14 @@ enum Cmd {
     },
 }
 
+/// The folder a program lives in: relative asset paths (images) are resolved from here.
+fn base_of(file: &std::path::Path) -> PathBuf {
+    file.parent()
+        .map(|p| p.to_path_buf())
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 fn read(file: &PathBuf) -> Result<String, ExitCode> {
     std::fs::read_to_string(file).map_err(|e| {
         eprintln!("cannot read {}: {e}", file.display());
@@ -77,7 +85,7 @@ fn main() -> ExitCode {
                 Err(c) => return c,
             };
             let name = file.display().to_string();
-            let diags = check(&src);
+            let diags = check_in(&src, &base_of(&file));
             for d in &diags {
                 eprintln!("{}", d.render(Some(&src), &name));
             }
@@ -95,7 +103,7 @@ fn main() -> ExitCode {
                 Err(c) => return c,
             };
             let name = file.display().to_string();
-            match run(&src, &RunOptions { trace }) {
+            match run_in(&src, &RunOptions { trace }, &base_of(&file)) {
                 Ok(r) => {
                     for l in &r.trace {
                         println!("{l}");
@@ -130,7 +138,7 @@ fn main() -> ExitCode {
                 Err(c) => return c,
             };
             let name = file.display().to_string();
-            let res = match run(&src, &RunOptions::default()) {
+            let res = match run_in(&src, &RunOptions::default(), &base_of(&file)) {
                 Ok(r) => r,
                 Err(d) => {
                     eprint!("{}", d.render(Some(&src), &name));
@@ -145,12 +153,13 @@ fn main() -> ExitCode {
             let (a, b) = (from.unwrap_or(0), to.unwrap_or(last).min(last));
             for t in a..=b {
                 let path = out.join(format!("f{t:04}.png"));
-                if let Err(e) = animscript_render::render_png_with(
+                if let Err(e) = animscript_render::render_png_assets(
                     &res.snapshots[t],
                     &path,
                     scale,
                     false,
                     debug_physics,
+                    &base_of(&file),
                 ) {
                     eprintln!("render failed at tick {t}: {e}");
                     return ExitCode::from(1);
@@ -172,7 +181,7 @@ fn main() -> ExitCode {
                 Err(c) => return c,
             };
             let name = file.display().to_string();
-            let res = match run(&src, &RunOptions::default()) {
+            let res = match run_in(&src, &RunOptions::default(), &base_of(&file)) {
                 Ok(r) => r,
                 Err(d) => {
                     eprint!("{}", d.render(Some(&src), &name));
@@ -186,7 +195,14 @@ fn main() -> ExitCode {
                 );
                 return ExitCode::from(1);
             };
-            match animscript_render::render_png_with(snap, &out, scale, debug, debug_physics) {
+            match animscript_render::render_png_assets(
+                snap,
+                &out,
+                scale,
+                debug,
+                debug_physics,
+                &base_of(&file),
+            ) {
                 Ok(()) => {
                     println!("wrote {}", out.display());
                     ExitCode::SUCCESS

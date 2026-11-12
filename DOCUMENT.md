@@ -1542,6 +1542,34 @@ scene "s" for 7.seconds:
 - Errors: `E-FLD-001` (bad setting, over the particle cap), `E-FLD-002` (`fill` is not a region). Example:
   `examples/fluid.anim`.
 
+## 13f. Pictures on shapes (sprites)
+
+A shape can be filled with a PNG picture. The picture is mapped onto the shape's faces by one texture
+coordinate per vertex, so it bends, stretches and moves with the shape: a sprite on a soft cloth waves, a
+sprite on a rigid body bounces.
+
+```anim
+shape flag = grid(12, width: 240, height: 160, at: (560, 150))
+flag.fill = image("assets/flag.png")       # a path relative to this file's folder
+flag.stroke = none
+flag.soft(stiffness: 0.5)                   # the picture now follows the simulation
+
+shape face = circle(24, radius: 60, at: (200, 120))
+face.fill = image("assets/face.png")        # transparent pixels stay transparent
+face.body(restitution: 0.75)
+```
+
+- `image("file.png")` reads the file when the program is built. A missing file is `E-AST-001`; a file that is
+  not a PNG is `E-AST-002`. Only PNG is supported (all bit depths, with or without transparency).
+- The picture covers the shape's bounding box when you assign it; each vertex remembers where it was in
+  that box. More vertices (`subdivide`, `grid`) give smoother bends: a face is drawn as triangles.
+- `shape.fill = #336699` after an image keeps the image (the colour is drawn behind it);
+  `shape.image = none` removes the picture. `opacity` applies to the picture.
+- Changing the picture file changes the frame hashes (the file's bytes are part of them).
+- `anim render` and `anim frames` find the pictures next to the program file.
+- Not yet: fitting without stretching, tiling, a separate UV editor, and per-face pictures.
+- Worked example: `examples/sprite.anim`.
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,

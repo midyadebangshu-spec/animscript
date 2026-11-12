@@ -215,6 +215,8 @@ pub struct Interp {
     pub soft: Option<crate::soft::SoftSim>,
     pub fluid_cfg: BTreeMap<String, crate::fluid::FluidCfg>,
     pub fluid: Option<crate::fluid::FluidSim>,
+    /// Where the program lives: relative asset paths (images) are resolved from here.
+    pub base_dir: std::path::PathBuf,
 }
 
 pub const TOPOLOGY_METHODS: &[&str] = &[
@@ -285,6 +287,7 @@ impl Interp {
             soft: None,
             fluid_cfg: BTreeMap::new(),
             fluid: None,
+            base_dir: std::path::PathBuf::from("."),
             program: Program::default(),
         };
         if let Some(p) = &program.project {
@@ -777,6 +780,11 @@ impl Interp {
         match (prop, &value) {
             ("fill", Value::Color(c)) => sh.fill = Some(*c),
             ("fill", Value::None) => sh.fill = None,
+            ("fill" | "image", Value::Image(img)) => sh.set_image(img.clone()),
+            ("image", Value::None) => {
+                sh.image = None;
+                sh.uv.clear();
+            }
             ("stroke", Value::Color(c)) => sh.stroke = Some(*c),
             ("stroke", Value::None) => sh.stroke = None,
             ("stroke_width", v) if v.as_f64().is_some() => sh.stroke_width = v.as_f64().unwrap(),
@@ -825,12 +833,13 @@ impl Interp {
                         | "pivot"
                         | "opacity"
                         | "tint"
+                        | "image"
                 ) {
                     return Err(Diagnostic::new(
                         "E-NAM-003",
                         format!("cannot assign to `{sn}.{attr}`"),
                     )
-                    .help("assignable members: fill, stroke, stroke_width, z, visible, position, scale, rotation, pivot, opacity, tint"));
+                    .help("assignable members: fill, stroke, stroke_width, z, visible, position, scale, rotation, pivot, opacity, tint, image"));
                 }
                 self.check_style_value(attr, &v)?;
                 self.apply_or_stage(
@@ -874,10 +883,51 @@ impl Interp {
     }
 
     /// Check the value of a shape property assignment now, so a bad value is reported at the assignment.
+    pub(crate) fn load_image(&self, path: &str) -> Res<Value> {
+        let full = self.base_dir.join(path);
+        let bytes = std::fs::read(&full).map_err(|_| {
+            Diagnostic::new("E-AST-001", format!("image file `{path}` was not found")).help(
+                format!(
+                    "paths are relative to the program's folder ({})",
+                    self.base_dir.display()
+                ),
+            )
+        })?;
+        const SIG: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        if bytes.len() < 33 || bytes[..8] != SIG || &bytes[12..16] != b"IHDR" {
+            return Err(
+                Diagnostic::new("E-AST-002", format!("`{path}` is not a PNG image"))
+                    .help("only PNG files are supported"),
+            );
+        }
+        let be =
+            |i: usize| u32::from_be_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
+        let (w, h) = (be(16), be(20));
+        if w == 0 || h == 0 || w > 16384 || h > 16384 {
+            return Err(Diagnostic::new(
+                "E-AST-002",
+                format!("`{path}` has an unusable size ({w} x {h})"),
+            ));
+        }
+        let mut hash: u64 = 0xcbf29ce484222325;
+        for b in &bytes {
+            hash ^= *b as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        Ok(Value::Image(ImageFill {
+            src: path.to_string(),
+            w,
+            h,
+            hash,
+            rect: [0.0; 4],
+        }))
+    }
+
     fn check_style_value(&self, prop: &str, v: &Value) -> Res<()> {
         let pair = |v: &Value| matches!(v, Value::Tuple(t) if t.len() == 2 && t.iter().all(|x| x.as_f64().is_some()));
         match (prop, v) {
             ("fill" | "stroke", Value::Color(_) | Value::None) | ("visible", Value::Bool(_)) | ("z", Value::Int(_)) => Ok(()),
+            ("fill" | "image", Value::Image(_)) | ("image", Value::None) => Ok(()),
             ("stroke_width", v) if v.as_f64().is_some() => Ok(()),
             ("position" | "pivot", v) if pair(v) => Ok(()),
             ("pivot", Value::None) => Ok(()),
@@ -1672,6 +1722,11 @@ impl Interp {
             return self.joint_function(name, args, _mode);
         }
         match name {
+            "image" => {
+                let m = self.bind(name, args, &["path"], &["path"])?;
+                let Value::Str(path) = &m["path"] else { return Err(type_err("`image` needs the file name as a string, such as `image(\"hero.png\")`")) };
+                self.load_image(path)
+            }
             "grid" => {
                 let m = self.bind(name, args, &["cells", "width", "height", "at"], &["cells"])?;
                 let n = self.int(&m["cells"], "`cells`")?;

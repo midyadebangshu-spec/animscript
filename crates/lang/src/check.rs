@@ -5,6 +5,11 @@ use crate::parser::parse;
 use animscript_core::*;
 
 pub fn check(src: &str) -> Vec<Diagnostic> {
+    check_in(src, std::path::Path::new("."))
+}
+
+/// Like `check`, with the folder that relative asset paths are resolved from.
+pub fn check_in(src: &str, base: &std::path::Path) -> Vec<Diagnostic> {
     let program = match parse(src) {
         Ok(p) => p,
         Err(d) => return vec![d],
@@ -13,6 +18,7 @@ pub fn check(src: &str) -> Vec<Diagnostic> {
         Ok(i) => i,
         Err(d) => return vec![d],
     };
+    it.base_dir = base.to_path_buf();
     let mut out = vec![];
     let built = it.build();
     out.append(&mut it.diagnostics);

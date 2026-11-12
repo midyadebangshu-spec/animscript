@@ -115,6 +115,11 @@ pub struct Runtime {
 
 /// Parse, build and run a program, returning one snapshot (and hash) per tick.
 pub fn run(src: &str, opts: &RunOptions) -> Res<RunResult> {
+    run_in(src, opts, std::path::Path::new("."))
+}
+
+/// Like `run`, with the folder that relative asset paths (images) are resolved from.
+pub fn run_in(src: &str, opts: &RunOptions, base: &std::path::Path) -> Res<RunResult> {
     let program = parse(src)?;
     if program.project.is_none() {
         return Err(
@@ -124,6 +129,7 @@ pub fn run(src: &str, opts: &RunOptions) -> Res<RunResult> {
         );
     }
     let mut it = Interp::new(src, program)?;
+    it.base_dir = base.to_path_buf();
     it.trace_on = opts.trace;
     it.build()?;
     let mut rt = Runtime::new(it);

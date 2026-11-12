@@ -102,13 +102,18 @@ pub fn build_snapshot(
                     json!({"id": i, "fill": finish(resolved.fills.get(&((*n).clone(), i)).copied().or_else(|| sh.faces[&i].fill.map(to_linear)).or(shape_fill)), "segments": segs})
                 })
                 .collect();
-            json!({
+            let mut shape_json = json!({
                 "id": n, "z": sh.z, "visible": sh.visible,
                 "fill": sh.fill.map(hex), "stroke": sh.stroke.map(hex), "stroke_width": sh.stroke_width,
                 "opacity": opacity, "tint": hex(to_srgb8(tint)),
                 "transform": {"position": pt(&tf.position), "scale": pt(&tf.scale), "rotation": tf.rotation, "pivot": pt(&tf.pivot)},
                 "vertices": vertices, "edges": edges, "faces": faces,
-            })
+            });
+            if let Some(img) = &sh.image {
+                let tris = textured_triangles(sh, ov, &tf);
+                shape_json["image"] = json!({"src": img.src, "w": img.w, "h": img.h, "hash": format!("{:016x}", img.hash), "tris": tris});
+            }
+            shape_json
         })
         .collect();
     let entities: Vec<J> = it
@@ -196,4 +201,64 @@ pub fn snapshot_hash(v: &J) -> u64 {
         h = h.wrapping_mul(0x100000001b3);
     }
     h
+}
+
+/// The triangles of every face of a textured shape, each point `[x, y, u, v]` with `x, y` in world
+/// space. Triangles and quads are split directly; other faces are cut into convex pieces first. The
+/// texture coordinate belongs to the vertex, so the picture follows any deformation.
+fn textured_triangles(sh: &Shape, ov: Option<&BTreeMap<u32, P>>, tf: &Transform) -> Vec<J> {
+    use animscript_physics::{decompose, v2};
+    let mut out = vec![];
+    for f in sh.live_ids(Kind::F) {
+        let ids = sh.face_vertex_ids(f);
+        let pos: Vec<P> = ids
+            .iter()
+            .map(|i| {
+                ov.and_then(|m| m.get(i).copied())
+                    .unwrap_or_else(|| sh.pos(*i))
+            })
+            .collect();
+        let point = |k: usize| {
+            let w = tf.apply(pos[k]);
+            let uv = sh.uv_of(ids[k]);
+            json!([w[0], w[1], uv[0], uv[1]])
+        };
+        let convex = |p: &[P]| {
+            let n = p.len();
+            let signs: Vec<f64> = (0..n)
+                .map(|i| {
+                    let (a, b, c) = (p[i], p[(i + 1) % n], p[(i + 2) % n]);
+                    (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0])
+                })
+                .collect();
+            signs.iter().all(|s| *s >= 0.0) || signs.iter().all(|s| *s <= 0.0)
+        };
+        match pos.len() {
+            0..=2 => {}
+            3 => out.push(json!([point(0), point(1), point(2)])),
+            4 if convex(&pos) => {
+                out.push(json!([point(0), point(1), point(2)]));
+                out.push(json!([point(0), point(2), point(3)]));
+            }
+            _ => {
+                let ring: Vec<_> = pos.iter().map(|p| v2(p[0], p[1])).collect();
+                let Ok(pieces) = decompose(&ring) else {
+                    continue;
+                };
+                for piece in pieces {
+                    let idx: Vec<usize> = piece
+                        .iter()
+                        .filter_map(|q| ring.iter().position(|r| r.x == q.x && r.y == q.y))
+                        .collect();
+                    if idx.len() != piece.len() {
+                        continue;
+                    }
+                    for k in 1..idx.len() - 1 {
+                        out.push(json!([point(idx[0]), point(idx[k]), point(idx[k + 1])]));
+                    }
+                }
+            }
+        }
+    }
+    out
 }

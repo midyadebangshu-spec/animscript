@@ -144,6 +144,21 @@ pub enum MergeAt {
 
 pub type Color = [u8; 4];
 
+/// A picture mapped onto a shape's faces. Every vertex keeps a texture coordinate (its position in
+/// `rect`, the shape's bounding box when the picture was assigned), so the picture follows any
+/// later deformation; vertices made afterwards are mapped linearly from their position.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImageFill {
+    /// The path as written in the program, relative to the program's folder.
+    pub src: String,
+    pub w: u32,
+    pub h: u32,
+    /// FNV-1a of the file's bytes, so a changed picture changes the frame hash.
+    pub hash: u64,
+    /// `[x, y, width, height]` of the shape (local coordinates) that the picture covers.
+    pub rect: [f64; 4],
+}
+
 #[derive(Clone, Debug)]
 pub struct Shape {
     pub name: String,
@@ -172,6 +187,9 @@ pub struct Shape {
     pub opacity: f64,
     /// Multiplies the colour of every fill and stroke (white = no change).
     pub tint: Color,
+    pub image: Option<ImageFill>,
+    /// Texture coordinates `[u, v]` (0 to 1) fixed when the image was assigned.
+    pub uv: BTreeMap<u32, [f64; 2]>,
 }
 
 /// Scale about the pivot, then rotate about the pivot, then translate by `position`.
@@ -391,6 +409,62 @@ impl Shape {
             pivot: None,
             opacity: 1.0,
             tint: [255, 255, 255, 255],
+            image: None,
+            uv: BTreeMap::new(),
+        }
+    }
+
+    /// Map `img` onto the shape: the picture covers the bounding box of the current vertices.
+    pub fn set_image(&mut self, mut img: ImageFill) {
+        let ids = self.live_ids(Kind::V);
+        let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+        for i in &ids {
+            let p = self.pos(*i);
+            for k in 0..2 {
+                lo[k] = lo[k].min(p[k]);
+                hi[k] = hi[k].max(p[k]);
+            }
+        }
+        if ids.is_empty() {
+            lo = [0.0; 2];
+            hi = [1.0; 2];
+        }
+        img.rect = [
+            lo[0],
+            lo[1],
+            (hi[0] - lo[0]).max(1e-9),
+            (hi[1] - lo[1]).max(1e-9),
+        ];
+        self.uv = ids
+            .iter()
+            .map(|i| {
+                let p = self.pos(*i);
+                (
+                    *i,
+                    [
+                        (p[0] - img.rect[0]) / img.rect[2],
+                        (p[1] - img.rect[1]) / img.rect[3],
+                    ],
+                )
+            })
+            .collect();
+        self.image = Some(img);
+    }
+
+    /// The texture coordinate of a vertex: its stored one, else linear in its rest position.
+    pub fn uv_of(&self, vid: u32) -> [f64; 2] {
+        if let Some(uv) = self.uv.get(&vid) {
+            return *uv;
+        }
+        match &self.image {
+            Some(img) => {
+                let p = self.pos(vid);
+                [
+                    (p[0] - img.rect[0]) / img.rect[2],
+                    (p[1] - img.rect[1]) / img.rect[3],
+                ]
+            }
+            None => [0.0, 0.0],
         }
     }
 

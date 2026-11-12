@@ -629,3 +629,34 @@ judgement calls I expect you to want to look at.
     Both are part of the hash. `E-FLD-001` also covers `foam` outside 0 to 1 and `smoothness` outside 0.8 to 4.
 138. **Not done.** True air (two-phase flow with bubbles and trapped pockets) stays out: a 1000:1 density ratio
     is unstable in this kind of solver and doubles the particles.
+
+## Round 9: character rigs, sub-round 0 (images and textured meshes)
+
+139. **Plan for the rig rounds** (agreed): bones are nodes of an armature (not shapes), art is attached to
+    bones (`bind`, `skin`), user code defines actions (`action`, `fn`, `while`, `import`, a `lib/` of
+    AnimScript), in the order 0 (images), A (armature, FK, IK, skinning, clips), the action language step,
+    B (ragdoll, active ragdoll, controller), C (gait and example characters). This entry covers 0 only.
+140. **Syntax.** `shape.fill = image("file.png")` (or `shape.image = image(...)`) maps a PNG onto the shape's
+    faces; `shape.image = none` removes it. A colour `fill` can coexist with it (the colour is drawn first).
+    The path is relative to the program's folder (`run_in`, `check_in`, `load_in` and the CLI pass it; plain
+    `run` uses the current folder). A missing file is `E-AST-001`, a file that is not a PNG (signature and
+    `IHDR` are checked) or has a size outside 1 to 16384 is `E-AST-002`. Per-face or per-edge image fills are
+    `E-TYP-001` (images are per shape for now).
+141. **Texture coordinates belong to vertices.** When an image is assigned every live vertex stores
+    `[u, v]` = its position in the shape's bounding box, so a later move of a vertex (soft body, skinning,
+    a vertex action, keyframes) drags the picture with it; a vertex created afterwards (`subdivide`, `extrude`)
+    is mapped linearly from its rest position. `shape.copy()` copies the mapping. No tiling, wrapping or
+    separate UV editing yet.
+142. **Snapshot.** A textured shape has `image: {src, w, h, hash, tris}`: `tris` lists triangles of
+    `[x, y, u, v]` points in world space. A triangle face is one triangle, a convex quad two, and any other
+    face is cut into convex pieces (the same ear clipping used for physics) and fanned. `hash` is the FNV-1a
+    of the file's bytes, so changing a picture changes every frame hash while the path alone would not.
+143. **Rendering.** The renderer (still a pure function of the snapshot plus the files) decodes the PNG with
+    the `png` crate (a new dependency, pure Rust, justified by the need to read sprites; 16-bit and palette
+    images are expanded, alpha is premultiplied), then fills each triangle with a bilinear pattern through
+    the affine map of its three corners (`render_assets`, `render_png_assets`; the older `render*` use the
+    current folder). Triangles are filled without anti-aliasing so shared edges leave no seams. Opacity is
+    the shape's. A picture that cannot be read is drawn magenta; it never stops the render.
+144. **Limits.** The picture is stretched over the bounding box (no aspect-preserving fit option yet); a
+    bend inside one quad is shown as two flat triangles (subdivide for smoother curves); curved edges of a
+    face are ignored by the texture (the straight vertex polygon is used); the image `tint` is not applied.

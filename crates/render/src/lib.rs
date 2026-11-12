@@ -84,6 +84,115 @@ fn draw_foam(pm: &mut Pixmap, fl: &Value, scale: f32) {
     }
 }
 
+/// A PNG decoded to premultiplied RGBA, or `None` if it cannot be read.
+fn load_png(path: &std::path::Path) -> Option<Pixmap> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut decoder = png::Decoder::new(std::io::BufReader::new(file));
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut buf).ok()?;
+    let (w, h) = (info.width, info.height);
+    let px = &buf[..info.buffer_size()];
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for c in match info.color_type {
+        png::ColorType::Rgba => px
+            .chunks(4)
+            .map(|p| [p[0], p[1], p[2], p[3]])
+            .collect::<Vec<_>>(),
+        png::ColorType::Rgb => px.chunks(3).map(|p| [p[0], p[1], p[2], 255]).collect(),
+        png::ColorType::GrayscaleAlpha => px.chunks(2).map(|p| [p[0], p[0], p[0], p[1]]).collect(),
+        _ => px.iter().map(|g| [*g, *g, *g, 255]).collect(),
+    } {
+        let a = c[3] as u32;
+        let pre = |v: u8| ((v as u32 * a + 127) / 255) as u8;
+        rgba.extend_from_slice(&[pre(c[0]), pre(c[1]), pre(c[2]), c[3]]);
+    }
+    Pixmap::from_vec(rgba, tiny_skia::IntSize::from_wh(w, h)?)
+}
+
+/// Draw a textured shape: every triangle `[x, y, u, v] x 3` is filled with the picture through the
+/// affine map of its three corners (a missing picture is a magenta placeholder).
+fn draw_image(
+    pm: &mut Pixmap,
+    img: &Value,
+    opacity: f32,
+    tf: Transform,
+    base: &std::path::Path,
+    cache: &mut std::collections::HashMap<String, Option<Pixmap>>,
+) {
+    let src = img["src"].as_str().unwrap_or("");
+    let tex: &Option<Pixmap> = cache
+        .entry(src.to_string())
+        .or_insert_with(|| load_png(&base.join(src)));
+    for t in img["tris"].as_array().into_iter().flatten() {
+        let p: Vec<[f64; 4]> = t
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|q| {
+                [
+                    q[0].as_f64().unwrap_or(0.0),
+                    q[1].as_f64().unwrap_or(0.0),
+                    q[2].as_f64().unwrap_or(0.0),
+                    q[3].as_f64().unwrap_or(0.0),
+                ]
+            })
+            .collect();
+        if p.len() != 3 {
+            continue;
+        }
+        let mut pb = PathBuilder::new();
+        pb.move_to(p[0][0] as f32, p[0][1] as f32);
+        pb.line_to(p[1][0] as f32, p[1][1] as f32);
+        pb.line_to(p[2][0] as f32, p[2][1] as f32);
+        pb.close();
+        let Some(path) = pb.finish() else { continue };
+        let mut paint = Paint {
+            anti_alias: false,
+            ..Paint::default()
+        };
+        match tex {
+            None => paint.set_color(Color::from_rgba8(255, 0, 255, 255)),
+            Some(pix) => {
+                // solve texture pixels (u * w, v * h) -> canvas (x, y) from the three corners
+                let (w, h) = (pix.width() as f64, pix.height() as f64);
+                let (a, b, c) = (
+                    (p[0][2] * w, p[0][3] * h),
+                    (p[1][2] * w, p[1][3] * h),
+                    (p[2][2] * w, p[2][3] * h),
+                );
+                let det = (b.0 - a.0) * (c.1 - a.1) - (c.0 - a.0) * (b.1 - a.1);
+                if det.abs() < 1e-12 {
+                    continue;
+                }
+                let solve = |va: f64, vb: f64, vc: f64| {
+                    let (dx1, dx2) = (vb - va, vc - va);
+                    let m = (dx1 * (c.1 - a.1) - dx2 * (b.1 - a.1)) / det; // d value / d tex x
+                    let n = (dx2 * (b.0 - a.0) - dx1 * (c.0 - a.0)) / det; // d value / d tex y
+                    (m, n, va - m * a.0 - n * a.1)
+                };
+                let (sx, kx, tx) = solve(p[0][0], p[1][0], p[2][0]);
+                let (ky, sy, ty) = solve(p[0][1], p[1][1], p[2][1]);
+                paint.shader = tiny_skia::Pattern::new(
+                    pix.as_ref(),
+                    tiny_skia::SpreadMode::Pad,
+                    tiny_skia::FilterQuality::Bilinear,
+                    opacity,
+                    Transform::from_row(
+                        sx as f32, ky as f32, kx as f32, sy as f32, tx as f32, ty as f32,
+                    ),
+                );
+            }
+        }
+        if tex.is_none() {
+            // placeholder: fully opaque magenta, only as transparent as the shape is
+            paint.set_color(Color::from_rgba(1.0, 0.0, 1.0, opacity).unwrap_or(Color::WHITE));
+        }
+        pm.fill_path(&path, &paint, FillRule::Winding, tf, None);
+    }
+}
+
 /// The foam of the fluids on one side (`behind` or in front), drawn after their surfaces.
 fn draw_fluid_foam(pm: &mut Pixmap, fluids: &Value, scale: f32, behind: bool) {
     for fl in fluids.as_array().into_iter().flatten() {
@@ -327,6 +436,23 @@ pub fn render_with(
     debug: bool,
     debug_physics: bool,
 ) -> Result<Pixmap, String> {
+    render_assets(
+        snapshot,
+        scale,
+        debug,
+        debug_physics,
+        std::path::Path::new("."),
+    )
+}
+
+/// Like `render_with`, loading pictures (PNG files named by the snapshot) relative to `base`.
+pub fn render_assets(
+    snapshot: &Value,
+    scale: f32,
+    debug: bool,
+    debug_physics: bool,
+    base: &std::path::Path,
+) -> Result<Pixmap, String> {
     let cw = snapshot["canvas"][0]
         .as_u64()
         .ok_or("snapshot has no canvas")? as f32;
@@ -342,6 +468,7 @@ pub fn render_with(
             .unwrap_or(Color::WHITE),
     );
     let tf = Transform::from_scale(scale, scale);
+    let mut textures: std::collections::HashMap<String, Option<Pixmap>> = Default::default();
     draw_fluids(&mut pm, &snapshot["fluids"], scale, true);
     draw_fluid_foam(&mut pm, &snapshot["fluids"], scale, true);
     for sh in snapshot["shapes"]
@@ -363,6 +490,10 @@ pub fn render_with(
             if let Some(path) = face_path(face) {
                 pm.fill_path(&path, &paint, FillRule::Winding, tf, None);
             }
+        }
+        if sh["image"].is_object() {
+            let opacity = sh["opacity"].as_f64().unwrap_or(1.0) as f32;
+            draw_image(&mut pm, &sh["image"], opacity, tf, base, &mut textures);
         }
         for edge in sh["edges"].as_array().into_iter().flatten() {
             let Some(color) = edge["stroke"].as_str().and_then(parse_hex) else {
@@ -429,6 +560,20 @@ pub fn render_png(
     debug: bool,
 ) -> Result<(), String> {
     render_png_with(snapshot, path, scale, debug, false)
+}
+
+/// Render to a PNG file, loading pictures relative to `base`.
+pub fn render_png_assets(
+    snapshot: &Value,
+    path: &std::path::Path,
+    scale: f32,
+    debug: bool,
+    debug_physics: bool,
+    base: &std::path::Path,
+) -> Result<(), String> {
+    render_assets(snapshot, scale, debug, debug_physics, base)?
+        .save_png(path)
+        .map_err(|e| e.to_string())
 }
 
 pub fn render_png_with(
