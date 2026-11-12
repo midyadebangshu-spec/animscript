@@ -1378,6 +1378,7 @@ f.set_target((100, 100))
 
 ```bash
 anim render scene.anim -o frame.png --tick 36 --debug-physics
+anim frames scene.anim -o frames/ --debug-physics     # every tick, simulated once: f0000.png ...
 ```
 
 draws contact points with their normals (red) and joints (blue). Snapshots carry a `physics` section (bodies
@@ -1468,13 +1469,14 @@ flag.soft_impulse((600, -150))                     # a puff of wind (kg*px/s)
 | `self_collide` | let the shape's edges stop its own vertices | `false` |
 
 - **Pins:** `pin(vertex)` or `pin(list)` hold vertices in place; `pin(v, to: other_shape)` makes them follow
-  that shape, so a moving platform can carry a rope or a cloth. `unpin(v)` lets go (also while running).
+  that shape (a kinematic platform, an animated or falling shape), so it can carry a rope or a cloth. `unpin(v)` lets go (also while running).
 - **Collision:** soft shapes collide with rigid bodies (`.body()`) and with each other. They rest on them,
-  bounce, and push dynamic bodies (a soft pad supports a box). Put a `grid` or `subdivide` fine enough that
-  no obstacle can slip between two vertices.
+  bounce, and push dynamic bodies (a soft pad supports a box). Obstacles thinner than the vertex spacing are
+  still felt (edges are sampled finely near them), and a fully pinned soft body is an obstacle too.
 - **A shape is either rigid or soft:** `.body()` and `.soft()` on the same shape is `E-PHY-003`.
-- **Moving it:** the simulation owns the vertices. Moving the shape's own `position`/`rotation` moves the
-  picture, not the simulation; pin vertices to a moving shape instead. Keyframes on a single vertex still win.
+- **Moving it:** moving the shape's own `position`/`rotation` (an action or keyframes) carries the whole
+  simulation with it; it is a teleport, so it will push things out of the way. To drag a soft body gently, pin
+  vertices to a moving shape. Keyframes on a single vertex still win.
 - **Reading it:** `shape.volume` (px^2) and `shape.stretch` (largest edge strain, 0 means none).
 - `grid(cells, width:, height:, at:)` makes a `cells` x `cells` grid of square faces.
 - In `world:` the settings `soft_substeps` (16) and `soft_iterations` (4) trade speed for accuracy.

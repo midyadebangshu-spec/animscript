@@ -1065,7 +1065,7 @@ impl Interp {
     }
 
     /// The pose a dynamic rigid body had when the frame began (what a pin to it follows).
-    pub fn dynamic_pose(&self, name: &str) -> Option<Transform> {
+    pub fn dynamic_pose(&self, name: &str, ahead: f64) -> Option<Transform> {
         let ph = self.phys.as_ref()?;
         if ph.kinds.get(name) != Some(&BodyKind::Dynamic) {
             return None;
@@ -1073,10 +1073,14 @@ impl Interp {
         let b = ph.world.body(ph.ids[name]);
         let com = ph.com[name];
         let sh = &self.shapes[name];
+        // extrapolated by its velocity over `ahead` seconds, so a pin lands where the body will be
         Some(Transform {
-            position: [b.p.x * ph.ppm - com[0], b.p.y * ph.ppm - com[1]],
+            position: [
+                (b.p.x + b.v.x * ahead) * ph.ppm - com[0],
+                (b.p.y + b.v.y * ahead) * ph.ppm - com[1],
+            ],
             scale: sh.scale,
-            rotation: ph.angle[name] / std::f64::consts::TAU,
+            rotation: (ph.angle[name] + b.w * ahead) / std::f64::consts::TAU,
             pivot: com,
         })
     }

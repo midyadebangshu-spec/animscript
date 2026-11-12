@@ -215,7 +215,7 @@ fn a_heavy_rigid_box_rests_on_a_soft_pad_and_does_not_sink_through() {
     let (pad, _) = jelly(4, 1.0, v2(-0.5, 2.0), 0.0005); // a 1 m pad, 1 m tall, resting on the ground
     let b = world.create_body(&BodyDef {
         kind: BodyKind::Dynamic,
-        position: v2(0.0, 0.5),
+        position: v2(0.0, 1.5), // dropped from 0.3 m: a harder drop tumbles it off a 1 m pad
         ..BodyDef::default()
     });
     world.add_fixture(
@@ -310,4 +310,63 @@ fn fifteen_hundred_vertices_simulate_within_budget() {
     }
     let took = start.elapsed().as_secs_f64();
     assert!(took < 30.0, "took {took:.1} s");
+}
+
+#[test]
+fn a_rope_cannot_slip_past_a_post_thinner_than_its_vertex_spacing() {
+    // five vertices 0.5 m apart, both ends pinned; a 2 cm post stands between the second and third
+    let pos: Vec<Vec2> = (0..5).map(|i| v2(i as f64 * 0.5, 0.0)).collect();
+    let mut rope = SoftBody::new(pos, vec![0.05; 5], SoftParams::default());
+    for i in 0..4 {
+        rope.add_distance(i, i + 1, 0.01); // a stretchy rope that sags onto the post
+    }
+    rope.pin(0, v2(0.0, 0.0));
+    rope.pin(4, v2(2.0, 0.0));
+    let mut world = World::new(Vec2::ZERO);
+    let post = world.create_body(&BodyDef {
+        position: v2(0.6, 0.54),
+        ..BodyDef::default()
+    });
+    world.add_fixture(post, &FixtureDef::new(Shape::boxed(0.01, 0.5))); // its top is at y = 0.04
+    let mut bodies = [rope];
+    run(&mut bodies, Some(&mut world), 3.0);
+    let (a, b) = (bodies[0].pos[1], bodies[0].pos[2]);
+    let y_at_post = a.y + (b.y - a.y) * (0.6 - a.x) / (b.x - a.x);
+    assert!(
+        y_at_post < 0.04 + 0.025,
+        "the rope hangs through the post: y at the post = {y_at_post}"
+    );
+    assert!(b.y > 0.04, "and it did sag down to it: {}", b.y);
+}
+
+#[test]
+fn a_fully_pinned_soft_body_is_an_obstacle_for_rigid_bodies() {
+    let pos: Vec<Vec2> = (0..6).map(|i| v2(i as f64 * 0.5, 1.0)).collect();
+    let mut line = SoftBody::new(pos, vec![0.05; 6], SoftParams::default());
+    for i in 0..5 {
+        line.add_distance(i, i + 1, 0.0);
+    }
+    for i in 0..6 {
+        line.pin(i, v2(i as f64 * 0.5, 1.0));
+    }
+    let mut world = World::new(G);
+    let ball = world.create_body(&BodyDef {
+        kind: BodyKind::Dynamic,
+        position: v2(1.25, 0.0),
+        ..BodyDef::default()
+    });
+    world.add_fixture(
+        ball,
+        &FixtureDef::new(Shape::Circle {
+            center: v2(0.0, 0.0),
+            radius: 0.2,
+        }),
+    );
+    let mut bodies = [line];
+    run(&mut bodies, Some(&mut world), 2.0);
+    let y = world.body(ball).p.y;
+    assert!(
+        y < 0.9,
+        "the ball rests on the pinned line, not below it: {y}"
+    );
 }

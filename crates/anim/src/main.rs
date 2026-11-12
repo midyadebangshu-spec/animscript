@@ -24,6 +24,24 @@ enum Cmd {
         #[arg(long)]
         hash: bool,
     },
+    /// Render every tick to PNGs `f0000.png`, `f0001.png`... in a directory, simulating only once
+    /// (much faster than calling `render` per tick for physics scenes).
+    Frames {
+        file: PathBuf,
+        /// Output directory (created if missing).
+        #[arg(short, long)]
+        out: PathBuf,
+        #[arg(long, default_value_t = 1.0)]
+        scale: f32,
+        /// First and last tick to write (inclusive); default is all.
+        #[arg(long)]
+        from: Option<usize>,
+        #[arg(long)]
+        to: Option<usize>,
+        /// Draw physics contacts, joints and soft pins.
+        #[arg(long)]
+        debug_physics: bool,
+    },
     /// Render one tick to a PNG.
     Render {
         file: PathBuf,
@@ -98,6 +116,48 @@ fn main() -> ExitCode {
                     ExitCode::from(1)
                 }
             }
+        }
+        Cmd::Frames {
+            file,
+            out,
+            scale,
+            from,
+            to,
+            debug_physics,
+        } => {
+            let src = match read(&file) {
+                Ok(s) => s,
+                Err(c) => return c,
+            };
+            let name = file.display().to_string();
+            let res = match run(&src, &RunOptions::default()) {
+                Ok(r) => r,
+                Err(d) => {
+                    eprint!("{}", d.render(Some(&src), &name));
+                    return ExitCode::from(1);
+                }
+            };
+            if let Err(e) = std::fs::create_dir_all(&out) {
+                eprintln!("cannot create {}: {e}", out.display());
+                return ExitCode::from(2);
+            }
+            let last = res.snapshots.len().saturating_sub(1);
+            let (a, b) = (from.unwrap_or(0), to.unwrap_or(last).min(last));
+            for t in a..=b {
+                let path = out.join(format!("f{t:04}.png"));
+                if let Err(e) = animscript_render::render_png_with(
+                    &res.snapshots[t],
+                    &path,
+                    scale,
+                    false,
+                    debug_physics,
+                ) {
+                    eprintln!("render failed at tick {t}: {e}");
+                    return ExitCode::from(1);
+                }
+            }
+            println!("wrote {} frames to {}", b + 1 - a, out.display());
+            ExitCode::SUCCESS
         }
         Cmd::Render {
             file,

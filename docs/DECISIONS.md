@@ -532,3 +532,25 @@ judgement calls I expect you to want to look at.
     without soft bodies. `anim render --debug-physics` draws pins as blue squares. `shape.volume` and
     `shape.stretch` read the same numbers while running. New errors: `E-PHY-003` (soft and rigid at once, or
     nothing to simulate) and `E-PHY-004` (a bad soft value, or `pin`/`unpin` misuse).
+
+### Round 7 follow-up: the limits fixed
+
+118. **Carrying.** Item 113 is replaced: when the soft shape's own resolved `position`/`rotation`/`scale`
+    changes between ticks (an action or keyframes on the shape), the whole simulation, including pin targets,
+    is carried through that change with velocities kept, and the output is expressed in the shape's current
+    transform. Moving a soft body with `move_by` therefore makes it collide with things on the way (it is a
+    teleport, so a fast move into a wall is a violent push-out); pins are still the gentler way.
+119. **Thin obstacles.** Item 116's first limit is fixed: an edge near any fixture is sampled every
+    `max(2 * radius, 1 cm)` along its length (up to 64 samples), so a 2 cm post between two vertices 50 cm
+    apart is felt. Each sample moves the whole edge, and its friction/restitution response is weighted by
+    `1 / samples` so a finely sampled edge does not compound it. Edges far from every fixture are skipped.
+120. **Pinned vertices are obstacles.** A pinned vertex (or edge between two pinned vertices) cannot move
+    out of the way, so a dynamic rigid body that reaches it has its approach velocity removed (relative to the
+    pinned point's own velocity) with an impulse at the contact point. A fully pinned soft body now holds a ball.
+121. **Pins to dynamic bodies** no longer lag: the target is the body's pose extrapolated by its current
+    velocity over one frame (item 112 updated); a pin follows a body in free fall to within a few pixels.
+122. **`anim frames`.** `anim frames file.anim -o DIR [--scale s] [--from n --to m] [--debug-physics]` simulates
+    once and writes `f0000.png`...; rendering 144 physics frames one at a time re-simulated every time.
+123. **Still limits.** Mass ratios far above about 20:1 along one chain stretch noticeably; a soft shape has no
+    skin-and-core mode; a very fast rigid body can still tunnel through a soft edge in one substep.
+

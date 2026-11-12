@@ -494,6 +494,36 @@ impl World {
             .map(|h| (h.normal, h.sep, h.vel))
     }
 
+    /// True when any non-sensor fixture's bounding box overlaps the given box (a cheap pre-test).
+    pub fn near_fixture(&self, lo: Vec2, hi: Vec2) -> bool {
+        let q = Aabb { lo, hi };
+        self.fixtures.iter().filter(|f| !f.sensor).any(|f| {
+            let b = &self.bodies[f.body];
+            f.shape.aabb(&Xf { p: b.p, q: b.q }).overlaps(&q)
+        })
+    }
+
+    /// Resolve the approach of dynamic body `id` towards an immovable obstacle point: remove the
+    /// velocity of the body's contact point along `n` (pointing from the obstacle into the body)
+    /// relative to the obstacle's own velocity. Used for pinned soft vertices, which cannot move away.
+    pub fn bounce_at(&mut self, id: BodyId, point: Vec2, n: Vec2, obstacle_vel: Vec2) {
+        let b = &self.bodies[id];
+        if b.kind != BodyKind::Dynamic {
+            return;
+        }
+        let r = point - b.c;
+        let vn = (b.v + cross_sv(b.w, r) - obstacle_vel).dot(n);
+        if vn >= 0.0 {
+            return;
+        }
+        let rn = r.cross(n);
+        let denom = b.inv_mass + b.inv_i * rn * rn;
+        if denom <= 0.0 {
+            return;
+        }
+        self.apply_impulse_at(id, n * (-vn / denom), point);
+    }
+
     /// Like `collide_circle`, but also says which body was hit and where (soft bodies push back).
     pub fn circle_hit(&self, center: Vec2, radius: f64, margin: f64) -> Option<CircleHit> {
         self.circle_hits(center, radius, margin)

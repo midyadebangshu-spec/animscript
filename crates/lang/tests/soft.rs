@@ -175,3 +175,41 @@ fn bad_soft_bodies_are_rejected() {
     );
     assert_eq!(err("shape s = square(size: 50)\nscene \"s\" for 1.frame:\n    main:\n        s.soft()\n        wait 1.frame\n").code, "E-SHP-003");
 }
+
+fn centre_of(snap: &Value, shape: usize) -> (f64, f64) {
+    let v = verts(snap, shape);
+    (
+        v.iter().map(|p| p.0).sum::<f64>() / v.len() as f64,
+        v.iter().map(|p| p.1).sum::<f64>() / v.len() as f64,
+    )
+}
+
+#[test]
+fn moving_a_soft_shape_carries_its_simulation_along() {
+    // moving the shape down into the floor: the carried simulation meets the floor and stops there,
+    // instead of the drawing sliding through it
+    let r = go("shape ground = rectangle(width: 760, height: 40, at: (400, 580))\nshape jelly = grid(3, width: 100, height: 100, at: (400, 300))\nground.body(kind: static)\njelly.soft(stiffness: 0.9)\nscene \"s\" for 2.seconds:\n    main:\n        jelly.move_by(0, 300) over 2.seconds ease linear\n");
+    let lowest = r
+        .snapshots
+        .iter()
+        .flat_map(|s| verts(s, 1))
+        .map(|p| p.1)
+        .fold(f64::MIN, f64::max);
+    assert!(
+        lowest < 560.0 + 6.0,
+        "the jelly was carried through the floor: {lowest}"
+    );
+    assert!(lowest > 540.0, "and it did reach it: {lowest}");
+}
+
+#[test]
+fn a_pin_to_a_falling_rigid_body_keeps_up_with_it() {
+    let r = go("shape weight = square(size: 30, at: (200, 50))\nshape rope = line((200, 50), (200, 200))\nrope.e1.subdivide(6)\nweight.body()\nrope.soft(stiffness: 1.0)\nrope.pin(rope.v[1], to: weight)\nscene \"s\" for 1.second:\n    main:\n        wait 1.second\n");
+    // the weight falls freely (gravity pulls the rope too); at tick 20 the pin must sit on the weight's centre
+    let (w, p) = (
+        centre_of(&r.snapshots[20], 0),
+        verts(&r.snapshots[20], 1)[0],
+    );
+    near(p.0, w.0, 3.0);
+    near(p.1, w.1, 3.0);
+}

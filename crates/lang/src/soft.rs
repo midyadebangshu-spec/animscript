@@ -459,10 +459,21 @@ impl Interp {
 
     /// Step the soft bodies (and, through them, the rigid world) to this tick. Returns the new local
     /// vertex positions `(shape, vertex id, x, y)` to write as layer-2 overrides.
+    /// Names of the soft shapes (whose own transform carries the simulation).
+    pub fn soft_shapes(&self) -> Vec<String> {
+        self.soft
+            .as_ref()
+            .map(|s| s.names.clone())
+            .unwrap_or_default()
+    }
+
+    /// `own` holds each soft shape's own resolved transform this tick: when it changes, the whole
+    /// simulation (points and pin targets) is carried along with it.
     pub fn soft_tick(
         &mut self,
         tick: i64,
         targets: &BTreeMap<String, Transform>,
+        own: &BTreeMap<String, Transform>,
     ) -> Vec<(String, u32, f64, f64)> {
         let (cfg, fps) = (self.world_cfg.clone(), self.fps.to_f64());
         let Some(sim) = self.soft.as_mut() else {
@@ -472,6 +483,19 @@ impl Interp {
             return vec![];
         }
         let ppm = sim.ppm;
+        for i in 0..sim.bodies.len() {
+            if let Some(new) = own.get(&sim.names[i]) {
+                if *new != sim.tf[i] {
+                    let old = sim.tf[i];
+                    let carry = |p: Vec2| {
+                        let w = new.apply(unapply(&old, [p.x * ppm, p.y * ppm]));
+                        v2(w[0] / ppm, w[1] / ppm)
+                    };
+                    sim.bodies[i].map_points(&carry);
+                    sim.tf[i] = *new;
+                }
+            }
+        }
         for i in 0..sim.bodies.len() {
             for (v, (t, off)) in &sim.pin_to[i] {
                 if let Some(tf) = targets.get(t) {

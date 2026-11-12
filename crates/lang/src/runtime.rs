@@ -947,7 +947,7 @@ impl Runtime {
             // soft pins follow the pose of the shape they are pinned to
             let mut targets = BTreeMap::new();
             for n in self.it.soft_pin_targets() {
-                if let Some(t) = self.it.dynamic_pose(&n) {
+                if let Some(t) = self.it.dynamic_pose(&n, 1.0 / fps) {
                     targets.insert(n, t);
                     continue;
                 }
@@ -965,8 +965,24 @@ impl Runtime {
                 };
                 targets.insert(n, t);
             }
+            let mut own = BTreeMap::new();
+            for n in self.it.soft_shapes() {
+                let mut get = |p: PropId| {
+                    let rest = self.rest_value(&n, p);
+                    by_prop
+                        .get_mut(&(n.clone(), p))
+                        .map_or(rest, |c| fold(rest, c))
+                };
+                let t = Transform {
+                    position: [get(PropId::PosX), get(PropId::PosY)],
+                    scale: [get(PropId::ScaleX), get(PropId::ScaleY)],
+                    rotation: get(PropId::Rot),
+                    pivot: self.it.shapes[&n].transform().pivot,
+                };
+                own.insert(n, t);
+            }
             let soft_out = if has_soft {
-                self.it.soft_tick(tick, &targets)
+                self.it.soft_tick(tick, &targets, &own)
             } else {
                 self.it.physics_advance(tick);
                 vec![]

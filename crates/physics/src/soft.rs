@@ -140,6 +140,17 @@ impl SoftBody {
             .map(|d| (((self.pos[d.a] - self.pos[d.b]).length() - d.rest) / d.rest).abs())
             .fold(0.0, f64::max)
     }
+    /// Move every point (and pin) through `f`, keeping velocities: carries the whole body along
+    /// with a transform applied to it from outside.
+    pub fn map_points(&mut self, f: &dyn Fn(Vec2) -> Vec2) {
+        for p in &mut self.pos {
+            *p = f(*p);
+        }
+        for p in self.pins.iter_mut().flatten() {
+            p.target = f(p.target);
+            p.last = f(p.last);
+        }
+    }
     pub fn total_mass(&self) -> f64 {
         self.mass.iter().sum()
     }
@@ -156,6 +167,10 @@ struct Contact {
     body: usize,
     v0: usize,
     v1: Option<usize>,
+    /// Where along the edge `v0 -> v1` the sample lies (0 for a vertex).
+    t: f64,
+    /// Share of the velocity response this sample applies (1 / samples on its edge).
+    wgt: f64,
     n: Vec2,
     sep: f64,
     xref: Vec2,
@@ -217,56 +232,89 @@ pub fn soft_step(
             }
             vpred.push(b.vel.clone());
         }
-        // rigid contacts, detected once per substep at the predicted positions
+        // rigid contacts, detected once per substep at the predicted positions: every vertex, and
+        // samples along every edge that is near a fixture (dense enough that no obstacle slips between)
         let mut contacts: Vec<Contact> = vec![];
+        let mut bounces: Vec<(usize, Vec2, Vec2, Vec2)> = vec![];
         if let Some(w) = world.as_deref() {
             for (bi, b) in bodies.iter().enumerate() {
                 let r = b.params.radius;
                 for v in 0..b.pos.len() {
-                    if b.w(v) == 0.0 {
-                        continue;
-                    }
                     let margin = 0.02 + b.vel[v].length() * h;
                     for hit in w.circle_hits(b.pos[v], r, margin) {
+                        let dynamic = w.body(hit.body).kind == BodyKind::Dynamic;
+                        if b.w(v) == 0.0 {
+                            if dynamic && hit.sep <= 0.005 {
+                                bounces.push((hit.body, hit.point, hit.normal, b.vel[v]));
+                            }
+                            continue;
+                        }
                         contacts.push(Contact {
                             body: bi,
                             v0: v,
                             v1: None,
+                            t: 0.0,
+                            wgt: 1.0,
                             n: hit.normal,
                             sep: hit.sep,
                             xref: b.pos[v],
                             hit: hit.body,
                             vb: hit.vel,
                             point: hit.point,
-                            dynamic: w.body(hit.body).kind == BodyKind::Dynamic,
+                            dynamic,
                             acc: 0.0,
                             react: 0.0,
                         });
                     }
                 }
+                let spacing = (2.0 * r).max(0.01);
                 for d in b.dist.iter().filter(|d| d.collider) {
-                    if b.w(d.a) == 0.0 && b.w(d.b) == 0.0 {
+                    let (pa, pb) = (b.pos[d.a], b.pos[d.b]);
+                    let pad = r + 0.02 + ((b.vel[d.a] + b.vel[d.b]) * 0.5).length() * h;
+                    if !w.near_fixture(
+                        v2(pa.x.min(pb.x) - pad, pa.y.min(pb.y) - pad),
+                        v2(pa.x.max(pb.x) + pad, pa.y.max(pb.y) + pad),
+                    ) {
                         continue;
                     }
-                    let mid = (b.pos[d.a] + b.pos[d.b]) * 0.5;
-                    let margin = 0.02 + ((b.vel[d.a] + b.vel[d.b]) * 0.5).length() * h;
-                    for hit in w.circle_hits(mid, r, margin) {
-                        contacts.push(Contact {
-                            body: bi,
-                            v0: d.a,
-                            v1: Some(d.b),
-                            n: hit.normal,
-                            sep: hit.sep,
-                            xref: mid,
-                            hit: hit.body,
-                            vb: hit.vel,
-                            point: hit.point,
-                            dynamic: w.body(hit.body).kind == BodyKind::Dynamic,
-                            acc: 0.0,
-                            react: 0.0,
-                        });
+                    let samples = (((pb - pa).length() / spacing).ceil() as usize).clamp(1, 64);
+                    for k in 0..samples {
+                        let t = (k as f64 + 0.5) / samples as f64;
+                        let x = pa + (pb - pa) * t;
+                        let vel = b.vel[d.a] + (b.vel[d.b] - b.vel[d.a]) * t;
+                        let margin = 0.02 + vel.length() * h;
+                        for hit in w.circle_hits(x, r, margin) {
+                            let dynamic = w.body(hit.body).kind == BodyKind::Dynamic;
+                            if b.w(d.a) == 0.0 && b.w(d.b) == 0.0 {
+                                if dynamic && hit.sep <= 0.005 {
+                                    bounces.push((hit.body, hit.point, hit.normal, vel));
+                                }
+                                continue;
+                            }
+                            contacts.push(Contact {
+                                body: bi,
+                                v0: d.a,
+                                v1: Some(d.b),
+                                t,
+                                wgt: 1.0 / samples as f64,
+                                n: hit.normal,
+                                sep: hit.sep,
+                                xref: x,
+                                hit: hit.body,
+                                vb: hit.vel,
+                                point: hit.point,
+                                dynamic,
+                                acc: 0.0,
+                                react: 0.0,
+                            });
+                        }
                     }
                 }
+            }
+        }
+        if let Some(w) = world.as_deref_mut() {
+            for (body, point, n, vel) in bounces {
+                w.bounce_at(body, point, n, vel);
             }
         }
         // soft-soft: vertices against edges, remembering which side of the edge each vertex was on
@@ -397,7 +445,7 @@ pub fn soft_step(
             for c in contacts.iter_mut() {
                 let b = &mut bodies[c.body];
                 let x = match c.v1 {
-                    Some(v1) => (b.pos[c.v0] + b.pos[v1]) * 0.5,
+                    Some(v1) => b.pos[c.v0] + (b.pos[v1] - b.pos[c.v0]) * c.t,
                     None => b.pos[c.v0],
                 };
                 let clearance = c.sep + (x - c.xref).dot(-c.n);
@@ -465,7 +513,8 @@ pub fn soft_step(
                 }
                 let pre = vpred[c.body][v] - c.vb;
                 let vn_pre = pre.dot(c.n);
-                let mut rel = bodies[c.body].vel[v] - c.vb;
+                let before = bodies[c.body].vel[v] - c.vb;
+                let mut rel = before;
                 if vn_pre > 1.0 && params.restitution > 0.0 {
                     rel += c.n * (-params.restitution * vn_pre - rel.dot(c.n));
                 }
@@ -475,7 +524,8 @@ pub fn soft_step(
                     let keep = (1.0 - params.friction * (c.acc / h) / tl).max(0.0);
                     rel = c.n * rel.dot(c.n) + t * keep;
                 }
-                bodies[c.body].vel[v] = rel + c.vb;
+                // many samples share an edge's two vertices: each applies only its share
+                bodies[c.body].vel[v] = before + (rel - before) * c.wgt + c.vb;
             }
             if c.dynamic && c.react > 0.0 {
                 if let Some(w) = world.as_deref_mut() {
