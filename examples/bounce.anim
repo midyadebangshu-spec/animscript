@@ -1,0 +1,20 @@
+project "Bounce":
+    anim_version: "0.1"
+    canvas: 640x480
+    fps: 24
+    background: #f4f1ea
+
+world:
+    gravity: (0, 9.8)
+    scale: 100
+
+shape ground = rectangle(width: 600, height: 40, at: (320, 440))
+shape ball = circle(24, radius: 30, at: (320, 40))
+ground.fill = #6b5b4b
+ball.fill = #e0674f
+ground.body(kind: static, restitution: 0.75)
+ball.body(restitution: 0.75)
+
+scene "Bounce" for 5.seconds:
+    main:
+        wait 5.seconds
