@@ -531,9 +531,19 @@ impl World {
         max: f64,
         exclude: Option<BodyId>,
     ) -> Option<RayHit> {
+        self.raycast_filtered(origin, dir, max, &|b| exclude == Some(b))
+    }
+    /// Like `raycast`, skipping every body for which `skip` is true.
+    pub fn raycast_filtered(
+        &self,
+        origin: Vec2,
+        dir: Vec2,
+        max: f64,
+        skip: &dyn Fn(BodyId) -> bool,
+    ) -> Option<RayHit> {
         let mut best: Option<RayHit> = None;
         for f in &self.fixtures {
-            if f.sensor || exclude == Some(f.body) {
+            if f.sensor || skip(f.body) {
                 continue;
             }
             let b = &self.bodies[f.body];

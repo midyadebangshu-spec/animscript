@@ -297,3 +297,87 @@ impl Interp {
         Ok(Value::None)
     }
 }
+
+impl Interp {
+    /// `raycast(origin, direction, max, ignore: shape-armature-or-"bones")` is the first solid point along the ray
+    /// (or `none`); `raycast_normal` is the surface normal there. Bodies exist only while a scene runs.
+    pub(crate) fn raycast_builtin(&mut self, name: &str, args: Args) -> Res<Value> {
+        let m = self.bind(
+            name,
+            args,
+            &["origin", "direction", "max", "ignore"],
+            &["origin", "direction", "max"],
+        )?;
+        let o = self.point(&m["origin"], "`origin`")?;
+        let d = self.point(&m["direction"], "`direction`")?;
+        let max = self.num(&m["max"], "`max`")?;
+        let len = d[0].hypot(d[1]);
+        if len < 1e-12 || max < 0.0 {
+            return Err(Diagnostic::new(
+                "E-PHY-006",
+                "`raycast` needs a direction that is not zero and a length that is not negative",
+            ));
+        }
+        let Some(p) = self.phys.as_ref() else {
+            return Ok(Value::None);
+        };
+        let mut skip: Vec<usize> = vec![];
+        let mut ignore = |v: &Value| -> Res<()> {
+            match v {
+                Value::Shape(sn) => skip.extend(p.ids.get(sn)),
+                Value::Armature(arm) => {
+                    let prefix = format!("{arm}.");
+                    skip.extend(
+                        p.ids
+                            .iter()
+                            .filter(|(k, _)| k.starts_with(&prefix))
+                            .map(|(_, i)| *i),
+                    );
+                }
+                Value::Str(w) if w == "bones" => {
+                    // every armature's bodies: the ground, not the characters standing on it
+                    skip.extend(p.rag.keys().flat_map(|a| {
+                        let prefix = format!("{a}.");
+                        p.ids
+                            .iter()
+                            .filter(move |(k, _)| k.starts_with(&prefix))
+                            .map(|(_, i)| *i)
+                    }));
+                }
+                Value::None => {}
+                other => {
+                    return Err(Diagnostic::new(
+                        "E-PHY-006",
+                        format!(
+                            "`ignore` is a shape, an armature, `bones` or a list of them, found {}",
+                            other.type_name()
+                        ),
+                    ))
+                }
+            }
+            Ok(())
+        };
+        match m.get("ignore") {
+            Some(Value::List(items)) => {
+                for i in items {
+                    ignore(i)?;
+                }
+            }
+            Some(v) => ignore(v)?,
+            None => {}
+        }
+        let ppm = p.ppm;
+        let dir = v2(d[0] / len, d[1] / len);
+        let hit = p
+            .world
+            .raycast_filtered(v2(o[0] / ppm, o[1] / ppm), dir, max / ppm, &|b| {
+                skip.contains(&b)
+            });
+        let pt = |x: f64, y: f64| Value::Tuple(vec![Value::Num(x), Value::Num(y)]);
+        Ok(match hit {
+            None => Value::None,
+            Some(h) if name == "raycast" => pt(h.point.x * ppm, h.point.y * ppm),
+            Some(h) => pt(h.normal.x, h.normal.y),
+        })
+    }
+}

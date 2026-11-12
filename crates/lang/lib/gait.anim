@@ -1,0 +1,137 @@
+## std/gait: walking and trotting with planted feet, written in AnimScript. Import with `import "std/gait"`.
+## Nothing here is built into the language: it uses `raycast`, IK handles (`reach`, `.target`), bone
+## `head` and live reads. Copy any of it into your own file and change it.
+##
+## Conventions (pass your own bones to the lower-level `gait_*` actions to change them):
+##   walk_to   a biped:      root bone `torso`, IK handles `foot_l` and `foot_r`
+##   trot_to   a quadruped:  root bone `torso`, IK handles `foot_fl`, `foot_fr`, `foot_bl`, `foot_br`
+## The root bone is the hips. It moves at `speed` px/s and rides at a constant height above the average
+## height of the feet. Each foot, in turn, swings to a point ahead of the hips where `raycast` finds the
+## ground, then stays planted (an IK target is a point in the world) while the hips move past it.
+
+## Wait a number of frames.
+action gait_pause(n: Int):
+    let i = 0
+    while i < n:
+        wait 1.frame
+        i += 1
+
+## Swing one foot (an IK handle) to x = lx on the ground below, over n frames, lifting it by `lift` px.
+action gait_swing(self: Shape, lx: Number, root: Shape, n: Int, lift: Number):
+    let hit = raycast((lx, root.head.y - 100), (0, 1), 500, ignore: "bones")
+    let sx = self.target.x
+    let sy = self.target.y
+    let ly = sy
+    if hit != none:
+        ly = hit.y
+    let i = 1
+    while i <= n:
+        let t = i / n
+        let s = t * t * (3 - 2 * t)
+        self.reach((sx + (lx - sx) * s, sy + (ly - sy) * s - lift * sin(t * 0.5.turns)))
+        wait 1.frame
+        i += 1
+
+## One foot's cycle while the hips walk towards x: wait `delay` frames, then swing for `n` frames and stay
+## planted for `n` frames, until the hips arrive. `dx` is the foot's home offset from the hips.
+action gait_foot(self: Shape, root: Shape, dx: Number, x: Number, dir: Number, speed: Number, delay: Int, n: Int, lift: Number):
+    let fps = frames(1.second)
+    gait_pause(delay)
+    while abs(root.head.x - x) > speed / fps:
+        # where the hips will be when the foot lands, plus half the travel during the stance
+        let lx = root.head.x + dx + dir * speed * n * 1.5 / fps
+        if dir > 0:
+            lx = min(lx, x + dx)
+        else:
+            lx = max(lx, x + dx)
+        gait_swing(self, lx, root, n, lift)
+        gait_pause(n)
+
+## Move the hips (the root bone) towards x at `speed`, keeping `hip_h` above the average foot height
+## (less `crouch`), until they arrive.
+action gait_root(self: Armature, feet: List, count: Int, x: Number, speed: Number, hip_h: Number, crouch: Number, dir: Number):
+    let root = self.torso
+    let fps = frames(1.second)
+    let px = root.position.x
+    let py = root.position.y
+    let hx = root.head.x
+    let hy = root.head.y
+    while abs(hx - x) > speed / fps:
+        hx += dir * speed / fps
+        px += dir * speed / fps
+        let sum = 0
+        for f in feet:
+            sum += f.target.y
+        let dy = (sum / count - hip_h + crouch - hy) * 0.25
+        hy += dy
+        py += dy
+        root.position = (px, py)
+        wait 1.frame
+
+## Straighten up: the hips go back to the full standing height over the feet.
+action gait_rise(self: Armature, feet: List, count: Int, hip_h: Number):
+    let root = self.torso
+    let px = root.position.x
+    let py = root.position.y
+    let hy = root.head.y
+    let i = 0
+    while i < 8:
+        let sum = 0
+        for f in feet:
+            sum += f.target.y
+        let dy = (sum / count - hip_h - hy) * 0.4
+        hy += dy
+        py += dy
+        root.position = (px, py)
+        wait 1.frame
+        i += 1
+
+## Walk a biped to x (px). Feet alternate; the walk ends standing.
+action walk_to(self: Armature, x: Number, speed: Number = 120, step_time: Duration = 0.3.seconds, lift: Number = 16, crouch: Number = 6):
+    let root = self.torso
+    let fl = self.foot_l
+    let fr = self.foot_r
+    let n = frames(step_time)
+    let dir = 1
+    if x < root.head.x:
+        dir = -1
+    let dl = fl.target.x - root.head.x
+    let dr = fr.target.x - root.head.x
+    let hip_h = (fl.target.y + fr.target.y) / 2 - root.head.y
+    together:
+        gait_root(self, [fl, fr], 2, x, speed, hip_h, crouch, dir)
+        gait_foot(fl, root, dl, x, dir, speed, 0, n, lift)
+        gait_foot(fr, root, dr, x, dir, speed, n, n, lift)
+    gait_swing(fl, root.head.x + dl, root, n, lift)
+    gait_swing(fr, root.head.x + dr, root, n, lift)
+    gait_rise(self, [fl, fr], 2, hip_h)
+
+## Trot a quadruped to x (px): the front-left and back-right feet step together, then the other pair.
+action trot_to(self: Armature, x: Number, speed: Number = 140, step_time: Duration = 0.25.seconds, lift: Number = 14, crouch: Number = 4):
+    let root = self.torso
+    let fl = self.foot_fl
+    let fr = self.foot_fr
+    let bl = self.foot_bl
+    let br = self.foot_br
+    let n = frames(step_time)
+    let dir = 1
+    if x < root.head.x:
+        dir = -1
+    let dfl = fl.target.x - root.head.x
+    let dfr = fr.target.x - root.head.x
+    let dbl = bl.target.x - root.head.x
+    let dbr = br.target.x - root.head.x
+    let hip_h = (fl.target.y + fr.target.y + bl.target.y + br.target.y) / 4 - root.head.y
+    together:
+        gait_root(self, [fl, fr, bl, br], 4, x, speed, hip_h, crouch, dir)
+        gait_foot(fl, root, dfl, x, dir, speed, 0, n, lift)
+        gait_foot(br, root, dbr, x, dir, speed, 0, n, lift)
+        gait_foot(fr, root, dfr, x, dir, speed, n, n, lift)
+        gait_foot(bl, root, dbl, x, dir, speed, n, n, lift)
+    together:
+        gait_swing(fl, root.head.x + dfl, root, n, lift)
+        gait_swing(br, root.head.x + dbr, root, n, lift)
+    together:
+        gait_swing(fr, root.head.x + dfr, root, n, lift)
+        gait_swing(bl, root.head.x + dbl, root, n, lift)
+    gait_rise(self, [fl, fr, bl, br], 4, hip_h)

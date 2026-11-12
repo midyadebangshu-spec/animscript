@@ -7,7 +7,10 @@ use animscript_core::{Diagnostic, Res, Span};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-const STD: &[(&str, &str)] = &[("motion", include_str!("../lib/motion.anim"))];
+const STD: &[(&str, &str)] = &[
+    ("motion", include_str!("../lib/motion.anim")),
+    ("gait", include_str!("../lib/gait.anim")),
+];
 
 /// The text of a bundled library module (`motion`, not `std/motion`).
 pub fn bundled(name: &str) -> Option<&'static str> {

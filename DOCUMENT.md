@@ -1735,6 +1735,45 @@ action run_to(self: Shape, x: Number):
 
 Worked example: `examples/ragdoll.anim`.
 
+## 13i. Walking: raycasts, IK reads and `std/gait`
+
+**`raycast(origin, direction, max, ignore:)`** returns the first solid point along a ray (a point, or `none`),
+`raycast_normal(...)` the surface normal there. Sensors are skipped and a ray that starts inside a shape does
+not hit it. `ignore:` takes a shape, an armature, the word `bones` (every armature: the ground, not the
+characters) or a list of them. It sees bodies, so it works while a scene runs (otherwise `none`). A zero
+direction or a negative `max` is `E-PHY-006`.
+
+```anim
+let hit = raycast((x, 0), (0, 1), 1000, ignore: "bones")     # the ground below x
+if hit != none:
+    foot.reach(hit)
+```
+
+**IK handles can be read:** `hero.foot.target` (where it is reaching, in the world) and `hero.foot.weight`.
+Together with bone `head`/`tip` and the live reads of section 8 this is everything a gait needs.
+**Actions can take an armature:** `action wave(self: Armature, ...)`, called `hero.wave()`.
+
+**`import "std/gait"`** is a gait written in AnimScript (read `crates/lang/lib/gait.anim`; copy and change it):
+
+```anim
+hero.walk_to(500, speed: 120, step_time: 0.3.seconds, lift: 16, crouch: 6)   # a biped
+dog.trot_to(470, speed: 120)                                                  # a quadruped
+```
+
+- `walk_to` expects the root (hip) bone `torso` and IK handles `foot_l`, `foot_r`; `trot_to` expects `torso` and
+  `foot_fl`, `foot_fr`, `foot_bl`, `foot_br`. Legs are two-bone IK chains; use `bend: negative` so knees point
+  forward when walking right.
+- The hips move at `speed` and ride at a fixed height above the average height of the feet, less `crouch`
+  while moving. Each foot in turn swings (over `step_time`, lifted by `lift` px) to a point ahead of the hips where
+  `raycast` finds the ground, then stays planted, since an IK target is a point in the world, while the hips pass.
+  The biped alternates feet; the quadruped steps diagonal pairs together. The walk ends standing.
+- The lower-level actions (`gait_swing`, `gait_foot`, `gait_root`, `gait_rise`, `gait_pause`) are public: build a
+  different gait (a hop, a crawl, more legs) from them.
+- A walk is an ordinary action: `start` it, `cancel` it, put it in `together:`. To knock a walker over, `cancel`
+  the walk, `ragdoll()` it, and later `animate()` it, which returns to where its animated pose was.
+
+Worked example: `examples/gait.anim` (a biped and a dog over stairs and a ramp, with a knock-over).
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,

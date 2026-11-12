@@ -244,6 +244,8 @@ pub struct Interp {
     pub live_tf: BTreeMap<String, Transform>,
     /// Last solved bone poses `(head, tip, angle)` keyed `armature.bone`.
     pub rig_live: BTreeMap<String, (P, P, f64)>,
+    /// Last solved IK handles `(target, weight)` keyed `armature.handle`.
+    pub ik_live: BTreeMap<String, (P, f64)>,
     /// User-defined `action`s and `fn`s by name.
     pub defs: BTreeMap<String, Rc<Def>>,
     /// The value of the last executed `return`.
@@ -324,6 +326,7 @@ impl Interp {
             rig_sim: None,
             live_tf: BTreeMap::new(),
             rig_live: BTreeMap::new(),
+            ik_live: BTreeMap::new(),
             defs: BTreeMap::new(),
             ret: None,
             call_depth: 0,
@@ -1893,6 +1896,7 @@ impl Interp {
                 let (a, b) = (self.point(&m["a"], "`a`")?, self.point(&m["b"], "`b`")?);
                 Ok(Value::Num(((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()))
             }
+            "raycast" | "raycast_normal" => self.raycast_builtin(name, args),
             "atan2" => {
                 let m = self.bind(name, args, &["y", "x"], &["y", "x"])?;
                 let (y, x) = (self.num(&m["y"], "`y`")?, self.num(&m["x"], "`x`")?);

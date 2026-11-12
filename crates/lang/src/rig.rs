@@ -471,6 +471,19 @@ impl Interp {
 
     /// `head`, `tip` (world px) and `angle` of a bone pseudo-shape: the last solved pose, or the rest pose.
     pub fn bone_attr(&self, key: &str, name: &str) -> Option<Value> {
+        if matches!(name, "target" | "weight") {
+            let (arm, k) = self.ik_of(key)?;
+            let (t, w) = self
+                .ik_live
+                .get(key)
+                .copied()
+                .unwrap_or((self.rigs[&arm].ik[k].rest_tip, 0.0));
+            return Some(if name == "target" {
+                Value::Tuple(vec![Value::Num(t[0]), Value::Num(t[1])])
+            } else {
+                Value::Num(w)
+            });
+        }
         if !matches!(name, "head" | "tip" | "angle") {
             return None;
         }
@@ -852,6 +865,8 @@ impl Interp {
                         rots[b] = lerp_angle(rots[b], solved[b], w);
                     }
                 }
+                self.ik_live
+                    .insert(format!("{name}.{iname}"), ([target.x, target.y], w));
                 ik_snap.push(json!({"name": iname, "target": [target.x, target.y], "weight": w}));
             }
             let pose = sk.pose(&rots, off);

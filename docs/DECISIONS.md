@@ -800,3 +800,25 @@ judgement calls I expect you to want to look at.
 171. **Limits recorded.** A shape cannot be both rig-driven art and a rigid body (still `E-RIG-003`); fluids and
     soft bodies do not see bone bodies as anything special (they collide with them as with any rigid body).
     Torque and frequency in 169 are tuned by eye; no per-bone strength yet.
+172. **`raycast`.** A builtin over `World::raycast_filtered` (the unfiltered `raycast` now calls it). Arguments are
+    pixels in the language and metres in the engine; `direction` need not be unit length. It returns a point or
+    `none`; the normal is a separate builtin `raycast_normal` because there are no record values yet. No world
+    (not running a scene) gives `none`, not an error. `ignore:` accepts a shape, an armature (all its bone
+    bodies), the string `"bones"` (all armatures) or a list; anything else, a zero direction or a negative length
+    is the new `E-PHY-006`. Static bodies are hit like any other solid.
+173. **Armature type and IK reads.** `Armature` is a parameter type (so `self: Armature`). IK handles are shapes, so
+    `self: Shape` already covered them. `handle.target` and `handle.weight` are the last solved values (the rest
+    tip and 0 before the first tick); like other live reads they are one frame behind and cleared per scene.
+174. **Gait is a library, not an engine feature.** `std/gait` is cadence driven: every foot loops "swing for n
+    frames, stay planted n frames", offset by half a cycle between groups, so a biped has exactly one foot in
+    the air and a quadruped swings diagonal pairs. Landing x is where the hips will be when the foot lands plus
+    half of the travel during the stance, clamped so it never overshoots the destination. The ground under that
+    point is found with a downward ray from 100 px above the hips, so stairs and ramps work; there is no
+    adaptation if the ground is missing (the foot keeps its height). Hips follow the average foot height with a
+    25% per frame smoothing, so they bob with the swing. Stopping is by distance: each foot loop ends when the hips
+    are within one frame's travel of the target, then each foot steps home, then the hips straighten. Phase
+    conventions and bone names are in DOCUMENT 13i. There is no gap-crossing or jumping yet.
+175. **Language limits met while writing it.** Lists are immutable (no `xs[i] = v`), so per-foot state lives in
+    separate tasks (`together:`), not in a list; durations are used as frame counts (`frames(d)`); there is no
+    conditional expression, so direction is set with `let d = 1` and `if`.
+

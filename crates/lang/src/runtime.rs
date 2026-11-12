@@ -1241,6 +1241,7 @@ impl Runtime {
     fn end_scene(&mut self) {
         self.it.live_tf.clear();
         self.it.rig_live.clear();
+        self.it.ik_live.clear();
         self.it.end_soft();
         self.it.end_fluids();
         self.it.end_physics();

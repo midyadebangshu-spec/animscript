@@ -315,3 +315,27 @@ fn the_angle_spring_can_be_switched_on_and_off_at_runtime() {
     }
     assert!(angle(&w, bar) > 0.5, "falls once off: {}", angle(&w, bar));
 }
+
+#[test]
+fn a_filtered_ray_skips_the_bodies_it_is_told_to() {
+    let mut w = world();
+    let a = body(
+        &mut w,
+        BodyKind::Static,
+        v2(5.0, 0.0),
+        Shape::boxed(1.0, 1.0),
+    );
+    let b = body(
+        &mut w,
+        BodyKind::Static,
+        v2(10.0, 0.0),
+        Shape::boxed(1.0, 1.0),
+    );
+    let h = w
+        .raycast_filtered(v2(0.0, 0.0), v2(1.0, 0.0), 20.0, &|id| id == a)
+        .expect("hit");
+    assert_eq!(h.body, b);
+    assert!(w
+        .raycast_filtered(v2(0.0, 0.0), v2(1.0, 0.0), 20.0, &|_| true)
+        .is_none());
+}

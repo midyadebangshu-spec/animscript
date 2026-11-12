@@ -1,0 +1,107 @@
+project "Gait":
+    anim_version: "0.1"
+    canvas: 800x600
+    fps: 24
+    background: #eef1f6
+
+world:
+    gravity: (0, 9.8)
+    scale: 100
+
+import "std/gait"
+
+# ---- the terrain: flat, three stairs, a plateau, then a ramp down (one static polygon) -------------
+shape terrain = polygon([(0, 560), (300, 560), (300, 540), (380, 540), (380, 520), (460, 520), (460, 500), (600, 500), (780, 560), (800, 560), (800, 600), (0, 600)])
+terrain.fill = #6b5b4b
+terrain.body(kind: static)
+
+# ---- the biped: hips are the root bone `torso`, legs are two-bone IK chains ----------------------------
+armature hero:
+    bone torso:   at: (230, 440), length: 100, angle: -90.deg
+    bone thigh_l: parent: torso, at: 0.0, length: 60, angle: -175.deg
+    bone shin_l:  parent: thigh_l, length: 60
+    bone thigh_r: parent: torso, at: 0.0, length: 60, angle: 175.deg
+    bone shin_r:  parent: thigh_r, length: 60
+    ik foot_l: chain: [thigh_l, shin_l], bend: negative
+    ik foot_r: chain: [thigh_r, shin_r], bend: negative
+    ragdoll: radius: 6, friction: 0.8
+
+shape leg_lt = rectangle(width: 14, height: 62, at: (225, 470))
+shape leg_ls = rectangle(width: 12, height: 62, at: (221, 530))
+shape leg_rt = rectangle(width: 14, height: 62, at: (235, 470))
+shape leg_rs = rectangle(width: 12, height: 62, at: (239, 530))
+shape chest = rectangle(width: 40, height: 100, at: (230, 390))
+shape face = circle(20, radius: 24, at: (230, 322))
+leg_lt.fill = #35507a
+leg_ls.fill = #35507a
+leg_rt.fill = #4a6a9a
+leg_rs.fill = #4a6a9a
+chest.fill = #4f8fe0
+face.fill = #f2c9a0
+leg_lt.bind(hero.thigh_l)
+leg_ls.bind(hero.shin_l)
+leg_rt.bind(hero.thigh_r)
+leg_rs.bind(hero.shin_r)
+chest.bind(hero.torso)
+face.bind(hero.torso)
+
+# ---- the quadruped: diagonal pairs of feet step together ----------------------------------------------
+armature dog:
+    bone torso: at: (40, 450), length: 120, angle: 0.deg
+    bone fl_up: parent: torso, at: 1.0, length: 55, angle: 90.deg
+    bone fl_lo: parent: fl_up, length: 55
+    bone fr_up: parent: torso, at: 1.0, length: 55, angle: 90.deg
+    bone fr_lo: parent: fr_up, length: 55
+    bone bl_up: parent: torso, at: 0.0, length: 55, angle: 90.deg
+    bone bl_lo: parent: bl_up, length: 55
+    bone br_up: parent: torso, at: 0.0, length: 55, angle: 90.deg
+    bone br_lo: parent: br_up, length: 55
+    ik foot_fl: chain: [fl_up, fl_lo]
+    ik foot_fr: chain: [fr_up, fr_lo]
+    ik foot_bl: chain: [bl_up, bl_lo], bend: negative
+    ik foot_br: chain: [br_up, br_lo], bend: negative
+
+shape d_fr_u = rectangle(width: 12, height: 57, at: (160, 478))
+shape d_fr_l = rectangle(width: 10, height: 57, at: (160, 533))
+shape d_br_u = rectangle(width: 12, height: 57, at: (40, 478))
+shape d_br_l = rectangle(width: 10, height: 57, at: (40, 533))
+shape d_body = rectangle(width: 140, height: 46, at: (100, 440))
+shape d_head = circle(20, radius: 22, at: (182, 420))
+shape d_fl_u = rectangle(width: 12, height: 57, at: (160, 478))
+shape d_fl_l = rectangle(width: 10, height: 57, at: (160, 533))
+shape d_bl_u = rectangle(width: 12, height: 57, at: (40, 478))
+shape d_bl_l = rectangle(width: 10, height: 57, at: (40, 533))
+d_fr_u.fill = #8a5a2b
+d_fr_l.fill = #8a5a2b
+d_br_u.fill = #8a5a2b
+d_br_l.fill = #8a5a2b
+d_body.fill = #c98a4b
+d_head.fill = #c98a4b
+d_fl_u.fill = #a86f38
+d_fl_l.fill = #a86f38
+d_bl_u.fill = #a86f38
+d_bl_l.fill = #a86f38
+d_fr_u.bind(dog.fr_up)
+d_fr_l.bind(dog.fr_lo)
+d_br_u.bind(dog.br_up)
+d_br_l.bind(dog.br_lo)
+d_body.bind(dog.torso)
+d_head.bind(dog.torso)
+d_fl_u.bind(dog.fl_up)
+d_fl_l.bind(dog.fl_lo)
+d_bl_u.bind(dog.bl_up)
+d_bl_l.bind(dog.bl_lo)
+
+scene "Gait" for 17.seconds:
+    main:
+        # both are plain actions from std/gait: they use raycast to find the ground for every step
+        start dog.trot_to(470, speed: 120)
+        hero.walk_to(740, speed: 105)
+        wait 0.5.seconds
+        # knocked over: a ragdoll, then back to the animated pose where it stood
+        hero.ragdoll(push: (-160, -140))
+        wait 2.5.seconds
+        hero.animate()
+        wait 0.5.seconds
+        hero.walk_to(420, speed: 105)
+        wait 0.5.seconds

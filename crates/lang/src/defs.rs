@@ -13,7 +13,7 @@ type Args = Vec<(Option<String>, Value)>;
 
 const TYPES: &[&str] = &[
     "Any", "Number", "Int", "Bool", "String", "Point", "Vec2", "Angle", "Duration", "Color",
-    "Shape", "Entity", "List", "Easing", "Region", "Vertex", "Edge", "Face", "Handle",
+    "Shape", "Armature", "Entity", "List", "Easing", "Region", "Vertex", "Edge", "Face", "Handle",
 ];
 /// Calls nested inside one another: an `fn` call recurses on the Rust stack, so it is limited more
 /// tightly than an inline `action`, which only adds frames to its task.
@@ -73,6 +73,7 @@ impl Interp {
                 t.len() == 2 && t.iter().all(|x| x.as_f64().is_some())
             }
             ("Shape", Value::Shape(_))
+            | ("Armature", Value::Armature(_))
             | ("Entity", Value::Entity(_))
             | ("List", Value::List(_))
             | ("Easing", Value::Ease(_))
