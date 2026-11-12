@@ -28,6 +28,8 @@ pub struct FluidCfg {
     pub color_end: [u8; 4],
     pub blob: bool,
     pub behind: bool,
+    /// Radius of the blob surface in spacings (smaller = crisper).
+    pub smoothness: f64,
 }
 
 struct Pour {
@@ -87,6 +89,7 @@ impl Interp {
                 color_end: [0x4f, 0x9b, 0xe8, 255],
                 blob: true,
                 behind: false,
+                smoothness: 1.4,
             };
             let (mut color_end, mut spacing) = (None, 8.0);
             for (key, expr, span) in &d.attrs {
@@ -142,6 +145,18 @@ impl Interp {
                         Value::Bool(b) => cfg.behind = b,
                         _ => return Err(e1("`behind` must be true or false").at(*span)),
                     },
+                    "foam" => {
+                        cfg.params.foam = num(self, "`foam`")?;
+                        if !(0.0..=1.0).contains(&cfg.params.foam) {
+                            return Err(e1("`foam` must be between 0 and 1").at(*span));
+                        }
+                    }
+                    "smoothness" => {
+                        cfg.smoothness = num(self, "`smoothness`")?;
+                        if !(0.8..=4.0).contains(&cfg.smoothness) {
+                            return Err(e1("`smoothness` must be between 0.8 and 4 (the surface radius in particle spacings)").at(*span));
+                        }
+                    }
                     "max" => {
                         let n = self.int(&v, "`max`").map_err(|e| e1(e.message).at(*span))?;
                         if !(1..=HARD_LIMIT as i64).contains(&n) {
@@ -149,7 +164,7 @@ impl Interp {
                         }
                         cfg.params.max = n as usize;
                     }
-                    other => return Err(e1(format!("a fluid has no setting `{other}`")).at(*span).help("settings: fill (or in), spacing, density, viscosity, surface_tension, color, color_end, render, behind, max")),
+                    other => return Err(e1(format!("a fluid has no setting `{other}`")).at(*span).help("settings: fill (or in), spacing, density, viscosity, surface_tension, foam, smoothness, color, color_end, render, behind, max")),
                 }
             }
             cfg.color_end = color_end.unwrap_or(cfg.color);
@@ -184,6 +199,10 @@ impl Interp {
         };
         for (name, cfg) in &self.fluid_cfg {
             let mut f = ph::Fluid::new(cfg.params.clone());
+            f.set_seed(crate::procedural::stream_seed(
+                self.seed,
+                &format!("fluid:{}:{name}", self.scene_name),
+            ));
             f.set_bounds(
                 v2(-2.0 * cw / ppm, -2.0 * ch / ppm),
                 v2(3.0 * cw / ppm, 3.0 * ch / ppm),
@@ -418,7 +437,8 @@ impl Interp {
             .map(|(i, n)| {
                 let c = &self.fluid_cfg[n];
                 let pts: Vec<J> = sim.fluids[i].pos.iter().map(|p| json!([p.x * sim.ppm, p.y * sim.ppm])).collect();
-                json!({"name": n, "spacing": c.spacing_px, "color": hex(c.color), "color_end": hex(c.color_end), "render": if c.blob { "blob" } else { "dots" }, "behind": c.behind, "particles": pts})
+                let foam: Vec<J> = sim.fluids[i].foam.iter().map(|f| json!([f.pos.x * sim.ppm, f.pos.y * sim.ppm, f.age / f.life])).collect();
+                json!({"name": n, "spacing": c.spacing_px, "smoothness": c.smoothness, "color": hex(c.color), "color_end": hex(c.color_end), "render": if c.blob { "blob" } else { "dots" }, "behind": c.behind, "particles": pts, "foam": foam})
             })
             .collect();
         Some(J::Array(out))

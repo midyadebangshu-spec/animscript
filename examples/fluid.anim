@@ -22,11 +22,13 @@ wall_r.body(kind: static)
 # the water: a block of particles on a lattice, drawn as a smooth surface that darkens with depth
 fluid water:
     fill: rect(170, 450, 460, 110)
-    spacing: 10
+    spacing: 5                  # finer particles: four times as many as 10 px
+    smoothness: 1.3             # a crisper surface (the surface radius in particle spacings)
+    foam: 0.8                   # spray and foam where the water splashes
     viscosity: 0.05
     color: #62b0f0dd
     color_end: #1f4f9add
-    max: 2500
+    max: 4500
 
 # a light ball floats, a heavy box sinks
 shape ball = circle(20, radius: 32, at: (520, 140))
@@ -39,7 +41,7 @@ crate.body(density: 3.0)
 scene "Fluid" for 7.seconds:
     main:
         wait 2.seconds
-        water.pour(at: (230, 40), speed: (60, 260), width: 30)
+        water.pour(at: (230, 40), speed: (60, 260), width: 24)
         wait 2.seconds
         water.stop()
         wait 3.seconds

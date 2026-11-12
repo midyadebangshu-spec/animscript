@@ -63,6 +63,36 @@ pub fn render(snapshot: &Value, scale: f32, debug: bool) -> Result<Pixmap, Strin
     render_with(snapshot, scale, debug, false)
 }
 
+/// Foam and spray: small white specks that fade with age.
+fn draw_foam(pm: &mut Pixmap, fl: &Value, scale: f32) {
+    let spacing = fl["spacing"].as_f64().unwrap_or(8.0);
+    let mut paint = Paint {
+        anti_alias: true,
+        ..Paint::default()
+    };
+    for f in fl["foam"].as_array().into_iter().flatten() {
+        let (x, y, t) = (
+            f[0].as_f64().unwrap_or(0.0) as f32,
+            f[1].as_f64().unwrap_or(0.0) as f32,
+            f[2].as_f64().unwrap_or(0.0).clamp(0.0, 1.0) as f32,
+        );
+        paint.set_color(Color::from_rgba(1.0, 1.0, 1.0, (1.0 - t) * 0.95).unwrap_or(Color::WHITE));
+        let radius = ((0.3 * spacing) as f32 * (1.0 - 0.5 * t)).max(1.0) * scale;
+        if let Some(c) = PathBuilder::from_circle(x * scale, y * scale, radius) {
+            pm.fill_path(&c, &paint, FillRule::Winding, Transform::identity(), None);
+        }
+    }
+}
+
+/// The foam of the fluids on one side (`behind` or in front), drawn after their surfaces.
+fn draw_fluid_foam(pm: &mut Pixmap, fluids: &Value, scale: f32, behind: bool) {
+    for fl in fluids.as_array().into_iter().flatten() {
+        if fl["behind"].as_bool().unwrap_or(false) == behind {
+            draw_foam(pm, fl, scale);
+        }
+    }
+}
+
 /// Draw the fluids of a snapshot: `blob` rasterises a smooth density field of the particles
 /// (shaded from the surface colour to the deep colour by depth under the surface), `dots` draws
 /// overlapping circles. Only `behind` or only front fluids are drawn, as asked.
@@ -91,20 +121,26 @@ fn draw_fluids(pm: &mut Pixmap, fluids: &Value, scale: f32, behind: bool) {
         if pts.is_empty() {
             continue;
         }
-        // depth below the surface of the column (bins one spacing wide), 0 at the surface to 1 deep down
-        let mut tops: std::collections::BTreeMap<i64, f64> = Default::default();
-        for p in &pts {
-            let e = tops
-                .entry((p.0 / spacing).floor() as i64)
-                .or_insert(f64::MAX);
-            *e = e.min(p.1);
+        // depth below the surface: per column (bins one spacing wide) the particles are walked from the
+        // top; a gap of more than 2.5 spacings starts a new run (a droplet in the air is its own surface)
+        let mut cols: std::collections::BTreeMap<i64, Vec<(f64, usize)>> = Default::default();
+        for (i, p) in pts.iter().enumerate() {
+            cols.entry((p.0 / spacing).floor() as i64)
+                .or_default()
+                .push((p.1, i));
         }
-        let depth: Vec<f64> = pts
-            .iter()
-            .map(|p| {
-                ((p.1 - tops[&((p.0 / spacing).floor() as i64)]) / (8.0 * spacing)).clamp(0.0, 1.0)
-            })
-            .collect();
+        let mut depth = vec![0.0f64; pts.len()];
+        for col in cols.values_mut() {
+            col.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+            let (mut top, mut last) = (col[0].0, col[0].0);
+            for (y, i) in col.iter() {
+                if y - last > 2.5 * spacing {
+                    top = *y;
+                }
+                depth[*i] = ((y - top) / 90.0).clamp(0.0, 1.0); // fully deep after 90 px
+                last = *y;
+            }
+        }
         let mix = |t: f64| -> [f32; 3] {
             let t = t as f32;
             [
@@ -138,7 +174,21 @@ fn draw_fluids(pm: &mut Pixmap, fluids: &Value, scale: f32, behind: bool) {
             continue;
         }
         let (w, h) = (pm.width() as i32, pm.height() as i32);
-        let r = (1.6 * spacing) as f32 * scale;
+        let smooth = fl["smoothness"].as_f64().unwrap_or(1.4).clamp(0.8, 4.0);
+        let r = (smooth * spacing) as f32 * scale;
+        // the field value of a particle in the middle of a perfect lattice: thresholds are relative to
+        // it, so the surface sits at the same fraction of a full density whatever the radius
+        let lattice: f32 = (-4i32..=4)
+            .flat_map(|j| (-4i32..=4).map(move |i| (i, j)))
+            .map(|(i, j)| {
+                let q = ((i * i + j * j) as f64 / (smooth * smooth)) as f32;
+                if q < 1.0 {
+                    (1.0 - q) * (1.0 - q)
+                } else {
+                    0.0
+                }
+            })
+            .sum();
         let r2 = r * r;
         let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
         for p in &pts {
@@ -183,14 +233,20 @@ fn draw_fluids(pm: &mut Pixmap, fluids: &Value, scale: f32, behind: bool) {
         for py in y0..=y1 {
             for px in x0..=x1 {
                 let i = (py - y0) as usize * bw + (px - x0) as usize;
-                let f = field[i];
-                // smooth edge between densities 0.65 and 0.95
-                let t = ((f - 0.65) / 0.3).clamp(0.0, 1.0);
+                let f = field[i] / lattice;
+                // a soft edge between 18% and 30% of a full lattice density, low enough that a lone
+                // droplet or a thin stream stays about one spacing wide
+                let t = ((f - 0.18) / 0.12).clamp(0.0, 1.0);
                 let a = t * t * (3.0 - 2.0 * t);
                 if a <= 0.0 {
                     continue;
                 }
-                let c = mix((dsum[i] / f) as f64);
+                let mut c = mix((dsum[i] / field[i]) as f64);
+                // a light rim just inside the edge, like the meniscus of a real surface
+                let rim = 1.0 - ((f - 0.30) / 0.22).clamp(0.0, 1.0);
+                for ch in c.iter_mut() {
+                    *ch += (1.0 - *ch) * 0.35 * rim;
+                }
                 let a = a * c0.alpha();
                 let o = py as usize * stride + px as usize * 4;
                 for (k, ch) in c.iter().enumerate() {
@@ -287,6 +343,7 @@ pub fn render_with(
     );
     let tf = Transform::from_scale(scale, scale);
     draw_fluids(&mut pm, &snapshot["fluids"], scale, true);
+    draw_fluid_foam(&mut pm, &snapshot["fluids"], scale, true);
     for sh in snapshot["shapes"]
         .as_array()
         .map(|v| v.as_slice())
@@ -340,6 +397,7 @@ pub fn render_with(
         }
     }
     draw_fluids(&mut pm, &snapshot["fluids"], scale, false);
+    draw_fluid_foam(&mut pm, &snapshot["fluids"], scale, false);
     for em in snapshot["particles"].as_array().into_iter().flatten() {
         for it in em["items"].as_array().into_iter().flatten() {
             let Some(color) = it[3].as_str().and_then(parse_hex) else {

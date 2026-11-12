@@ -20,6 +20,12 @@ pub struct FluidParams {
     pub cohesion: f64,
     /// Most particles this fluid may hold.
     pub max: usize,
+    /// Amount of foam and spray thrown by fast, breaking water: 0 (none) to 1 (a lot).
+    pub foam: f64,
+    /// Seconds a foam particle lives in the water (spray in the air fades faster).
+    pub foam_life: f64,
+    /// Most foam particles at once.
+    pub foam_max: usize,
 }
 
 impl Default for FluidParams {
@@ -30,14 +36,46 @@ impl Default for FluidParams {
             viscosity: 0.05,
             cohesion: 0.0,
             max: 4000,
+            foam: 0.0,
+            foam_life: 1.5,
+            foam_max: 2000,
         }
     }
+}
+
+/// A secondary particle: spray in the air, foam riding the surface. It never acts on the water.
+#[derive(Clone, Copy, Debug)]
+pub struct Foam {
+    pub pos: Vec2,
+    pub vel: Vec2,
+    pub age: f64,
+    pub life: f64,
+}
+
+fn splitmix(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
+}
+
+/// A value in [0, 1) for one random draw of the foam of one substep.
+fn unit(seed: u64, n: u64, attr: u64) -> f64 {
+    let h = splitmix(
+        splitmix(seed ^ n.wrapping_mul(0xd6e8_feb8_6659_fd93))
+            ^ attr.wrapping_mul(0xa076_1d64_78bd_642f),
+    );
+    (h >> 11) as f64 / (1u64 << 53) as f64
 }
 
 pub struct Fluid {
     params: FluidParams,
     pub pos: Vec<Vec2>,
     pub vel: Vec<Vec2>,
+    /// Foam and spray (empty unless `params.foam > 0`).
+    pub foam: Vec<Foam>,
+    seed: u64,
+    steps: u64,
     h: f64,
     c_poly6: f64,
     c_spiky: f64,
@@ -67,6 +105,9 @@ impl Fluid {
             params,
             pos: vec![],
             vel: vec![],
+            foam: vec![],
+            seed: 0,
+            steps: 0,
             h,
             c_poly6,
             c_spiky,
@@ -104,6 +145,20 @@ impl Fluid {
         f
     }
 
+    /// The seed of the random draws that decide where foam is born.
+    pub fn set_seed(&mut self, seed: u64) {
+        self.seed = seed;
+    }
+    pub fn add_foam(&mut self, pos: Vec2, vel: Vec2) {
+        if self.foam.len() < self.params.foam_max {
+            self.foam.push(Foam {
+                pos,
+                vel,
+                age: 0.0,
+                life: self.params.foam_life,
+            });
+        }
+    }
     pub fn params(&self) -> &FluidParams {
         &self.params
     }
@@ -212,11 +267,12 @@ impl Fluid {
         dt: f64,
         gravity: Vec2,
         iterations: usize,
-        world: Option<&mut World>,
+        mut world: Option<&mut World>,
         soft: &[SoftBody],
     ) {
         let n = self.pos.len();
         if n == 0 {
+            self.update_foam(dt, gravity, world.as_deref());
             return;
         }
         let s = self.params.spacing;
@@ -407,7 +463,7 @@ impl Fluid {
         self.pos = xs;
         self.vel = new_vel;
         // water pushes bodies back with the momentum of its push-out
-        if let Some(w) = world {
+        if let Some(w) = world.as_mut() {
             let m = self.params.density * s * s;
             for c in &contacts {
                 if c.dynamic && c.acc > 0.0 {
@@ -415,6 +471,11 @@ impl Fluid {
                 }
             }
         }
+        if self.params.foam > 0.0 {
+            self.update_foam(dt, gravity, world.as_deref());
+            self.spawn_foam(dt, &start, &list);
+        }
+        self.steps += 1;
         if let Some((lo, hi)) = self.bounds {
             let keep: Vec<bool> = self
                 .pos
@@ -426,6 +487,106 @@ impl Fluid {
                 self.pos.retain(|_| *it.next().unwrap());
                 let mut it = keep.iter();
                 self.vel.retain(|_| *it.next().unwrap());
+            }
+        }
+    }
+
+    /// Move the existing foam: it rides the water when it is inside it (and floats up), flies like a
+    /// projectile in the air, fades, and stops at rigid bodies.
+    fn update_foam(&mut self, dt: f64, gravity: Vec2, world: Option<&World>) {
+        if self.foam.is_empty() {
+            return;
+        }
+        let h = self.h;
+        let cell = h;
+        let key = |p: Vec2| ((p.y / cell).floor() as i64, (p.x / cell).floor() as i64);
+        let mut cells: Vec<(i64, i64, u32)> = self
+            .pos
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let (cy, cx) = key(*p);
+                (cy, cx, i as u32)
+            })
+            .collect();
+        cells.sort_unstable();
+        let s = self.params.spacing;
+        for f in self.foam.iter_mut() {
+            let (cy, cx) = key(f.pos);
+            let (mut k, mut vsum) = (0usize, Vec2::ZERO);
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let (ty, tx) = (cy + dy, cx + dx);
+                    let mut c = cells.partition_point(|e| (e.0, e.1) < (ty, tx));
+                    while c < cells.len() && (cells[c].0, cells[c].1) == (ty, tx) {
+                        let j = cells[c].2 as usize;
+                        if (self.pos[j] - f.pos).length_sq() < h * h {
+                            k += 1;
+                            vsum += self.vel[j];
+                        }
+                        c += 1;
+                    }
+                }
+            }
+            if k >= 5 {
+                // in the water: carried along, and lighter than water so it floats up; deep down it
+                // dissolves quickly, at the surface it lingers as foam
+                let vavg = vsum / k as f64;
+                f.vel += (vavg - f.vel) * 0.5;
+                f.vel += gravity * (-0.4 * dt);
+                f.age += if k >= 8 { dt * 4.0 } else { dt };
+            } else {
+                f.vel += gravity * dt;
+                f.age += dt * 1.5;
+            }
+            f.pos += f.vel * dt;
+            if let Some(w) = world {
+                for hit in w.circle_hits(f.pos, 0.25 * s, 0.0) {
+                    if hit.sep < 0.0 {
+                        f.pos += hit.normal * hit.sep;
+                    }
+                    let vn = (f.vel - hit.vel).dot(hit.normal);
+                    if vn > 0.0 {
+                        f.vel -= hit.normal * vn;
+                    }
+                }
+            }
+        }
+        self.foam.retain(|f| f.age < f.life);
+    }
+
+    /// Fast water at the surface throws spray and foam: a seeded draw per particle and substep.
+    fn spawn_foam(&mut self, dt: f64, start: &[usize], list: &[u32]) {
+        let (h2, s) = (self.h * self.h, self.params.spacing);
+        for i in 0..self.pos.len() {
+            if self.foam.len() >= self.params.foam_max {
+                break;
+            }
+            let sp = self.vel[i].length();
+            if sp <= 1.0 {
+                continue;
+            }
+            let near = list[start[i]..start[i + 1]]
+                .iter()
+                .filter(|&&j| (self.pos[i] - self.pos[j as usize]).length_sq() < h2)
+                .count();
+            if near > 5 {
+                continue; // only the surface throws foam; the bulk of the water does not
+            }
+            let weight = 1.0;
+            let lambda = self.params.foam * 6.0 * (sp - 1.0) * dt * weight;
+            let n = self.steps.wrapping_mul(1_000_003).wrapping_add(i as u64);
+            if unit(self.seed, n, 0) < lambda {
+                let jitter = v2(unit(self.seed, n, 1) - 0.5, unit(self.seed, n, 2) - 0.5);
+                let pos = self.pos[i] + jitter * (0.8 * s);
+                let vel = self.vel[i] * (0.7 + 0.5 * unit(self.seed, n, 3))
+                    + v2(unit(self.seed, n, 4) - 0.5, unit(self.seed, n, 5) - 0.5) * 0.8;
+                self.foam.push(Foam {
+                    pos,
+                    vel,
+                    age: 0.0,
+                    life: self.params.foam_life * (0.6 + 0.8 * unit(self.seed, n, 6)),
+                });
             }
         }
     }

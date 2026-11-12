@@ -167,3 +167,56 @@ fn bad_fluids_are_rejected() {
     ); // 100 particles into a 10 cap
     assert_eq!(err("fluid w:\n    spacing: 10\nscene \"s\" for 1.frame:\n    main:\n        w.pour(at: (1, 1), speed: (0, 0), width: 10)\n        wait 1.frame\n").code, "E-FLD-001");
 }
+
+#[test]
+fn foam_and_smoothness_are_settings_and_foam_appears_in_the_snapshot() {
+    let tank = TANK;
+    let with_foam = go(&format!("{tank}fluid water:\n    fill: rect(250, 480, 300, 80)\n    spacing: 10\n    foam: 1.0\n    smoothness: 1.2\n\nshape ball = circle(16, radius: 25, at: (400, 150))\nball.body(density: 3.0)\n\nscene \"s\" for 3.seconds:\n    main:\n        wait 3.seconds\n"));
+    let most = with_foam
+        .snapshots
+        .iter()
+        .map(|s| s["fluids"][0]["foam"].as_array().unwrap().len())
+        .max()
+        .unwrap();
+    assert!(most >= 5, "the ball's splash threw foam: {most}");
+    assert_eq!(with_foam.snapshots[0]["fluids"][0]["smoothness"], 1.2);
+    let first = &with_foam
+        .snapshots
+        .iter()
+        .find(|s| !s["fluids"][0]["foam"].as_array().unwrap().is_empty())
+        .unwrap()["fluids"][0]["foam"][0];
+    assert_eq!(
+        first.as_array().unwrap().len(),
+        3,
+        "foam entries are [x, y, age fraction]"
+    );
+    // off by default: no foam, the default smoothness is reported
+    let plain = go(&format!("{tank}fluid water:\n    fill: rect(250, 480, 300, 80)\n    spacing: 10\n\nscene \"s\" for 24.frames:\n    main:\n        wait 24.frames\n"));
+    assert!(plain
+        .snapshots
+        .iter()
+        .all(|s| s["fluids"][0]["foam"].as_array().unwrap().is_empty()));
+    // same seed and program give the same hashes
+    let s = format!("{tank}fluid water:\n    fill: rect(250, 480, 300, 80)\n    spacing: 10\n    foam: 0.7\n\nshape ball = circle(16, radius: 25, at: (400, 150))\nball.body(density: 3.0)\nscene \"s\" for 2.seconds:\n    main:\n        wait 2.seconds\n");
+    assert_eq!(go(&s).hashes, go(&s).hashes);
+}
+
+#[test]
+fn bad_foam_and_smoothness_values_are_rejected() {
+    assert_eq!(
+        err(&format!("fluid w:\n    foam: 2\n{FRAME}")).code,
+        "E-FLD-001"
+    );
+    assert_eq!(
+        err(&format!("fluid w:\n    foam: -0.1\n{FRAME}")).code,
+        "E-FLD-001"
+    );
+    assert_eq!(
+        err(&format!("fluid w:\n    smoothness: 0.2\n{FRAME}")).code,
+        "E-FLD-001"
+    );
+    assert_eq!(
+        err(&format!("fluid w:\n    smoothness: 9\n{FRAME}")).code,
+        "E-FLD-001"
+    );
+}

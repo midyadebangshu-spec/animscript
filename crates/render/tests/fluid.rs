@@ -48,3 +48,49 @@ fn dots_mode_draws_circles_and_rendering_is_repeatable() {
     let blob = render(&snapshot(), 1.0, false).unwrap();
     assert_eq!(blob.data(), render(&snapshot(), 1.0, false).unwrap().data());
 }
+
+fn dark(mut s: serde_json::Value) -> serde_json::Value {
+    s["background"] = json!("#000000");
+    s
+}
+
+fn covered(pm: &tiny_skia::Pixmap) -> usize {
+    (0..pm.height())
+        .flat_map(|y| (0..pm.width()).map(move |x| (x, y)))
+        .filter(|&(x, y)| {
+            let p = pm.pixel(x, y).unwrap();
+            p.red() as u32 + p.green() as u32 + p.blue() as u32 > 60
+        })
+        .count()
+}
+
+#[test]
+fn a_lower_smoothness_gives_a_crisper_smaller_surface() {
+    let mut loose = dark(snapshot());
+    loose["fluids"][0]["smoothness"] = json!(2.0);
+    let mut crisp = dark(snapshot());
+    crisp["fluids"][0]["smoothness"] = json!(1.2);
+    let (a, b) = (
+        covered(&render(&loose, 1.0, false).unwrap()),
+        covered(&render(&crisp, 1.0, false).unwrap()),
+    );
+    assert!(b < a, "crisp {b} vs loose {a}");
+    assert!(b > 3000, "but it still covers the block of particles: {b}"); // 10 x 6 particles at 10 px is 6000 px^2
+}
+
+#[test]
+fn foam_is_drawn_as_white_specks_that_fade() {
+    let mut s = dark(snapshot());
+    s["fluids"][0]["foam"] = json!([[50.0, 50.0, 0.0], [80.0, 50.0, 0.9]]);
+    let pm = render(&s, 1.0, false).unwrap();
+    let fresh = pm.pixel(50, 50).unwrap();
+    assert!(
+        fresh.red() > 230 && fresh.blue() > 230,
+        "a white speck: {fresh:?}"
+    );
+    let old = pm.pixel(80, 50).unwrap();
+    assert!(
+        old.red() < fresh.red() && old.red() > 0,
+        "older foam is fainter: {old:?} {fresh:?}"
+    );
+}

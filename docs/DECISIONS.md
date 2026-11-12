@@ -600,3 +600,32 @@ judgement calls I expect you to want to look at.
 132. **Limits.** The surface is only as fine as the spacing (8 px is a few thousand particles; halving it is
     four times the particles); water at walls has a small density deficit, so it settles about a spacing
     lower than the exact level; there is no air (no bubbles) and no two-way coupling with soft bodies.
+
+### Round 8 follow-up: finer water, a crisper surface, foam and spray
+
+133. **Why the water looked coarse.** It was the example's `spacing: 10` (a particle stands for a 10 px patch)
+    and a fixed blob radius of 1.6 spacings, not an engine limit. The example now uses `spacing: 5` (four
+    times the particles: about 2000 at the start, up to 4500 with the pour; 5 s for the 7 s scene in a release
+    build, so use `anim frames` and the release binary).
+134. **Smoothness.** `smoothness` (0.8 to 4, default 1.4) is the radius of the blob surface in particle
+    spacings. The renderer now normalises the density field by the value of a particle in the middle of a
+    perfect lattice, so the surface always sits at 18% to 30% of full density whatever the radius; lower
+    values are crisper, higher values rounder. The threshold is low enough that a lone droplet stays about
+    one spacing wide. A light rim just inside the edge gives the surface a meniscus highlight.
+135. **Depth shading** is measured from the surface of each connected run of water in its column (a gap of
+    more than 2.5 spacings starts a new run, so a droplet in the air is its own surface), over a fixed 90 px
+    from `color` to `color_end`, instead of from the highest particle in the column (which made the water
+    far too dark once there was spray) and independent of the spacing.
+136. **Foam and spray.** `foam` (0 to 1, default 0 = none) turns on secondary particles that never act on the
+    water. Each substep, a water particle moving faster than 1 m/s and near the surface (at most 5 neighbours
+    within the smoothing radius, against 8 at rest) throws a foam particle with probability
+    `foam * 6 * (speed - 1) * dt`, drawn from a seeded stream (project seed, scene, fluid, substep, particle),
+    so replays are identical. A foam particle in water (5 or more neighbours) is carried with the local water
+    velocity and floats up; deep inside (8 or more) it dissolves four times faster, so only the surface keeps
+    foam; in the air it flies as a projectile and ages 1.5 times faster. It stops at rigid bodies. Life is
+    1.5 s (0.6 to 1.4 times that), at most 2000 per fluid.
+137. **Output.** The snapshot's fluid entries gained `smoothness` and `foam` (`[x, y, age fraction]` per
+    particle); the renderer draws foam as small white specks that shrink and fade with age, after the water.
+    Both are part of the hash. `E-FLD-001` also covers `foam` outside 0 to 1 and `smoothness` outside 0.8 to 4.
+138. **Not done.** True air (two-phase flow with bubbles and trapped pockets) stays out: a 1000:1 density ratio
+    is unstable in this kind of solver and doubles the particles.

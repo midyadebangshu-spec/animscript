@@ -320,3 +320,91 @@ fn fifteen_hundred_particles_simulate_within_budget() {
     let took = start.elapsed().as_secs_f64();
     assert!(took < 40.0, "{} particles took {took:.1} s", f[0].len());
 }
+
+// ---- foam and spray ---------------------------------------------------------------------------
+
+fn splash(foam: f64, seed: u64) -> (World, [Fluid; 1]) {
+    let mut w = World::new(G);
+    tank(&mut w, 1.6, 3.0);
+    let mut f = [Fluid::new(FluidParams {
+        spacing: S,
+        foam,
+        ..FluidParams::default()
+    })];
+    f[0].set_seed(seed);
+    block(&mut f[0], -0.8, 2.4, 1.6, 0.6); // a pool
+    block(&mut f[0], -0.3, 1.0, 0.6, 0.5); // and a block dropped into it: a splash
+    (w, f)
+}
+
+#[test]
+fn foam_is_off_by_default_and_a_splash_makes_foam_when_asked() {
+    let (mut w, mut f) = splash(0.0, 1);
+    run(&mut w, &mut f, 1.5);
+    assert!(f[0].foam.is_empty(), "no foam unless asked for");
+    let (mut w, mut f) = splash(1.0, 1);
+    let mut most = 0;
+    for _ in 0..(2.0 / DT) as usize {
+        coupled_step(Some(&mut w), &mut [], &mut f, G, DT, 4, 4, 3);
+        most = most.max(f[0].foam.len());
+    }
+    assert!(most >= 10, "the splash threw foam and spray: {most}");
+    assert!(most <= f[0].params().foam_max);
+}
+
+#[test]
+fn foam_obeys_its_lifetime_the_walls_and_the_floor() {
+    let (mut w, mut f) = splash(1.0, 1);
+    run(&mut w, &mut f, 1.0);
+    for p in &f[0].foam {
+        assert!(p.age < p.life);
+        assert!(
+            p.pos.y < 3.0 + 1e-3 && p.pos.x.abs() < 0.8 + 0.05,
+            "foam left the tank: {:?}",
+            p.pos
+        );
+    }
+    // with no more splashing, everything dies off within the lifetime
+    let life = f[0].params().foam_life;
+    run(&mut w, &mut f, 3.0 + life);
+    assert!(
+        f[0].foam.len() < 40,
+        "the foam of a calm pool fades away: {}",
+        f[0].foam.len()
+    );
+}
+
+#[test]
+fn spray_in_the_air_falls_and_foam_is_seeded_and_reproducible() {
+    let (mut w, mut f) = splash(1.0, 5);
+    let (mut w2, mut f2) = splash(1.0, 5);
+    let (mut w3, mut f3) = splash(1.0, 6);
+    run(&mut w, &mut f, 0.8);
+    run(&mut w2, &mut f2, 0.8);
+    run(&mut w3, &mut f3, 0.8);
+    let bits = |f: &Fluid| {
+        f.foam
+            .iter()
+            .map(|p| (p.pos.x.to_bits(), p.pos.y.to_bits()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(bits(&f[0]), bits(&f2[0]));
+    assert_ne!(bits(&f[0]), bits(&f3[0]));
+    assert!(!f[0].foam.is_empty());
+}
+
+#[test]
+fn a_foam_particle_in_the_air_falls_under_gravity() {
+    let mut f = [Fluid::new(FluidParams {
+        spacing: S,
+        foam: 1.0,
+        ..FluidParams::default()
+    })];
+    f[0].add_foam(v2(0.0, 0.0), v2(0.0, 0.0));
+    let y0 = f[0].foam[0].pos.y;
+    for _ in 0..12 {
+        coupled_step(None, &mut [], &mut f, G, DT, 4, 4, 3);
+    }
+    // half a second would be 1.2 m, but the spray's life is short: it must have fallen clearly
+    assert!(f[0].foam[0].pos.y > y0 + 0.2, "{}", f[0].foam[0].pos.y);
+}

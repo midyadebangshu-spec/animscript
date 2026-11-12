@@ -1497,7 +1497,9 @@ wall_r.body(kind: static)
 
 fluid water:
     fill: rect(170, 450, 460, 110)     # a block of water, in px (or a shape: its faces are filled)
-    spacing: 10                        # distance between particles in px: smaller = finer and slower
+    spacing: 5                         # distance between particles in px: smaller = finer and slower
+    smoothness: 1.3                    # a crisper surface
+    foam: 0.8                          # spray and foam where it splashes
     viscosity: 0.05                    # 0 = water, higher = syrup (0 to 1)
     color: #62b0f0dd                   # at the surface (alpha allowed) ...
     color_end: #1f4f9add               # ... and deep down
@@ -1517,6 +1519,8 @@ scene "s" for 7.seconds:
 | `density` | kg per square metre | `1` |
 | `viscosity` | 0 to 1 | `0.05` |
 | `surface_tension` | pull between neighbours (droplets) | `0` |
+| `foam` | 0 to 1: foam and spray thrown where fast water breaks the surface | `0` |
+| `smoothness` | 0.8 to 4: radius of the blob surface in spacings (lower = crisper) | `1.4` |
 | `color`, `color_end` | surface and deep colour, alpha allowed | light blue |
 | `render` | `"blob"` (smooth surface) or `"dots"` | `"blob"` |
 | `behind` | draw under the shapes instead of over them | `false` |
@@ -1529,6 +1533,8 @@ scene "s" for 7.seconds:
   `water.count` is the number of particles.
 - **Bodies:** dynamic bodies are pushed and buoyed by water; give a body `density` below 1 to float it. Soft
   shapes are obstacles for water but are not pushed by it.
+- **Foam and spray** are decorative: they never push the water or anything else, they are seeded (the same
+  program always throws the same foam) and only the surface produces them.
 - **Cost:** a few thousand particles is normal; halving `spacing` is four times the particles and cost. Render
   many frames at once with `anim frames` (it simulates once).
 - Each scene starts again from the `fill` region. In `world:` the settings `fluid_substeps` (4) and
