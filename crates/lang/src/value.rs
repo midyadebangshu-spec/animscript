@@ -1,5 +1,8 @@
 //! Runtime values, exact rationals for durations, and easing functions.
+use crate::ast::Expr;
+use crate::interp::Vars;
 use animscript_core::{ElemRef, Kind, Shape};
+use std::rc::Rc;
 
 /// An exact rational number (durations are exact; spec §3.1, §5.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -197,6 +200,15 @@ pub enum Value {
     SceneObj,
     Fresh(Box<Shape>),
     Pending(Box<ActionReq>),
+    Lambda(Rc<LambdaData>),
+}
+
+/// A lambda with the variables visible where it was written (captured by value).
+#[derive(Clone, Debug)]
+pub struct LambdaData {
+    pub params: Vec<String>,
+    pub body: Rc<Expr>,
+    pub vars: Vars,
 }
 
 impl Value {
@@ -223,6 +235,7 @@ impl Value {
             Value::Ease(_) => "Easing",
             Value::SceneObj => "Scene",
             Value::Pending(_) => "Action",
+            Value::Lambda(_) => "Lambda",
         }
     }
     pub fn as_f64(&self) -> Option<f64> {

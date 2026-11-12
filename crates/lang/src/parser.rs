@@ -602,7 +602,67 @@ impl Parser {
     // ---- expressions -------------------------------------------------------------------
 
     pub fn expr(&mut self) -> Res<Expr> {
+        if let Some(l) = self.lambda()? {
+            return Ok(l);
+        }
         self.binary(0)
+    }
+
+    /// `name -> expr` or `(a, b) -> expr`; the body extends as far right as an expression can.
+    fn lambda(&mut self) -> Res<Option<Expr>> {
+        let start = self.peek().span;
+        let mut params = vec![];
+        let mut skip;
+        if matches!(self.peek().t, T::Ident(_)) && matches!(self.peek_at(1).t, T::Op("->")) {
+            if let T::Ident(n) = &self.peek().t {
+                params.push(n.clone());
+            }
+            skip = 2;
+        } else if self.at_op("(") {
+            let mut k = 1;
+            loop {
+                match &self.peek_at(k).t {
+                    T::Ident(s) => params.push(s.clone()),
+                    _ => return Ok(None),
+                }
+                k += 1;
+                match self.peek_at(k).t {
+                    T::Op(",") => k += 1,
+                    T::Op(")") => {
+                        k += 1;
+                        break;
+                    }
+                    _ => return Ok(None),
+                }
+            }
+            if !matches!(self.peek_at(k).t, T::Op("->")) {
+                return Ok(None);
+            }
+            skip = k + 1;
+        } else {
+            return Ok(None);
+        }
+        if params.len() > 2 {
+            return Err(Diagnostic::new(
+                "E-SYN-001",
+                "a lambda takes one or two parameters: the element and, optionally, its index",
+            )
+            .at(start)
+            .help("write `v -> v.x > 0` or `(v, i) -> i % 2 == 0`"));
+        }
+        while skip > 0 {
+            self.next();
+            skip -= 1;
+        }
+        let body = self.expr()?;
+        let span = start.to(body.span);
+        Ok(Some(Expr {
+            kind: ExprKind::Lambda {
+                params,
+                body: Rc::new(body),
+            },
+            span,
+        }))
     }
 
     fn binary(&mut self, level: usize) -> Res<Expr> {

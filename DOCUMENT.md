@@ -945,10 +945,50 @@ sq1.mid.bend(10.degrees)
 | `x.delete()` or `s.delete(x)` | Remove an element; the IDs of the rest stay |
 | `e.bend(angle)` | Curve an edge (|angle| < 90°; positive bulges to the right of travel, outward for a normal shape) |
 | `e.set_handle(x, y)`, `e.set_handles(p1, p2)`, `e.straighten()` | Explicit quadratic / cubic Bézier handles, or back to straight |
+| `e.dissolve()` | Remove an edge shared by two faces, merging them (lower face ID survives) |
+| `v.dissolve()` | Remove a vertex that has exactly two straight edges, merging the edges |
+| `f.inset(amount)` | Shrink a face inward, leaving a ring of new faces (the face keeps its ID as the inner face) |
+| `s.mirror(x: 400)` | Add a reflected copy joined to the shape (also `y:`, `line: ((x1, y1), (x2, y2))`, `faces:`, `weld:`) |
+| `s.flip(x: 400)` | Reflect the whole shape in place (same axes) |
 | `a.morph_to(b)` | Move every vertex of `a` to the matching vertex of `b` |
 
 Edges are straight by default. Deleting a vertex deletes its edges and the faces using them; deleting an edge
 deletes the faces using it; deleting a face deletes only the face.
+
+### Selections and lambdas
+
+`s.vertices`, `s.edges`, `s.faces` and `x.children` are lists of elements. Lists have selection methods, and
+operations on a list apply to every element in it:
+
+```anim
+let ring = flower.f1.vertices
+ring.every(2).bevel(45)                          # 1st, 3rd, 5th ...
+ring.every(2, offset: 1).move_by(0, -5)          # 2nd, 4th ...
+flower.vertices.where(v -> v.x > 400)            # a lambda picks by a test
+flower.vertices.where((v, i) -> i % 2 == 0)      # the lambda may also take the index
+flower.edges.where(e -> e.length > 100).subdivide(2)
+flower.vertices.nearest((400, 300), 3).move_by(0, 10)
+```
+
+| Method | Result |
+|---|---|
+| `every(n, offset: 0)` | every n-th element starting at `offset` |
+| `first(n)`, `last(n)`, `skip(n)`, `reverse()` | the obvious sub-lists |
+| `where(v -> test)` or `where((v, i) -> test)` | elements for which the test is true |
+| `nearest(point, n)` | the `n` closest elements (default 1) |
+| `union(other)`, `except(other)` | set operations, order kept, no duplicates |
+| `count` | the number of elements |
+
+Elements expose `id`, `x`, `y`, `position` (a vertex, an edge's midpoint, a face's centroid), `length` (edges) and
+`area` (faces) so tests can use them. Lambdas see the variables around them.
+
+Operations that work on a whole list: `move_by`, `move_to` (moves the group so its centroid lands on the target;
+a vertex shared by several selected elements moves once), `subdivide`, `extrude`, `bevel`, `round`, `dissolve`,
+`inset` (face by face), `delete`, `bend`, `set_handle(s)`, `straighten`. If an earlier step of the same call
+removes an element that is later in the list (deleting a vertex also removes its edges), that element is skipped.
+
+At runtime, selections and lambdas are fine (they only read) and `list.move_by(...) over 0.3.seconds` is one
+action on all of its vertices.
 
 ### Two modes
 
@@ -1000,7 +1040,7 @@ Helpers: `unit_vector(angle)`, `direction_to(a, b)`, `distance(a, b)`, `center(s
 | `E-SHP-002` | Unknown vertex/edge/face ID, or one that was deleted or replaced |
 | `E-SHP-003` | Operation not allowed at runtime (topology change after setup); also caught by `anim check` |
 | `E-SHP-004` | Duplicate semantic name |
-| `E-SHP-005` | Invalid argument or operation not applicable (e.g. bevel radius longer than the edge) |
+| `E-SHP-005` | Invalid argument or operation not applicable (e.g. bevel radius longer than the edge, dissolving an edge that is not between two faces, inset too large) |
 | `W-SHP-010` | Degenerate face (zero area) or self-intersection after an edit |
 
 ### Worked example: a square becomes a flower
@@ -1025,13 +1065,32 @@ for i in 0..15:
     else:
         ring[i].move_to(c + unit_vector(a) * 110)
 
-# 4. Bevel the eight tips.
-for i in 0..15:
-    if i % 2 == 0:
-        ring[i].bevel(45)
+# 4. Bevel the eight tips: every second vertex of the ring.
+ring.every(2).bevel(45)
 
 # 5. Round the whole outline (Chaikin subdivision, twice).
 flower.smooth(2)
+```
+
+### Worked example: a leaf from half an outline
+
+`examples/leaf.anim` (picture: `examples/leaf.png`) uses `mirror`, `dissolve`, `smooth` and `inset`:
+
+```anim
+# 1. Draw only the right half. v1 and v5 sit on the axis x = 400.
+shape leaf = polygon([(400, 60), (445, 150), (545, 300), (445, 450), (400, 540)])
+
+# 2. Add the mirror image. Vertices on the axis are shared, so the halves are glued together.
+leaf.mirror(x: 400)
+
+# 3. The seam (e5) is now inside the shape; dissolving it merges the two faces into one outline.
+leaf.e5.dissolve()
+
+# 4. Round the outline (Chaikin, twice).
+leaf.smooth(2)
+
+# 5. Inset the face: an inner leaf plus a ring of border faces.
+leaf.f1.inset(10)
 ```
 
 ---

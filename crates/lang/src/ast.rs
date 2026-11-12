@@ -36,6 +36,11 @@ pub enum ExprKind {
     List(Vec<Expr>),
     /// Inclusive range `a..b`.
     Range(Box<Expr>, Box<Expr>),
+    /// `v -> expr` or `(v, i) -> expr`.
+    Lambda {
+        params: Vec<String>,
+        body: Rc<Expr>,
+    },
 }
 
 #[derive(Clone, Debug)]

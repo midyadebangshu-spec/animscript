@@ -161,3 +161,66 @@ judgement calls I expect you to want to look at.
     dark grey. Rendering is a pure function of the snapshot.
 40. **Golden test.** The finished flower is stored as a quantised digest (`tests/golden/flower.json`);
     regenerate with `UPDATE_GOLDEN=1 cargo test -p animscript-lang --test flower`.
+
+## Round 2: dissolve, inset, selection sets, lambdas, mirror and flip
+
+41. **Lambda syntax (approved).** `v -> expr` and `(v, i) -> expr` (element, index). The body extends as far
+    right as an expression can, so `where(v -> v.x > 0 and v.y < 5)` works. Lambdas capture the variables in
+    scope *by value* when they are written. They take one or two parameters (`E-SYN-001` otherwise). In this
+    build they are only meaningful as the argument of `where`; a lambda is a first-class value but nothing
+    else calls it yet.
+42. **Selections are plain lists.** `s.vertices`, `s.edges`, `s.faces` and `x.children` are lists of element
+    references; no new value type. Selection methods: `every(n, offset: 0)`, `first(n)`, `last(n)`, `skip(n)`,
+    `reverse()`, `where(lambda)`, `nearest(point, n = 1)` (stable on ties, measured from an element's anchor),
+    `union(other)` and `except(other)` (order of first appearance, no duplicates), plus the list attribute
+    `count`. Lists stay 0-based. Selection methods work at runtime too (they only read).
+43. **Element attributes added for lambdas.** `id` (also works on retired elements), `x` / `y` / `position`
+    for every kind (vertex position, edge midpoint, face centroid: the same anchor `move_to` uses),
+    `length` for edges (the chord between the end vertices) and `area` for faces (absolute value).
+44. **Broadcast.** These element operations also work on a list: `subdivide`, `extrude`, `bevel`, `round`,
+    `dissolve`, `inset`, `delete`, `bend`, `set_handle(s)`, `straighten`. They run one element after the other
+    with the same arguments and the first error aborts (a build-time error aborts the whole program, so a
+    partial result is never observable). An element that an *earlier step of the same call* removed (for example
+    an edge deleted together with its vertex) is **skipped**; an element that was already dead before the call
+    is still `E-SHP-002`.
+45. **Group moves.** `list.move_by(dx, dy)` moves every distinct vertex of the selection once (a vertex shared
+    by two selected edges is not moved twice). `list.move_to(x, y)` is a *group* move: the centroid of the
+    distinct vertices lands on `(x, y)` and the shape of the selection is kept. With `over` it is one action
+    (one `ACT+` trace line), whose channels are all the vertices at once.
+46. **New operations are topology operations**, so they are `E-SHP-003` at runtime, statically and
+    dynamically: `dissolve`, `inset`, `mirror`, `flip` (and the existing ones). `flip` is classified that way
+    because it reverses face loops.
+47. **`dissolve` on an edge** needs exactly two faces on it, wound consistently (opposite directions on the
+    shared edge); otherwise `E-SHP-005`. The lower face ID survives with the merged loop; the other is retired
+    as *replaced* and lists the survivor as its `children`, so a stale reference gets the hint "use f1". The
+    edge is retired as deleted. Vertices are never removed, even if they end up with two edges (dissolve them
+    separately).
+48. **`dissolve` on a vertex** needs exactly two straight edges (a curved edge would lose its shape:
+    `E-SHP-005` with a hint). The lower edge ID survives, rewired to the far end of the other; the vertex and
+    the other edge are retired. A face left with fewer than 3 edges is removed with `W-SHP-010`. Dissolving a
+    face is an error (use `delete`).
+49. **`inset(amount)`** shrinks a face so that every edge moves inward by `amount` (corners follow the mitre).
+    It creates one inner vertex per corner, a spoke edge per corner, an inner edge per side and one ring face
+    per original side (so a selection of faces is inset face by face, each with its own ring: "do what is
+    best", because overlapping rings are never wanted). The original face **keeps its ID and becomes the inner
+    face**. New elements have the face as `parent`. Needs straight edges. `E-SHP-005` if the amount is not
+    positive, a corner folds back, or the inner face would collapse or invert; a local self-intersection of the
+    result (very sharp or very short corners relative to the amount) is `W-SHP-010`.
+50. **`flip(x:|y:|line:)`** reflects the whole shape in place. No ID changes; every live face loop is reversed
+    so the winding convention (and the sign of its area) is kept, and curve handles are reflected (the
+    sideways component of each handle changes sign). Whole shape only; flipping part of a connected shape would
+    tear it.
+51. **`mirror(x:|y:|line:, faces:, weld:)`** adds a reflected copy joined to the original. Vertices within
+    `weld` (default 1e-6) of the axis are *shared*, and so are straight edges whose ends are both shared, so a
+    half shape closes into a symmetric one. New elements are created in source-ID order (vertices, then edges,
+    then faces) with the original as `parent` (so `v2.children` is `[v6]`). Each mirrored face is the
+    reversed loop, so it has the *same winding as its original* and the seam is walked in opposite
+    directions by the two faces (which is what `dissolve` needs). Curved edges are duplicated with reflected
+    handles even when both ends are on the axis. `faces:` (a list of faces of this shape) mirrors only those
+    faces together with their edges and vertices; default is the whole shape. `E-SHP-005` if every vertex is on
+    the line.
+52. **Mirror lines.** `x: 400` is the vertical line x = 400, `y: 300` the horizontal line y = 300,
+    `line: ((x1, y1), (x2, y2))` any line through two different points. Exactly one of the three must be given
+    (`E-TYP-003`).
+53. **Known limitation.** `smooth` after `mirror` needs the seam dissolved first (`leaf.e5.dissolve()`), which
+    the leaf example does. There is still no per-face colour, so an inset ring and the inner face share one fill.

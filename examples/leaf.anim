@@ -1,0 +1,36 @@
+project "Leaf":
+    anim_version: "0.1"
+    canvas: 800x600
+    fps: 24
+    background: #f6f1e4
+
+## A leaf from half an outline: mirror, dissolve the seam, smooth, inset.
+
+# 1. Draw only the right half. v1 and v5 sit on the axis x = 400.
+shape leaf = polygon([(400, 60), (445, 150), (545, 300), (445, 450), (400, 540)])
+
+# 2. Add the mirror image. Vertices on the axis are shared, so the halves are glued together.
+leaf.mirror(x: 400)
+
+# 3. The seam (e5) is now inside the shape; dissolving it merges the two faces into one outline.
+leaf.e5.dissolve()
+
+# 4. Round the outline (Chaikin, twice).
+leaf.smooth(2)
+
+# 5. Inset the face: an inner leaf plus a ring of border faces.
+leaf.f1.inset(10)
+
+leaf.fill = #7fb85a
+leaf.stroke = #2f6b2a
+leaf.stroke_width = 2
+
+# The central vein is just a line.
+shape vein = line((400, 60), (400, 540))
+vein.stroke = #2f6b2a
+vein.stroke_width = 4
+vein.z = 1
+
+scene "Grow" for 1.second:
+    main:
+        wait 1.second

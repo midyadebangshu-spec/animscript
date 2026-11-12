@@ -131,6 +131,7 @@ fn walk_expr(it: &Interp, e: &Expr, out: &mut Vec<Diagnostic>) {
             walk_expr(it, b, out);
         }
         ExprKind::Tuple(v) | ExprKind::List(v) => v.iter().for_each(|x| walk_expr(it, x, out)),
+        ExprKind::Lambda { body, .. } => walk_expr(it, body, out),
         _ => {}
     }
 }

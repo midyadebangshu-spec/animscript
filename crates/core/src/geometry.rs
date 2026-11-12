@@ -1460,6 +1460,456 @@ impl Shape {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Dissolve, inset, flip, mirror, group moves
+// ---------------------------------------------------------------------------------------------
+
+/// A mirror line.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Axis {
+    /// The vertical line `x = value`.
+    X(f64),
+    /// The horizontal line `y = value`.
+    Y(f64),
+    /// The line through two distinct points.
+    Line(P, P),
+}
+
+impl Axis {
+    fn check(self) -> Res<()> {
+        if let Axis::Line(a, b) = self {
+            if (b[0] - a[0]).hypot(b[1] - a[1]) < 1e-12 {
+                return Err(invalid("a mirror line needs two different points")
+                    .help("write `line: ((0, 0), (100, 100))`"));
+            }
+        }
+        Ok(())
+    }
+    /// Signed distance from the line.
+    fn signed(self, p: P) -> f64 {
+        match self {
+            Axis::X(a) => p[0] - a,
+            Axis::Y(a) => p[1] - a,
+            Axis::Line(a, b) => {
+                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                let l = dx.hypot(dy);
+                ((p[0] - a[0]) * -dy + (p[1] - a[1]) * dx) / l
+            }
+        }
+    }
+    pub fn distance(self, p: P) -> f64 {
+        self.signed(p).abs()
+    }
+    pub fn reflect(self, p: P) -> P {
+        match self {
+            Axis::X(a) => [2.0 * a - p[0], p[1]],
+            Axis::Y(a) => [p[0], 2.0 * a - p[1]],
+            Axis::Line(a, b) => {
+                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                let l = dx.hypot(dy);
+                let (nx, ny) = (-dy / l, dx / l);
+                let d = self.signed(p);
+                [p[0] - 2.0 * d * nx, p[1] - 2.0 * d * ny]
+            }
+        }
+    }
+}
+
+fn negate_curve(c: &Curve) -> Curve {
+    // a reflection reverses handedness, so the sideways component of every handle changes sign
+    match c {
+        Curve::Straight => Curve::Straight,
+        Curve::Quad([u, w]) => Curve::Quad([*u, -w]),
+        Curve::Cubic([u1, w1], [u2, w2]) => Curve::Cubic([*u1, -w1], [*u2, -w2]),
+    }
+}
+
+impl Shape {
+    /// The mean of the distinct vertices of a group of elements.
+    pub fn group_anchor(&self, refs: &[ElemRef]) -> P {
+        let ids: BTreeSet<u32> = refs
+            .iter()
+            .flat_map(|r| self.element_vertices(*r))
+            .collect();
+        let n = ids.len().max(1) as f64;
+        [
+            ids.iter().map(|i| self.pos(*i)[0]).sum::<f64>() / n,
+            ids.iter().map(|i| self.pos(*i)[1]).sum::<f64>() / n,
+        ]
+    }
+
+    /// Move a group of elements together; a vertex shared by several of them moves exactly once.
+    pub fn move_group_by(&mut self, refs: &[ElemRef], dx: f64, dy: f64) -> Res<()> {
+        for r in refs {
+            self.require_live(*r, None, "move_by")?;
+        }
+        let ids: BTreeSet<u32> = refs
+            .iter()
+            .flat_map(|r| self.element_vertices(*r))
+            .collect();
+        let ids: Vec<u32> = ids.into_iter().collect();
+        self.shift(&ids, dx, dy);
+        self.post_edit("move_by");
+        Ok(())
+    }
+
+    /// Remove faces left with fewer than 3 edges by an edit, warning about each (`W-SHP-010`).
+    fn prune_short_faces(&mut self, by: &str) {
+        for fid in self.live_ids(Kind::F) {
+            if self.faces[&fid].loop_.len() < 3 {
+                self.retire(
+                    f(fid),
+                    State::Deleted,
+                    format!("removed because {by} left it with fewer than 3 edges"),
+                );
+                if self.warn_on_edit {
+                    self.warnings.push(
+                        Diagnostic::new(
+                            "W-SHP-010",
+                            format!(
+                                "degenerate face `{}` collapsed and was removed by {by}",
+                                self.label(f(fid))
+                            ),
+                        )
+                        .help("edit fewer vertices, or rebuild the face"),
+                    );
+                }
+            }
+        }
+    }
+
+    // ---- dissolve -------------------------------------------------------------------------
+
+    /// Remove an edge that two faces share, merging them into one (the lower face ID survives), or
+    /// remove a vertex that has exactly two edges, merging those edges into one.
+    pub fn dissolve(&mut self, r: ElemRef) -> Res<()> {
+        self.require_live(r, None, "dissolve")?;
+        match r.kind {
+            Kind::E => self.dissolve_edge(r.id)?,
+            Kind::V => self.dissolve_vertex(r.id)?,
+            Kind::F => {
+                return Err(invalid(format!(
+                    "`{}` is a face; `dissolve` works on an edge or a vertex",
+                    self.label(r)
+                ))
+                .help(
+                    "dissolve an edge to merge the two faces it separates, or `delete` the face",
+                ))
+            }
+        }
+        self.post_edit("dissolve");
+        Ok(())
+    }
+
+    fn dissolve_edge(&mut self, eid: u32) -> Res<()> {
+        let lbl = self.label(e(eid));
+        let uses: Vec<(u32, usize)> = self
+            .live_ids(Kind::F)
+            .into_iter()
+            .flat_map(|fid| {
+                self.faces[&fid]
+                    .loop_
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, x)| x.0 == eid)
+                    .map(move |(i, _)| (fid, i))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        if uses.len() != 2 || uses[0].0 == uses[1].0 {
+            return Err(invalid(format!("`{lbl}` is used by {} face side(s); `dissolve` needs an edge between exactly two faces", uses.len()))
+                .help("use `delete` to remove an edge together with the faces using it"));
+        }
+        let ((fa, i), (fb, j)) = (uses[0], uses[1]);
+        let (la, lb) = (self.faces[&fa].loop_.clone(), self.faces[&fb].loop_.clone());
+        if la[i].1 == lb[j].1 {
+            return Err(invalid(format!(
+                "the two faces around `{lbl}` are wound in opposite senses and cannot be merged"
+            ))
+            .help("`flip` one of them, or rebuild the faces with the same winding"));
+        }
+        let mut merged = Vec::with_capacity(la.len() + lb.len() - 2);
+        merged.extend_from_slice(&la[i + 1..]);
+        merged.extend_from_slice(&la[..i]);
+        merged.extend_from_slice(&lb[j + 1..]);
+        merged.extend_from_slice(&lb[..j]);
+        self.faces.get_mut(&fa).unwrap().loop_ = merged;
+        self.retire(
+            f(fb),
+            State::Replaced,
+            format!("dissolved into {}", self.label(f(fa))),
+        );
+        self.meta_mut(f(fb)).unwrap().children.push(fa);
+        self.retire(e(eid), State::Deleted, "dissolved".into());
+        Ok(())
+    }
+
+    fn dissolve_vertex(&mut self, vid: u32) -> Res<()> {
+        let lbl = self.label(v(vid));
+        let inc: Vec<u32> = self
+            .live_ids(Kind::E)
+            .into_iter()
+            .filter(|i| self.edges[i].a == vid || self.edges[i].b == vid)
+            .collect();
+        if inc.len() != 2 {
+            return Err(invalid(format!(
+                "`{lbl}` has {} edges; `dissolve` needs a vertex with exactly two",
+                inc.len()
+            ))
+            .help("use `delete` to remove a vertex together with its edges"));
+        }
+        if inc.iter().any(|i| self.edges[i].curve != Curve::Straight) {
+            return Err(invalid(format!(
+                "an edge at `{lbl}` is curved, so merging the two edges would lose the curve"
+            ))
+            .help("`straighten()` the edges first if that is what you want"));
+        }
+        let (ea, eb) = (inc[0], inc[1]);
+        let far = |s: &Shape, id: u32| {
+            let ed = &s.edges[&id];
+            if ed.a == vid {
+                ed.b
+            } else {
+                ed.a
+            }
+        };
+        let (fa, fb) = (far(self, ea), far(self, eb));
+        if fa == fb {
+            return Err(invalid(format!(
+                "both edges at `{lbl}` join the same two vertices"
+            )));
+        }
+        {
+            let ed = self.edges.get_mut(&ea).unwrap();
+            if ed.a == vid {
+                ed.a = fb;
+            } else {
+                ed.b = fb;
+            }
+        }
+        for fc in self
+            .faces
+            .values_mut()
+            .filter(|x| x.meta.state == State::Live)
+        {
+            fc.loop_.retain(|x| x.0 != eb);
+        }
+        self.retire(
+            e(eb),
+            State::Deleted,
+            format!("dissolved together with {lbl}"),
+        );
+        self.retire(v(vid), State::Deleted, "dissolved".into());
+        self.prune_short_faces("a dissolve");
+        Ok(())
+    }
+
+    // ---- inset ----------------------------------------------------------------------------
+
+    /// Shrink a face inward by `amount` (the distance from every edge), leaving a ring of new faces.
+    /// The face keeps its ID and becomes the inner face.
+    pub fn inset(&mut self, r: ElemRef, amount: f64) -> Res<()> {
+        self.require_live(r, Some(Kind::F), "inset")?;
+        let lbl = self.label(r);
+        if !(amount > 0.0 && amount.is_finite()) {
+            return Err(invalid("`inset` needs a positive amount").help("write `inset(20)`"));
+        }
+        let fc = self.faces[&r.id].clone();
+        if let Some(&(eid, _)) = fc
+            .loop_
+            .iter()
+            .find(|x| self.edges[&x.0].curve != Curve::Straight)
+        {
+            return Err(invalid(format!(
+                "`{lbl}` has a curved edge (`{}`)",
+                self.label(e(eid))
+            ))
+            .help("call `straighten()` on its edges first; inset works on straight-sided faces"));
+        }
+        let n = fc.loop_.len();
+        let corners: Vec<u32> = fc
+            .loop_
+            .iter()
+            .map(|&(eid, s)| self.start_vertex(eid, s))
+            .collect();
+        let p: Vec<P> = corners.iter().map(|c| self.pos(*c)).collect();
+        let area = shoelace(&p);
+        if area.abs() < 1e-12 {
+            return Err(invalid(format!("`{lbl}` has no area")));
+        }
+        // inward unit normal of every edge i (from p[i] to p[i + 1]): the left side for a counter-clockwise face
+        let mut normal = Vec::with_capacity(n);
+        for i in 0..n {
+            let (a, b) = (p[i], p[(i + 1) % n]);
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let l = dx.hypot(dy);
+            if l < 1e-12 {
+                return Err(invalid(format!("`{lbl}` has an edge of zero length")));
+            }
+            let left = [dy / l, -dx / l];
+            normal.push(if area < 0.0 {
+                left
+            } else {
+                [-left[0], -left[1]]
+            });
+        }
+        let mut q: Vec<P> = Vec::with_capacity(n);
+        for i in 0..n {
+            let (n0, n1) = (normal[(i + n - 1) % n], normal[i]);
+            let denom = 1.0 + n0[0] * n1[0] + n0[1] * n1[1];
+            if denom < 1e-9 {
+                return Err(invalid(format!(
+                    "`{lbl}` has a corner that folds back on itself"
+                )));
+            }
+            let k = amount / denom;
+            q.push([p[i][0] + (n0[0] + n1[0]) * k, p[i][1] + (n0[1] + n1[1]) * k]);
+        }
+        let new_area = shoelace(&q);
+        if new_area * area <= 0.0 || new_area.abs() >= area.abs() {
+            return Err(
+                invalid(format!("an inset of {amount} is too large for `{lbl}`"))
+                    .help("the inner face would collapse or turn inside out; use a smaller amount"),
+            );
+        }
+        let parent = Some(r);
+        let qv: Vec<u32> = q
+            .iter()
+            .map(|pt| self.new_vertex(pt[0], pt[1], parent))
+            .collect();
+        let spokes: Vec<u32> = (0..n)
+            .map(|i| self.new_edge(corners[i], qv[i], parent))
+            .collect();
+        let inner: Vec<u32> = (0..n)
+            .map(|i| self.new_edge(qv[i], qv[(i + 1) % n], parent))
+            .collect();
+        for i in 0..n {
+            let next = (i + 1) % n;
+            let loop_ = vec![
+                fc.loop_[i],
+                (spokes[next], 1),
+                (inner[i], -1),
+                (spokes[i], -1),
+            ];
+            self.new_face(loop_, parent);
+        }
+        self.faces.get_mut(&r.id).unwrap().loop_ = inner.iter().map(|&i| (i, 1i8)).collect();
+        self.post_edit("inset");
+        Ok(())
+    }
+
+    // ---- flip / mirror ----------------------------------------------------------------------
+
+    /// Reflect the whole shape in place across `axis`. IDs are unchanged; face loops are reversed
+    /// so the winding convention is kept, and curve handles are reflected.
+    pub fn flip(&mut self, axis: Axis) -> Res<()> {
+        axis.check()?;
+        for id in self.live_ids(Kind::V) {
+            let q = axis.reflect(self.pos(id));
+            let vx = self.verts.get_mut(&id).unwrap();
+            vx.x = q[0];
+            vx.y = q[1];
+        }
+        for ed in self
+            .edges
+            .values_mut()
+            .filter(|x| x.meta.state == State::Live)
+        {
+            ed.curve = negate_curve(&ed.curve);
+        }
+        for fc in self
+            .faces
+            .values_mut()
+            .filter(|x| x.meta.state == State::Live)
+        {
+            fc.loop_ = fc.loop_.iter().rev().map(|&(i, s)| (i, -s)).collect();
+        }
+        self.post_edit("flip");
+        Ok(())
+    }
+
+    /// Add a reflected copy of the whole shape (or of the given faces) across `axis`, joined to the
+    /// original: vertices within `weld` of the axis are shared instead of copied, and so are straight
+    /// edges lying on it. New elements record their original as `parent`.
+    pub fn mirror(&mut self, axis: Axis, faces: Option<&[u32]>, weld: f64) -> Res<()> {
+        axis.check()?;
+        let src_faces: Vec<u32> = match faces {
+            Some(list) => {
+                for &id in list {
+                    self.get_ref(Kind::F, id)?;
+                    self.require_live(f(id), Some(Kind::F), "mirror")?;
+                }
+                list.iter()
+                    .copied()
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect()
+            }
+            None => self.live_ids(Kind::F),
+        };
+        let src_edges: Vec<u32> = match faces {
+            Some(_) => src_faces
+                .iter()
+                .flat_map(|fid| self.faces[fid].loop_.iter().map(|x| x.0))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            None => self.live_ids(Kind::E),
+        };
+        let src_verts: Vec<u32> = match faces {
+            Some(_) => src_edges
+                .iter()
+                .flat_map(|eid| [self.edges[eid].a, self.edges[eid].b])
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            None => self.live_ids(Kind::V),
+        };
+        if !src_verts
+            .iter()
+            .any(|&vid| axis.distance(self.pos(vid)) > weld)
+        {
+            return Err(
+                invalid("nothing to mirror: every vertex lies on the mirror line")
+                    .help("move the shape off the line, or pass `faces:` that are not on it"),
+            );
+        }
+        let mut vmap: BTreeMap<u32, u32> = BTreeMap::new();
+        for &vid in &src_verts {
+            let pt = self.pos(vid);
+            if axis.distance(pt) <= weld {
+                vmap.insert(vid, vid);
+            } else {
+                let qpt = axis.reflect(pt);
+                vmap.insert(vid, self.new_vertex(qpt[0], qpt[1], Some(v(vid))));
+            }
+        }
+        let mut emap: BTreeMap<u32, u32> = BTreeMap::new();
+        for &eid in &src_edges {
+            let ed = self.edges[&eid].clone();
+            let (a2, b2) = (vmap[&ed.a], vmap[&ed.b]);
+            if a2 == ed.a && b2 == ed.b && ed.curve == Curve::Straight {
+                emap.insert(eid, eid); // lies on the axis: shared
+            } else {
+                let ne = self.new_edge(a2, b2, Some(e(eid)));
+                self.edges.get_mut(&ne).unwrap().curve = negate_curve(&ed.curve);
+                emap.insert(eid, ne);
+            }
+        }
+        for &fid in &src_faces {
+            let loop_: Vec<(u32, i8)> = self.faces[&fid]
+                .loop_
+                .iter()
+                .rev()
+                .map(|&(eid, s)| (emap[&eid], -s))
+                .collect();
+            self.new_face(loop_, Some(f(fid)));
+        }
+        self.post_edit("mirror");
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Primitives
 // ---------------------------------------------------------------------------------------------
 

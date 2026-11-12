@@ -194,6 +194,10 @@ pub const TOPOLOGY_METHODS: &[&str] = &[
     "set_handles",
     "straighten",
     "copy",
+    "dissolve",
+    "inset",
+    "mirror",
+    "flip",
 ];
 
 fn parse_elem_name(n: &str) -> Option<(Kind, u32)> {
@@ -920,6 +924,11 @@ impl Interp {
                 );
                 Ok(Value::List((lo..=hi).map(Value::Int).collect()))
             }
+            ExprKind::Lambda { params, body } => Ok(Value::Lambda(Rc::new(LambdaData {
+                params: params.clone(),
+                body: Rc::clone(body),
+                vars: vars.flatten(),
+            }))),
         }
     }
 
@@ -1036,15 +1045,21 @@ impl Interp {
                         ))
                     }
                     "alive" => return Ok(Value::Bool(meta.state == State::Live)),
+                    "id" => return Ok(Value::Int(r.id as i64)),
                     "name" => return Ok(meta.alias.clone().map(Value::Str).unwrap_or(Value::None)),
                     _ => {}
                 }
                 sh.require_live(r, None, name)?;
                 match (r.kind, name) {
-                    (Kind::V, "x") => Ok(Value::Num(sh.pos(r.id)[0])),
-                    (Kind::V, "y") => Ok(Value::Num(sh.pos(r.id)[1])),
-                    (Kind::V, "position") => {
-                        let p = sh.pos(r.id);
+                    (_, "x") => Ok(Value::Num(sh.move_anchor(r)[0])),
+                    (_, "y") => Ok(Value::Num(sh.move_anchor(r)[1])),
+                    (Kind::E, "length") => {
+                        let ed = &sh.edges[&r.id];
+                        let (a, b) = (sh.pos(ed.a), sh.pos(ed.b));
+                        Ok(Value::Num((a[0] - b[0]).hypot(a[1] - b[1])))
+                    }
+                    (_, "position") => {
+                        let p = sh.move_anchor(r);
                         Ok(Value::Tuple(vec![Value::Num(p[0]), Value::Num(p[1])]))
                     }
                     (Kind::E, "vertices") => {
@@ -1085,6 +1100,13 @@ impl Interp {
                 _ => Err(
                     Diagnostic::new("E-NAM-003", format!("`scene` has no event `{name}`"))
                         .help("this build supports `scene.starts`"),
+                ),
+            },
+            Value::List(items) => match name {
+                "count" => Ok(Value::Int(items.len() as i64)),
+                _ => Err(
+                    Diagnostic::new("E-NAM-003", format!("a list has no member `{name}`"))
+                        .help("lists have `count`; selection methods are called with parentheses"),
                 ),
             },
             other => Err(type_err(format!("a {} has no members", other.type_name()))),
@@ -1480,6 +1502,7 @@ impl Interp {
         match obj {
             Value::Shape(sn) => self.shape_method(&sn, name, args, span, mode),
             Value::Elem(sn, r) => self.elem_method(&sn, r, name, args, span, mode),
+            Value::List(items) => self.list_method(items, name, args, span, mode),
             other => Err(Diagnostic::new(
                 "E-NAM-003",
                 format!("a {} has no operation `{name}`", other.type_name()),
@@ -1568,8 +1591,26 @@ impl Interp {
                     }
                 }
             }
+            "flip" => {
+                let m = self.bind(name, args, &["x", "y", "line"], &[])?;
+                let axis = self.axis_of(&m)?;
+                self.with_shape(sn, mode, span, |sh| sh.flip(axis))?;
+                Ok(Value::None)
+            }
+            "mirror" => {
+                let m = self.bind(name, args, &["x", "y", "line", "faces", "weld"], &[])?;
+                let axis = self.axis_of(&m)?;
+                let faces: Option<Vec<u32>> = match m.get("faces") {
+                    None => None,
+                    Some(Value::List(items)) => Some(items.iter().map(|x| self.elem_ref(x, sn, Kind::F, "`faces`").map(|r| r.id)).collect::<Res<_>>()?),
+                    Some(other) => return Err(type_err(format!("`faces` must be a list of faces, found {}", other.type_name())).help("for example `faces: s.faces.where(f -> f.x > 0)`")),
+                };
+                let weld = m.get("weld").map(|v| self.num(v, "`weld`")).unwrap_or(Ok(1e-6))?;
+                self.with_shape(sn, mode, span, |sh| sh.mirror(axis, faces.as_deref(), weld))?;
+                Ok(Value::None)
+            }
             _ => Err(Diagnostic::new("E-NAM-003", format!("shape `{sn}` has no operation `{name}`"))
-                .help("shape operations: smooth, merge, delete, extrude, morph_to, copy; element operations are called on `v1`, `e1`, `f1`")),
+                .help("shape operations: smooth, merge, delete, extrude, morph_to, copy, mirror, flip; element operations are called on `v1`, `e1`, `f1`; selections on `s.vertices` etc.")),
         }
     }
 
@@ -1673,6 +1714,17 @@ impl Interp {
                 self.with_shape(sn, mode, span, |sh| sh.merge(r, other, at))?;
                 Ok(Value::None)
             }
+            "dissolve" => {
+                self.bind(name, args, &[], &[])?;
+                self.with_shape(sn, mode, span, |sh| sh.dissolve(r))?;
+                Ok(Value::None)
+            }
+            "inset" => {
+                let m = self.bind(name, args, &["amount"], &["amount"])?;
+                let amount = self.num(&m["amount"], "`amount`")?;
+                self.with_shape(sn, mode, span, |sh| sh.inset(r, amount))?;
+                Ok(Value::None)
+            }
             "delete" => {
                 self.bind(name, args, &[], &[])?;
                 self.with_shape(sn, mode, span, |sh| sh.delete(r))?;
@@ -1702,7 +1754,264 @@ impl Interp {
                 Ok(Value::None)
             }
             _ => Err(Diagnostic::new("E-NAM-003", format!("{} `{}` has no operation `{name}`", r.kind.name(), self.shapes[sn].label(r)))
-                .help("element operations: move_to, move_by, subdivide, extrude, bevel, round, merge, delete, bend, set_handle, set_handles, straighten")),
+                .help("element operations: move_to, move_by, subdivide, extrude, bevel, round, merge, delete, dissolve, inset, bend, set_handle, set_handles, straighten")),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Selections (lists of elements), lambdas and mirror axes
+// ---------------------------------------------------------------------------------------------
+
+/// Element operations that apply to every element of a selection, one after the other.
+const BROADCAST: &[&str] = &[
+    "subdivide",
+    "extrude",
+    "bevel",
+    "round",
+    "dissolve",
+    "inset",
+    "delete",
+    "bend",
+    "set_handle",
+    "set_handles",
+    "straighten",
+];
+
+impl Interp {
+    fn call_lambda(&mut self, l: &LambdaData, args: Vec<Value>, mode: Mode) -> Res<Value> {
+        let mut vars = l.vars.clone();
+        vars.push();
+        for (p, a) in l.params.iter().zip(args) {
+            vars.define(p, a);
+        }
+        self.eval(&l.body, &vars, mode)
+    }
+
+    fn count_arg(&self, v: &Value, what: &str) -> Res<usize> {
+        let n = self.int(v, what)?;
+        usize::try_from(n).map_err(|_| type_err(format!("{what} cannot be negative")))
+    }
+
+    fn axis_of(&self, m: &HashMap<&'static str, Value>) -> Res<Axis> {
+        let given: Vec<&str> = ["x", "y", "line"]
+            .into_iter()
+            .filter(|k| m.contains_key(k))
+            .collect();
+        if given.len() != 1 {
+            return Err(Diagnostic::new("E-TYP-003", "give exactly one mirror line: `x:`, `y:` or `line:`")
+                .help("`x: 400` is the vertical line x = 400, `y: 300` the horizontal line y = 300, `line: ((0, 0), (1, 1))` any line through two points"));
+        }
+        Ok(match given[0] {
+            "x" => Axis::X(self.num(&m["x"], "`x`")?),
+            "y" => Axis::Y(self.num(&m["y"], "`y`")?),
+            _ => match &m["line"] {
+                Value::Tuple(t) if t.len() == 2 => Axis::Line(
+                    self.point(&t[0], "the first point of `line`")?,
+                    self.point(&t[1], "the second point of `line`")?,
+                ),
+                other => {
+                    return Err(type_err(format!(
+                        "`line` must be two points like `((0, 0), (1, 1))`, found {}",
+                        other.type_name()
+                    )))
+                }
+            },
+        })
+    }
+
+    fn list_method(
+        &mut self,
+        items: Vec<Value>,
+        name: &str,
+        args: Vec<(Option<String>, Value)>,
+        span: Span,
+        mode: Mode,
+    ) -> Res<Value> {
+        match name {
+            "every" => {
+                let m = self.bind(name, args, &["n", "offset"], &["n"])?;
+                let n = self.count_arg(&m["n"], "`n`")?;
+                if n == 0 {
+                    return Err(type_err("`every` needs a step of at least 1").help("`every(2)` picks the 1st, 3rd, 5th ... element; `every(2, offset: 1)` the 2nd, 4th ..."));
+                }
+                let offset = m.get("offset").map(|v| self.count_arg(v, "`offset`")).unwrap_or(Ok(0))?;
+                Ok(Value::List(items.into_iter().enumerate().filter(|(i, _)| *i >= offset && (*i - offset) % n == 0).map(|(_, v)| v).collect()))
+            }
+            "first" | "last" | "skip" => {
+                let m = self.bind(name, args, &["n"], &["n"])?;
+                let n = self.count_arg(&m["n"], "`n`")?.min(items.len());
+                let len = items.len();
+                Ok(Value::List(match name {
+                    "first" => items.into_iter().take(n).collect(),
+                    "last" => items.into_iter().skip(len - n).collect(),
+                    _ => items.into_iter().skip(n).collect(),
+                }))
+            }
+            "reverse" => {
+                self.bind(name, args, &[], &[])?;
+                Ok(Value::List(items.into_iter().rev().collect()))
+            }
+            "where" => {
+                let m = self.bind(name, args, &["test"], &["test"])?;
+                let Value::Lambda(l) = &m["test"] else {
+                    return Err(type_err(format!("`where` needs a lambda, found {}", m["test"].type_name()))
+                        .help("write it like `where(v -> v.x > 400)` or `where((v, i) -> i % 2 == 0)`"));
+                };
+                let l = Rc::clone(l);
+                let mut out = vec![];
+                for (i, item) in items.into_iter().enumerate() {
+                    let a = if l.params.len() == 1 { vec![item.clone()] } else { vec![item.clone(), Value::Int(i as i64)] };
+                    match self.call_lambda(&l, a, mode)? {
+                        Value::Bool(true) => out.push(item),
+                        Value::Bool(false) => {}
+                        other => {
+                            return Err(type_err(format!("the lambda given to `where` must return a Bool, found {}", other.type_name()))
+                                .help("compare something, e.g. `v -> v.x > 400`"))
+                        }
+                    }
+                }
+                Ok(Value::List(out))
+            }
+            "nearest" => {
+                let m = self.bind(name, args, &["point", "n"], &["point"])?;
+                let target = self.point(&m["point"], "`point`")?;
+                let n = m.get("n").map(|v| self.count_arg(v, "`n`")).unwrap_or(Ok(1))?;
+                let mut scored: Vec<(f64, usize, Value)> = vec![];
+                for (i, item) in items.into_iter().enumerate() {
+                    let Value::Elem(sn, r) = &item else { return Err(type_err("`nearest` needs a list of elements")) };
+                    self.shapes[sn].require_live(*r, None, "nearest")?;
+                    let a = self.shapes[sn].move_anchor(*r);
+                    scored.push(((a[0] - target[0]).hypot(a[1] - target[1]), i, item));
+                }
+                scored.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+                Ok(Value::List(scored.into_iter().take(n).map(|x| x.2).collect()))
+            }
+            "union" | "except" => {
+                let m = self.bind(name, args, &["other"], &["other"])?;
+                let Value::List(other) = &m["other"] else {
+                    return Err(type_err(format!("`{name}` needs another list, found {}", m["other"].type_name())));
+                };
+                let mut out: Vec<Value> = vec![];
+                if name == "union" {
+                    for v in items.into_iter().chain(other.iter().cloned()) {
+                        if !out.iter().any(|x| self.values_eq(x, &v)) {
+                            out.push(v);
+                        }
+                    }
+                } else {
+                    out = items.into_iter().filter(|v| !other.iter().any(|x| self.values_eq(x, v))).collect();
+                }
+                Ok(Value::List(out))
+            }
+            "move_to" | "move_by" => self.group_move(&items, name, args, span, mode),
+            n if BROADCAST.contains(&n) => {
+                let mut was_live = vec![];
+                for item in &items {
+                    let Value::Elem(sn, r) = item else {
+                        return Err(type_err(format!("`{name}` applies to a list of vertices, edges or faces, found a {} in the list", item.type_name())));
+                    };
+                    was_live.push(self.shapes[sn].meta(*r).is_some_and(|m| m.state == State::Live));
+                }
+                for (item, was) in items.iter().zip(was_live) {
+                    let Value::Elem(sn, r) = item else { unreachable!() };
+                    // elements removed by an earlier step of this same operation are skipped, not errors
+                    if was && !self.shapes[sn].meta(*r).is_some_and(|m| m.state == State::Live) {
+                        continue;
+                    }
+                    self.elem_method(sn, *r, name, args.clone(), span, mode)?;
+                }
+                Ok(Value::None)
+            }
+            _ => Err(Diagnostic::new("E-NAM-003", format!("a list has no operation `{name}`")).help(
+                "selection methods: every, first, last, skip, reverse, where, nearest, union, except; operations: move_to, move_by, subdivide, extrude, bevel, round, dissolve, inset, delete, bend, set_handle, set_handles, straighten",
+            )),
+        }
+    }
+
+    /// Move a whole selection together. A vertex shared by several selected elements moves once, and
+    /// `move_to` puts the centroid of the selection on the target.
+    fn group_move(
+        &mut self,
+        items: &[Value],
+        name: &str,
+        args: Vec<(Option<String>, Value)>,
+        span: Span,
+        mode: Mode,
+    ) -> Res<Value> {
+        let m = self.bind(name, args, &["x", "y", "over", "ease"], &["x"])?;
+        let p = self.xy(&m)?;
+        let mut sn: Option<String> = None;
+        let mut refs: Vec<ElemRef> = vec![];
+        for item in items {
+            let Value::Elem(s, r) = item else {
+                return Err(type_err(format!(
+                    "`{name}` applies to a list of elements, found a {} in the list",
+                    item.type_name()
+                )));
+            };
+            if sn.as_ref().is_some_and(|x| x != s) {
+                return Err(type_err(
+                    "a selection moved together must come from one shape",
+                ));
+            }
+            self.shapes[s].require_live(*r, None, name)?;
+            sn = Some(s.clone());
+            refs.push(*r);
+        }
+        let Some(sn) = sn else { return Ok(Value::None) };
+        let by = name == "move_by";
+        let sh = &self.shapes[&sn];
+        let delta = if by {
+            p
+        } else {
+            let a = sh.group_anchor(&refs);
+            [p[0] - a[0], p[1] - a[1]]
+        };
+        let vids: BTreeSet<u32> = refs.iter().flat_map(|r| sh.element_vertices(*r)).collect();
+        match self.over_frames(&m, mode, span)? {
+            Some((frames, ease)) => {
+                let sh = &self.shapes[&sn];
+                let targets = vids
+                    .into_iter()
+                    .map(|id| {
+                        let q = sh.pos(id);
+                        (
+                            id,
+                            if by {
+                                Target::By(delta)
+                            } else {
+                                Target::To([q[0] + delta[0], q[1] + delta[1]])
+                            },
+                        )
+                    })
+                    .collect();
+                Ok(Value::Pending(Box::new(ActionReq {
+                    shape: sn.clone(),
+                    label: format!("{sn}.{name} ({} elements)", refs.len()),
+                    frames,
+                    ease,
+                    items: targets,
+                })))
+            }
+            None => {
+                if mode == Mode::Run {
+                    for id in vids {
+                        self.staged.push(Staged::Move {
+                            shape: sn.clone(),
+                            r: v(id),
+                            x: delta[0],
+                            y: delta[1],
+                            by: true,
+                        });
+                    }
+                } else {
+                    self.with_shape(&sn, mode, span, |sh| {
+                        sh.move_group_by(&refs, delta[0], delta[1])
+                    })?;
+                }
+                Ok(Value::None)
+            }
         }
     }
 }
