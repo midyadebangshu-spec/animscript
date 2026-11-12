@@ -339,6 +339,8 @@ pub struct ModReq {
 pub enum StartReq {
     Act(ActionReq),
     Mod(ModReq),
+    /// A user-defined action started in the background.
+    Task(Rc<UserCall>),
 }
 
 /// A scalar target: an absolute value or a change relative to the value when the action starts.
@@ -451,6 +453,15 @@ pub enum Value {
     Image(ImageFill),
     /// An armature, by name; its bones and IK handles are members.
     Armature(String),
+    /// A call of a user-defined `action`, ready to run (see `defs.rs`).
+    Call(Rc<UserCall>),
+}
+
+/// An `action` with its arguments bound to its parameters.
+#[derive(Debug)]
+pub struct UserCall {
+    pub def: Rc<crate::ast::Def>,
+    pub scope: std::collections::HashMap<String, Value>,
 }
 
 /// A lambda with the variables visible where it was written (captured by value).
@@ -494,6 +505,7 @@ impl Value {
             Value::Fluid(_) => "Fluid",
             Value::Image(_) => "Image",
             Value::Armature(_) => "Armature",
+            Value::Call(_) => "Action call",
         }
     }
     pub fn as_f64(&self) -> Option<f64> {

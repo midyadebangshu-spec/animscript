@@ -1,0 +1,3 @@
+import "lib_cycle_a.anim"
+fn from_b() -> Number:
+    return 2

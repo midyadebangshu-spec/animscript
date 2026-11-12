@@ -78,6 +78,12 @@ pub enum StmtKind {
         body: Block,
     },
     Wait(Expr),
+    While {
+        cond: Expr,
+        body: Block,
+    },
+    /// `return` or `return value`, inside an `action` or `fn`.
+    Return(Option<Expr>),
     Together(Block),
     /// `[let name =] start CALL`: begin an action or modifier without waiting for it.
     Start {
@@ -220,6 +226,33 @@ pub struct Scene {
     pub span: Span,
 }
 
+/// A parameter of an `action` or `fn`.
+#[derive(Clone, Debug)]
+pub struct Param {
+    pub name: String,
+    /// The declared type name (`Number`, `Point`, `Shape`, ...); `None` accepts anything.
+    pub ty: Option<String>,
+    pub default: Option<Expr>,
+    pub span: Span,
+}
+
+/// `action NAME(params):` (takes time, runs like a built-in action) or `fn NAME(params) -> Type:`
+/// (a pure function that returns a value).
+#[derive(Clone, Debug)]
+pub struct Def {
+    pub name: String,
+    pub is_action: bool,
+    pub params: Vec<Param>,
+    pub ret: Option<String>,
+    pub body: Block,
+    /// `uses body, gaze`: the channels the action occupies (recorded, not yet enforced).
+    pub uses: Vec<String>,
+    /// `requires EXPR`: checked with the arguments bound, every call.
+    pub requires: Vec<Expr>,
+    pub priority: i64,
+    pub span: Span,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Program {
     pub project: Option<Project>,
@@ -227,6 +260,7 @@ pub struct Program {
     pub emitters: Vec<EmitterDecl>,
     pub fluids: Vec<EmitterDecl>,
     pub armatures: Vec<ArmatureDecl>,
+    pub defs: Vec<Rc<Def>>,
     pub entities: Vec<EntityDecl>,
     pub top: Vec<Stmt>,
     pub scenes: Vec<Rc<Scene>>,

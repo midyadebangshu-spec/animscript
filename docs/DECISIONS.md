@@ -706,3 +706,48 @@ judgement calls I expect you to want to look at.
     hash quantises to 1e-6, which hides it.
 152. **Not yet.** Named reusable clips (they come with user actions), mirroring/flipping a rig, bone length
     animation, per-bone translation of non-root bones, and physical bones (sub-round B).
+
+## Round 9, language step: actions, functions, `while`, `return`, `import`
+
+153. **What is built in and what is not.** Only primitives are built in (`move_by`, `rotate_to`, `reach`, `bind`,
+    `center`, `atan2`, ...). Everything higher-level, `look_to`, `hesitate`, `shake`, `pulse`, `hop` (and later
+    `walk_to`), is AnimScript in `crates/lang/lib/motion.anim`, bundled into the compiler so `import "std/motion"`
+    works anywhere, and also a plain file anyone can read, copy and change. The spec's table of "standard
+    library actions" is therefore library code, not language.
+154. **Definitions.** `action NAME(params):` takes time and runs like a built-in action; `fn NAME(params) ->
+    Type:` is a pure function that returns a value. Parameters are `name: Type = default` (type and default
+    optional); defaults are evaluated at each call with the earlier parameters visible. Types: `Any, Number,
+    Int, Bool, String, Point (or Vec2), Angle, Duration, Color, Shape, Entity, List, Easing, Region, Vertex,
+    Edge, Face, Handle`; an unknown type is `E-DEF-003`, a name defined twice `E-DEF-001`. A bone is a `Shape`.
+155. **Calling.** `thing.action(args)` when the first parameter is `self`, or `action(thing, args)`; positional
+    arguments fill the parameters in order and named ones by name (`E-TYP-003` for a missing, unknown or
+    duplicated argument, `E-TYP-001` for a value of the wrong type). `over`/`ease` suffixes after a call are
+    passed as the named arguments `over` and `ease` (so an action declares `over: Duration = ...` to accept
+    them). A user definition takes precedence over a built-in of the same name.
+156. **Running an action.** A call evaluates to a deferred call; as a statement it pushes the action's body onto the
+    calling task (blocking it exactly like a built-in action), inside `together:` each statement is its own
+    child task as before, and `start thing.action(...)` runs it as a task of its own with a handle: `await h`
+    waits for the task to finish, `cancel h` stops it and the actions it was running (they keep the last value they
+    sampled). An action call is not a value: storing it with `let`/assignment is `E-TYP-001`.
+157. **Scoping.** A body sees the program's top-level `let` values and its own parameters and locals, not the
+    caller's locals. `x = value` and `x += value` (also `-=`, `*=`, `/=`) change the innermost existing local;
+    assigning to a name that was never declared is `E-NAM-001`. Assignments to top-level names from inside a
+    definition change only the definition's copy.
+158. **`fn`.** Runs to completion immediately in a throwaway task and returns the value of its `return`; the
+    declared return type is checked. It cannot take time (`wait`, timed actions): `E-DEF-002`. Calls nest at most 64
+    deep (`E-RUN-007`; the interpreter runs on a 256 MB stack so that this is safe), actions inline at most 64
+    deep too.
+159. **`return`.** Allowed only inside an `action` or `fn` (`E-SYN-002` at parse time); ends the innermost call.
+160. **`while cond:`** with a `Bool` condition, evaluated before each pass. A loop that never blocks is stopped by
+    the existing limit of 5,000,000 steps per run (`E-STM-003`); a loop with a `wait` or a timed action is fine.
+161. **`uses`, `requires`, `priority`.** Accepted as the first lines of a definition. `requires EXPR` is evaluated
+    at every call with the arguments bound and must be true (`E-CAP-002`). `uses` and `priority` are recorded but
+    not enforced: this implementation has no named channels such as `gaze`, so `E-CAP-003` does not exist yet.
+162. **`import "path.anim"` / `import "std/name"`.** Textual inclusion before parsing: the import line is
+    blanked, so line numbers in the importing file never change, and the imported text is appended at the end;
+    files are included once (cycles are harmless), paths are relative to the importing file's folder, and a
+    missing file or library is `E-AST-001`. An imported file should contain only definitions (it is parsed as
+    part of the program, so its errors report line numbers after the end of your file).
+163. **New builtin and the limits.** `atan2(y, x)` returns an Angle. A definition cannot yet read the current animated
+    value of a property mid-action (expressions see rest values), so an action cannot "track" a moving target
+    frame by frame; named reusable clips, generics and closures are not implemented.

@@ -1,0 +1,54 @@
+project "Actions":
+    anim_version: "0.1"
+    canvas: 800x600
+    fps: 24
+    background: #f4f1ea
+
+# pull in motions written in AnimScript: look_to, hop, shake, pulse, hesitate, angle_to
+import "std/motion"
+
+# your own pure function ...
+fn slot(i: Int) -> Number:
+    return 140 + i * 130
+
+# ... and your own action: it runs like a built-in one, blocks the caller, and can be started in the background
+action pop_in(self: Shape, over: Duration = 0.4.seconds):
+    self.scale_to(0.01)
+    self.scale_to(1) over over ease ease_out
+
+shape b1 = square(size: 70, at: (slot(0), 470))
+shape b2 = square(size: 70, at: (slot(1), 470))
+shape b3 = square(size: 70, at: (slot(2), 470))
+shape b4 = square(size: 70, at: (slot(3), 470))
+shape b5 = square(size: 70, at: (slot(4), 470))
+shape turret = rectangle(width: 150, height: 22, at: (400, 200))
+shape hub = circle(20, radius: 26, at: (400, 200))
+b1.fill = #e0674f
+b2.fill = #f2c14e
+b3.fill = #7fc27a
+b4.fill = #4f8fe0
+b5.fill = #9a6fd0
+turret.fill = #35507a
+hub.fill = #35507a
+
+scene "Actions" for 9.seconds:
+    main:
+        let boxes = [b1, b2, b3, b4, b5]
+        for b in boxes:
+            b.scale_to(0.01)
+        # a loop of user actions, each started in the background so they overlap
+        for b in boxes:
+            start b.pop_in(over: 0.5.seconds)
+            wait 0.2.seconds
+        wait 0.6.seconds
+        # look_to turns the turret to face each box in turn (written in AnimScript, see lib/motion.anim)
+        for b in boxes:
+            turret.look_to(center(b), over: 0.5.seconds)
+            b.hop(height: 50, over: 0.5.seconds)
+        # a while loop with a counter
+        let n = 0
+        while n < 3:
+            b3.pulse(1.4, over: 0.3.seconds)
+            n += 1
+        b5.shake(amount: 10, times: 5, over: 0.6.seconds)
+        turret.look_to((400, 100), over: 0.6.seconds)

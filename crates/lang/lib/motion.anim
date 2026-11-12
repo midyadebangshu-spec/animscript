@@ -1,0 +1,39 @@
+## std/motion: small reusable motions, written in AnimScript. Import with `import "std/motion"`.
+## Nothing here is built into the language: copy any of it into your own file and change it.
+
+## The direction from one point to another, as an angle (0 is right, 90.deg is down).
+fn angle_to(from: Point, to: Point) -> Angle:
+    return atan2(to.y - from.y, to.x - from.x)
+
+## Turn a shape (or a bone) to face a point. `facing` is the direction the art points at rest.
+action look_to(self: Shape, target: Point, over: Duration = 0.5.seconds, ease: Easing = ease_in_out, facing: Angle = 0.deg):
+    uses body
+    self.rotate_to(angle_to(center(self), target) - facing) over over ease ease
+
+## A nervous back-and-forth before committing to something.
+action hesitate(self: Shape, distance: Number = 6, over: Duration = 1.second):
+    uses body
+    self.move_by(-distance, 0) over over * 0.25 ease ease_out
+    self.move_by(distance, 0) over over * 0.25 ease ease_in
+    self.move_by(-distance, 0) over over * 0.25 ease ease_out
+    self.move_by(distance, 0) over over * 0.25 ease ease_in
+
+## Shake side to side `times` times and end where it started.
+action shake(self: Shape, amount: Number = 6, times: Int = 4, over: Duration = 0.4.seconds):
+    uses body
+    repeat times times:
+        self.move_by(amount, 0) over over / (times * 4) ease ease_out
+        self.move_by(-2 * amount, 0) over over / (times * 2) ease ease_in_out
+        self.move_by(amount, 0) over over / (times * 4) ease ease_in
+
+## Grow and shrink back (a heartbeat).
+action pulse(self: Shape, factor: Number = 1.2, over: Duration = 0.4.seconds):
+    uses body
+    self.scale_to(factor) over over * 0.5 ease ease_out
+    self.scale_to(1) over over * 0.5 ease ease_in
+
+## Hop up and come back down.
+action hop(self: Shape, height: Number = 40, over: Duration = 0.5.seconds):
+    uses body
+    self.move_by(0, -height) over over * 0.5 ease ease_out
+    self.move_by(0, height) over over * 0.5 ease ease_in

@@ -74,6 +74,8 @@ enum HandleState {
     Queued,
     Act(u32),
     Mod(u32),
+    /// A user-defined action started with `start`, running as this task.
+    Task(u32),
 }
 struct PendingAct {
     req: ActionReq,
@@ -120,6 +122,12 @@ pub fn run(src: &str, opts: &RunOptions) -> Res<RunResult> {
 
 /// Like `run`, with the folder that relative asset paths (images) are resolved from.
 pub fn run_in(src: &str, opts: &RunOptions, base: &std::path::Path) -> Res<RunResult> {
+    let (src, opts, base) = (src.to_string(), opts.clone(), base.to_path_buf());
+    crate::on_big_stack(move || run_in_here(&src, &opts, &base))
+}
+
+fn run_in_here(src: &str, opts: &RunOptions, base: &std::path::Path) -> Res<RunResult> {
+    let src = &crate::imports::expand_imports(src, base)?;
     let program = parse(src)?;
     if program.project.is_none() {
         return Err(
@@ -532,10 +540,67 @@ impl Runtime {
                     }
                 }
                 StartReq::Mod(m) => self.start_mod(m, h),
+                StartReq::Task(c) => {
+                    let id = self.new_task_id();
+                    let vars = Vars {
+                        scopes: vec![self.it.globals.clone(), c.scope.clone()],
+                    };
+                    let mut t = Task::new(id, Rc::clone(&c.def.body), vars, Mode::Run, false);
+                    t.frames.insert(0, Frame::Call { saved: None });
+                    self.it
+                        .trace_line("TASK+", &format!("T{id} {}", c.def.name));
+                    self.tasks.insert(id, t);
+                    if h != 0 {
+                        self.handles.insert(h, HandleState::Task(id));
+                    }
+                }
             }
         }
         for h in std::mem::take(&mut self.it.pending_cancels) {
             self.cancel_handle(h);
+        }
+    }
+
+    /// Stop a started user action: its own task, the tasks it spawned, and the actions it was running
+    /// (which keep the last value they sampled, like `cancel` on any action).
+    fn cancel_task(&mut self, id: u32) {
+        let mut doomed = vec![id];
+        let mut i = 0;
+        while i < doomed.len() {
+            let parent = doomed[i];
+            doomed.extend(
+                self.tasks
+                    .iter()
+                    .filter(|(_, t)| t.parent == Some(parent))
+                    .map(|(k, _)| *k),
+            );
+            i += 1;
+        }
+        for d in doomed {
+            let acts: Vec<u32> = self
+                .acts
+                .iter()
+                .filter(|(_, a)| a.task == d)
+                .map(|(k, _)| *k)
+                .collect();
+            for a in acts {
+                if let Some(act) = self.acts.remove(&a) {
+                    self.commit(&act, true);
+                    for w in &act.waiters {
+                        if let Some(t) = self.tasks.get_mut(w) {
+                            t.state = TaskState::Ready;
+                        }
+                    }
+                }
+            }
+            self.pending.retain(|p| p.task != d);
+            if let Some(t) = self.tasks.remove(&d) {
+                for w in t.awaiters {
+                    if let Some(x) = self.tasks.get_mut(&w) {
+                        x.state = TaskState::Ready;
+                    }
+                }
+            }
         }
     }
 
@@ -582,6 +647,7 @@ impl Runtime {
                 }
             }
             Some(HandleState::Mod(id)) => self.modsets.retain(|m| m.id != id),
+            Some(HandleState::Task(id)) => self.cancel_task(id),
             Some(HandleState::Queued) => {
                 let mut woken = vec![];
                 self.pending.retain(|p| {
@@ -797,6 +863,10 @@ impl Runtime {
                             t.wake = to;
                             let _ = tick;
                         }
+                        Some(HandleState::Task(tid)) if self.tasks.contains_key(&tid) => {
+                            self.tasks.get_mut(&tid).expect("checked").awaiters.push(id);
+                            t.state = TaskState::BlockedAct;
+                        }
                         _ => t.state = TaskState::Ready, // already finished or cancelled
                     }
                     self.tasks.insert(id, t);
@@ -830,6 +900,11 @@ impl Runtime {
         }
         if Some(t.id) == self.main_task {
             self.main_done = true;
+        }
+        for w in &t.awaiters {
+            if let Some(x) = self.tasks.get_mut(w) {
+                x.state = TaskState::Ready;
+            }
         }
         if let Some(p) = t.parent {
             if let Some(parent) = self.tasks.get_mut(&p) {

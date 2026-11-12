@@ -12,13 +12,19 @@ const SHORT_UNITS: &[&str] = &["s", "ms", "f", "px", "deg"];
 
 pub fn parse(src: &str) -> Res<Program> {
     let toks = lex(src)?;
-    let mut p = Parser { toks, i: 0 };
+    let mut p = Parser {
+        toks,
+        i: 0,
+        callable_depth: 0,
+    };
     p.program()
 }
 
 struct Parser {
     toks: Vec<Token>,
     i: usize,
+    /// How many `action` / `fn` bodies we are inside (`return` needs one).
+    callable_depth: u32,
 }
 
 fn parse_color(hex: &str) -> [u8; 4] {
@@ -182,6 +188,15 @@ impl Parser {
                 T::Ident(s) if s == "armature" && matches!(&self.peek_at(1).t, T::Ident(_)) => {
                     let a = self.armature()?;
                     prog.armatures.push(a);
+                }
+                T::Ident(s)
+                    if (s == "action" || s == "fn")
+                        && matches!(&self.peek_at(1).t, T::Ident(_))
+                        && matches!(&self.peek_at(2).t, T::Op("(")) =>
+                {
+                    let is_action = s == "action";
+                    let d = self.def(is_action)?;
+                    prog.defs.push(Rc::new(d));
                 }
                 T::Ident(s) if s == "prop" || s == "character" => {
                     let e = self.entity()?;
@@ -423,6 +438,118 @@ impl Parser {
         Ok(ArmatureDecl {
             name,
             items,
+            span: start,
+        })
+    }
+
+    /// `action name(self: Shape, n: Int = 2):` or `fn name(a: Number) -> Number:` and an indented body whose
+    /// first lines may be `uses ...`, `requires ...` and `priority N`.
+    fn def(&mut self, is_action: bool) -> Res<Def> {
+        let start = self.next().span;
+        let name = self.ident("a name")?;
+        self.expect_op("(")?;
+        let mut params: Vec<Param> = vec![];
+        while !self.at_op(")") {
+            let span = self.peek().span;
+            let pname = self.ident("a parameter name")?;
+            if params.iter().any(|p| p.name == pname) {
+                return Err(Diagnostic::new(
+                    "E-DEF-001",
+                    format!("parameter `{pname}` is listed twice"),
+                )
+                .at(span));
+            }
+            let ty = if self.eat_op(":") {
+                Some(self.ident("a type name")?)
+            } else {
+                None
+            };
+            let default = if self.eat_op("=") {
+                Some(self.expr()?)
+            } else {
+                None
+            };
+            params.push(Param {
+                name: pname,
+                ty,
+                default,
+                span,
+            });
+            if !self.eat_op(",") {
+                break;
+            }
+        }
+        self.expect_op(")")?;
+        let ret = if self.eat_op("->") {
+            Some(self.ident("a type name")?)
+        } else {
+            None
+        };
+        if is_action && ret.is_some() {
+            return Err(
+                Diagnostic::new("E-SYN-001", "an `action` does not return a value")
+                    .at(start)
+                    .help("use `fn name(...) -> Type:` for a function that returns a value"),
+            );
+        }
+        self.expect_op(":")?;
+        let mut body: Vec<Stmt> = vec![];
+        let (mut uses, mut requires, mut priority) = (vec![], vec![], 0i64);
+        self.callable_depth += 1;
+        let parsed = (|| -> Res<()> {
+            if matches!(self.peek().t, T::Newline) {
+                self.next();
+                if !matches!(self.peek().t, T::Indent) {
+                    return self.err("expected an indented block");
+                }
+                self.next();
+                loop {
+                    self.skip_newlines();
+                    if matches!(self.peek().t, T::Dedent | T::Eof) {
+                        break;
+                    }
+                    // leading meta lines
+                    if body.is_empty()
+                        && matches!(&self.peek().t, T::Ident(k) if (k == "uses" || k == "requires" || k == "priority") && !matches!(&self.peek_at(1).t, T::Op("=") | T::Op(".")))
+                    {
+                        let k = self.ident("")?;
+                        match k.as_str() {
+                            "uses" => loop {
+                                uses.push(self.ident("a channel name")?);
+                                if !self.eat_op(",") {
+                                    break;
+                                }
+                            },
+                            "requires" => requires.push(self.expr()?),
+                            _ => match self.next().t {
+                                T::Num(s) => priority = s.parse().unwrap_or(0),
+                                _ => return self.err("`priority` needs an integer"),
+                            },
+                        }
+                        self.end_stmt()?;
+                        continue;
+                    }
+                    body.push(self.stmt()?);
+                }
+                if matches!(self.peek().t, T::Dedent) {
+                    self.next();
+                }
+            } else {
+                body.push(self.stmt()?);
+            }
+            Ok(())
+        })();
+        self.callable_depth -= 1;
+        parsed?;
+        Ok(Def {
+            name,
+            is_action,
+            params,
+            ret,
+            body: Rc::new(body),
+            uses,
+            requires,
+            priority,
             span: start,
         })
     }
@@ -713,6 +840,30 @@ impl Parser {
                 self.end_stmt()?;
                 return Ok(mk(StmtKind::Pass, start));
             }
+            "while" => {
+                self.next();
+                let cond = self.expr()?;
+                let end = self.prev_span();
+                let body = self.block()?;
+                return Ok(mk(StmtKind::While { cond, body }, end));
+            }
+            "return" => {
+                self.next();
+                if self.callable_depth == 0 {
+                    return Err(Diagnostic::new(
+                        "E-SYN-002",
+                        "`return` is only allowed inside an `action` or `fn`",
+                    )
+                    .at(start));
+                }
+                let value = if matches!(self.peek().t, T::Newline | T::Dedent | T::Eof) {
+                    None
+                } else {
+                    Some(self.expr()?)
+                };
+                self.end_stmt()?;
+                return Ok(mk(StmtKind::Return(value), self.prev_span()));
+            }
             _ => {}
         }
         // `bird becomes flag` / `bird clears flag`
@@ -748,6 +899,20 @@ impl Parser {
             let v = self.expr()?;
             self.end_stmt()?;
             return Ok(mk(StmtKind::Assign(e, v), self.prev_span()));
+        }
+        // `x += 1` and friends are `x = x + 1`
+        for (op, bin) in [("+=", "+"), ("-=", "-"), ("*=", "*"), ("/=", "/")] {
+            if self.at_op(op) {
+                self.next();
+                let rhs = self.expr()?;
+                self.end_stmt()?;
+                let sp = e.span.to(rhs.span);
+                let value = Expr {
+                    kind: ExprKind::Binary(bin, Box::new(e.clone()), Box::new(rhs)),
+                    span: sp,
+                };
+                return Ok(mk(StmtKind::Assign(e, value), self.prev_span()));
+            }
         }
         let (mut over, mut ease) = (None, None);
         if self.at_ident("over") {

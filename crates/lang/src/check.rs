@@ -10,6 +10,15 @@ pub fn check(src: &str) -> Vec<Diagnostic> {
 
 /// Like `check`, with the folder that relative asset paths are resolved from.
 pub fn check_in(src: &str, base: &std::path::Path) -> Vec<Diagnostic> {
+    let (src, base) = (src.to_string(), base.to_path_buf());
+    crate::on_big_stack(move || check_here(&src, &base))
+}
+
+fn check_here(src: &str, base: &std::path::Path) -> Vec<Diagnostic> {
+    let src = &match crate::imports::expand_imports(src, base) {
+        Ok(s) => s,
+        Err(d) => return vec![d],
+    };
     let program = match parse(src) {
         Ok(p) => p,
         Err(d) => return vec![d],
@@ -97,6 +106,15 @@ fn walk_stmt(it: &Interp, s: &Stmt, out: &mut Vec<Diagnostic>) {
         }
         StmtKind::Cancel(e) | StmtKind::Await(e) => walk_expr(it, e, out),
         StmtKind::Together(b) => walk_block(it, b, out),
+        StmtKind::While { cond, body } => {
+            walk_expr(it, cond, out);
+            walk_block(it, body, out);
+        }
+        StmtKind::Return(e) => {
+            if let Some(e) = e {
+                walk_expr(it, e, out);
+            }
+        }
         StmtKind::Keyframes {
             target,
             over,

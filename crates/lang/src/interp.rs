@@ -36,6 +36,16 @@ impl Vars {
     pub fn push(&mut self) {
         self.scopes.push(HashMap::new());
     }
+    /// Change the innermost existing binding of `n`; false when there is none.
+    pub fn assign(&mut self, n: &str, v: Value) -> bool {
+        for s in self.scopes.iter_mut().rev() {
+            if let Some(slot) = s.get_mut(n) {
+                *slot = v;
+                return true;
+            }
+        }
+        false
+    }
     pub fn pop(&mut self) {
         self.scopes.pop();
     }
@@ -115,6 +125,14 @@ pub enum Frame {
         body: Block,
         left: i64,
     },
+    While {
+        cond: Rc<Expr>,
+        body: Block,
+    },
+    /// Marks the start of a user action's body; popping it restores the caller's variables.
+    Call {
+        saved: Option<Vars>,
+    },
     For {
         var: String,
         items: Vec<Value>,
@@ -142,6 +160,8 @@ pub struct Task {
     pub state: TaskState,
     pub wake: i64,
     pub rule: Option<usize>,
+    /// Tasks waiting for this one to finish (`await` on a started user action).
+    pub awaiters: Vec<u32>,
 }
 impl Task {
     pub fn new(id: u32, block: Block, mut vars: Vars, mode: Mode, scope: bool) -> Task {
@@ -163,9 +183,10 @@ impl Task {
             state: TaskState::Ready,
             wake: 0,
             rule: None,
+            awaiters: vec![],
         }
     }
-    fn push_block(&mut self, b: Block, bind: Vec<(String, Value)>) {
+    pub(crate) fn push_block(&mut self, b: Block, bind: Vec<(String, Value)>) {
         self.vars.push();
         for (k, v) in bind {
             self.vars.define(&k, v);
@@ -219,6 +240,11 @@ pub struct Interp {
     pub base_dir: std::path::PathBuf,
     pub rigs: BTreeMap<String, crate::rig::RigDef>,
     pub rig_sim: Option<crate::rig::RigSim>,
+    /// User-defined `action`s and `fn`s by name.
+    pub defs: BTreeMap<String, Rc<Def>>,
+    /// The value of the last executed `return`.
+    pub ret: Option<Value>,
+    pub call_depth: usize,
 }
 
 pub const TOPOLOGY_METHODS: &[&str] = &[
@@ -292,6 +318,9 @@ impl Interp {
             base_dir: std::path::PathBuf::from("."),
             rigs: BTreeMap::new(),
             rig_sim: None,
+            defs: BTreeMap::new(),
+            ret: None,
+            call_depth: 0,
             program: Program::default(),
         };
         if let Some(p) = &program.project {
@@ -324,6 +353,7 @@ impl Interp {
             it.entity_order.push(e.name.clone());
         }
         it.program = program;
+        it.register_defs()?;
         Ok(it)
     }
 
@@ -409,6 +439,30 @@ impl Interp {
                         return Ok(Step::Blocked(req));
                     }
                 }
+                Frame::Call { .. } => {
+                    if let Some(Frame::Call { saved: Some(v) }) = t.frames.pop() {
+                        t.vars = v;
+                    }
+                }
+                Frame::While { cond, body } => {
+                    let (c, b) = (Rc::clone(cond), Rc::clone(body));
+                    match self
+                        .eval(&c, &t.vars, t.mode)
+                        .map_err(|d| d.or_at(c.span))?
+                    {
+                        Value::Bool(true) => t.push_block(b, vec![]),
+                        Value::Bool(false) => {
+                            t.frames.pop();
+                        }
+                        other => {
+                            return Err(type_err(format!(
+                                "a `while` condition must be a Bool, found {}",
+                                other.type_name()
+                            ))
+                            .at(c.span))
+                        }
+                    }
+                }
                 Frame::Repeat { body, left } => {
                     if *left <= 0 {
                         t.frames.pop();
@@ -444,6 +498,9 @@ impl Interp {
             StmtKind::Pass => {}
             StmtKind::Let(name, e) => {
                 let v = self.eval(e, &t.vars, mode)?;
+                if matches!(v, Value::Call(_)) {
+                    return Err(type_err("an action call is not a value; run it as a statement or with `start`").help("`let h = start thing.action(...)` runs it in the background and gives a handle"));
+                }
                 if matches!(v, Value::Fresh(_)) {
                     return Err(
                         type_err("a new shape must be declared with `shape name = ...`")
@@ -483,7 +540,36 @@ impl Interp {
             }
             StmtKind::Assign(target, e) => {
                 let v = self.eval(e, &t.vars, mode)?;
-                self.assign(target, v, &t.vars, mode)?;
+                if matches!(v, Value::Call(_)) {
+                    return Err(type_err(
+                        "an action call cannot be stored; run it as a statement or with `start`",
+                    ));
+                }
+                if let ExprKind::Name(n) = &target.kind {
+                    if !t.vars.assign(n, v) {
+                        return Err(Diagnostic::new(
+                            "E-NAM-001",
+                            format!("`{n}` was not declared, so it cannot be assigned"),
+                        )
+                        .at(target.span)
+                        .help(format!("declare it first with `let {n} = ...`")));
+                    }
+                } else {
+                    self.assign(target, v, &t.vars, mode)?;
+                }
+            }
+            StmtKind::While { cond, body } => {
+                t.frames.push(Frame::While {
+                    cond: Rc::new(cond.clone()),
+                    body: Rc::clone(body),
+                });
+            }
+            StmtKind::Return(e) => {
+                let v = match e {
+                    Some(e) => Some(self.eval(e, &t.vars, mode)?),
+                    None => None,
+                };
+                self.do_return(t, v);
             }
             StmtKind::Expr { expr, over, ease } => {
                 let extra = {
@@ -508,6 +594,7 @@ impl Interp {
                     .at(expr.span));
                 };
                 match v {
+                    Value::Call(c) => self.enter_call(t, &c)?,
                     Value::Pending(req) => return Ok(Some(Req::Act(*req))),
                     Value::Modifier(m) => {
                         let Some(frames) = m.frames else {
@@ -597,6 +684,7 @@ impl Interp {
                     match self.eval_call(call, f, args, extra, &t.vars, mode)? {
                         Value::Pending(a) => StartReq::Act(*a),
                         Value::Modifier(m) => StartReq::Mod(*m),
+                        Value::Call(c) => StartReq::Task(c),
                         other => return Err(type_err(format!(
                             "`start` needs a timed action or a modifier, found {}",
                             other.type_name()
@@ -1722,6 +1810,9 @@ impl Interp {
         args: Vec<(Option<String>, Value)>,
         _mode: Mode,
     ) -> Res<Value> {
+        if let Some(def) = self.defs.get(name).cloned() {
+            return self.call_def(&def, args, None, _mode);
+        }
         let at_default = |m: &HashMap<&'static str, Value>, s: &Interp| -> Res<[f64; 2]> {
             m.get("at")
                 .map(|v| s.point(v, "`at`"))
@@ -1785,6 +1876,11 @@ impl Interp {
                 let m = self.bind(name, args, &["a", "b"], &["a", "b"])?;
                 let (a, b) = (self.point(&m["a"], "`a`")?, self.point(&m["b"], "`b`")?);
                 Ok(Value::Num(((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()))
+            }
+            "atan2" => {
+                let m = self.bind(name, args, &["y", "x"], &["y", "x"])?;
+                let (y, x) = (self.num(&m["y"], "`y`")?, self.num(&m["x"], "`x`")?);
+                Ok(Value::Angle(y.atan2(x) / std::f64::consts::TAU))
             }
             "direction_to" => {
                 let m = self.bind(name, args, &["a", "b"], &["a", "b"])?;
@@ -1934,6 +2030,11 @@ impl Interp {
         span: Span,
         mode: Mode,
     ) -> Res<Value> {
+        if let Some(def) = self.defs.get(name).cloned() {
+            if def.params.first().map(|p| p.name.as_str()) == Some("self") {
+                return self.call_def(&def, args, Some(obj), mode);
+            }
+        }
         if TOPOLOGY_METHODS.contains(&name) {
             self.guard_topology(mode, name)?;
         }

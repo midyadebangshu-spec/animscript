@@ -1,0 +1,6 @@
+## A small importable library used by the tests.
+fn triple(x: Number) -> Number:
+    return x * 3
+
+action nudge(self: Shape):
+    self.move_by(5, 0)

@@ -4,7 +4,9 @@
 pub mod ast;
 pub mod check;
 pub mod color;
+pub mod defs;
 pub mod fluid;
+pub mod imports;
 pub mod interp;
 pub mod layers;
 pub mod lexer;
@@ -31,9 +33,23 @@ pub fn load(src: &str) -> Res<Interp> {
 
 /// Like `load`, with the folder that relative asset paths are resolved from.
 pub fn load_in(src: &str, base: &std::path::Path) -> Res<Interp> {
+    let src = &imports::expand_imports(src, base)?;
     let program = parser::parse(src)?;
     let mut it = Interp::new(src, program)?;
     it.base_dir = base.to_path_buf();
     it.build()?;
     Ok(it)
+}
+
+/// Run `f` on a thread with a large stack: a user `fn` that calls itself recurses on the Rust stack,
+/// and the default stack of a test or worker thread is small. A panic inside `f` is re-raised here.
+pub(crate) fn on_big_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    let handle = std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(f)
+        .expect("a thread for the interpreter");
+    match handle.join() {
+        Ok(v) => v,
+        Err(e) => std::panic::resume_unwind(e),
+    }
 }

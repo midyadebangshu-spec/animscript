@@ -579,6 +579,50 @@ Parents are solved before children; ties follow declaration order. A cycle is `E
 
 ## 8. Actions and the standard library
 
+### 8.0 Defining your own actions and functions (implemented)
+
+Only the primitive operations are built into the language. Everything bigger, like turning to look at
+something, walking somewhere or shaking, is an **action** you (or a library) write in AnimScript:
+
+```anim
+import "std/motion"                    # bundled: look_to, hesitate, shake, pulse, hop, angle_to
+
+fn slot(i: Int) -> Number:             # a function computes a value instantly
+    return 140 + i * 130
+
+action pop_in(self: Shape, over: Duration = 0.4.seconds):    # an action takes time
+    self.scale_to(0.01)
+    self.scale_to(1) over over ease ease_out
+
+shape b = square(size: 70, at: (slot(1), 470))
+scene "s" for 3.seconds:
+    main:
+        b.pop_in()                         # runs like a built-in action, then the next line starts
+        start b.hop(height: 50)            # or run it in the background: `let h = start ...`, `await h`, `cancel h`
+        turret.look_to((400, 100), over: 0.6.seconds)         # look_to is written in AnimScript, in lib/motion.anim
+```
+
+- `action name(self: Shape, x: Number = 1, over: Duration = 1.second):` and
+  `fn name(a: Number) -> Number:`. The first parameter named `self` makes the call work as `thing.name(...)`;
+  without it call `name(thing, ...)`. Arguments are positional or named; defaults may use earlier parameters;
+  a wrong type is `E-TYP-001`, a missing, unknown or doubled argument `E-TYP-003`.
+- Types: `Any Number Int Bool String Point Angle Duration Color Shape Entity List Easing Region Vertex Edge
+  Face Handle` (a bone is a `Shape`). Leave a type out to accept anything.
+- `over D ease E` after a call becomes the named arguments `over` and `ease`, so declare them as parameters to
+  accept them.
+- **Inside a definition:** `return` (ends the call; gives an `fn`'s value), `while cond:`, `if`/`else`,
+  `for`, `repeat`, `wait`, calls to other actions and functions, and `x = ...`, `x += ...` on variables declared
+  with `let`. A body sees the top-level `let` values and its own parameters, not the caller's variables.
+- A `fn` cannot wait or animate (`E-DEF-002`); calls nest at most 64 deep (`E-RUN-007`); a `while` that never
+  waits is stopped (`E-STM-003`).
+- Optional first lines of a definition: `uses body` and `priority 2` (recorded for documentation) and
+  `requires n > 0` (checked on every call; `E-CAP-002` when false).
+- `import "file.anim"` (relative to the importing file) or `import "std/motion"` (bundled) includes
+  definitions. Library files are plain AnimScript: see `crates/lang/lib/motion.anim`, and copy and change them freely.
+- `atan2(y, x)` gives an Angle; `angle_to(a, b)` (from `std/motion`) is the direction from one point to another.
+- A definition cannot yet read a property's current *animated* value, so an action cannot follow a moving target
+  frame by frame. Worked example: `examples/actions.anim`.
+
 ### 8.1 Defining an action
 
 ```anim
