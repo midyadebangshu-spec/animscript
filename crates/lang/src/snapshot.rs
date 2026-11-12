@@ -26,6 +26,8 @@ pub struct Resolved {
     pub tint: BTreeMap<String, [f64; 4]>,
     pub shape_width: BTreeMap<String, f64>,
     pub opacity: BTreeMap<String, f64>,
+    /// The physics section of the snapshot (contacts, joints, sleep flags), when a world exists.
+    pub physics: Option<J>,
 }
 
 /// The complete description of one tick. Vertex positions, curve handles and styles are fully resolved
@@ -115,13 +117,17 @@ pub fn build_snapshot(
             json!({"id": n, "flags": flags})
         })
         .collect();
-    json!({
+    let mut snap = json!({
         "tick": tick, "project_tick": project_tick, "scene": scene,
         "canvas": [it.canvas.0, it.canvas.1],
         "background": it.background.map(hex),
         "camera": {"position": [it.canvas.0 as f64 / 2.0, it.canvas.1 as f64 / 2.0], "zoom": 1.0, "rotation": 0.0},
         "entities": entities, "shapes": shapes,
-    })
+    });
+    if let Some(p) = &resolved.physics {
+        snap["physics"] = p.clone();
+    }
+    snap
 }
 
 fn canon(v: &J, out: &mut String) {

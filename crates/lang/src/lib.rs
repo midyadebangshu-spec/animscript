@@ -8,6 +8,7 @@ pub mod interp;
 pub mod layers;
 pub mod lexer;
 pub mod parser;
+pub mod phys;
 pub mod procedural;
 pub mod runtime;
 pub mod snapshot;

@@ -142,6 +142,15 @@ pub struct Project {
     pub span: Span,
 }
 
+/// The `world:` block (physics settings); each value is an expression evaluated while building.
+#[derive(Clone, Debug)]
+pub struct WorldDecl {
+    pub gravity: Option<Expr>,
+    pub scale: Option<Expr>,
+    pub substeps: Option<Expr>,
+    pub span: Span,
+}
+
 #[derive(Clone, Debug)]
 pub struct EntityDecl {
     pub kind: String,
@@ -186,6 +195,7 @@ pub struct Scene {
 #[derive(Clone, Debug, Default)]
 pub struct Program {
     pub project: Option<Project>,
+    pub world: Option<WorldDecl>,
     pub entities: Vec<EntityDecl>,
     pub top: Vec<Stmt>,
     pub scenes: Vec<Rc<Scene>>,

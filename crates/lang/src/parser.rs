@@ -145,6 +145,12 @@ impl Parser {
                     let p = self.project()?;
                     prog.project = Some(p);
                 }
+                T::Ident(s)
+                    if s == "world" && matches!(&self.peek_at(1).t, T::Op(o) if *o == ":") =>
+                {
+                    let w = self.world()?;
+                    prog.world = Some(w);
+                }
                 T::Ident(s) if s == "prop" || s == "character" => {
                     let e = self.entity()?;
                     prog.entities.push(e);
@@ -293,6 +299,33 @@ impl Parser {
             Ok(())
         })?;
         Ok(pr)
+    }
+
+    fn world(&mut self) -> Res<WorldDecl> {
+        let start = self.next().span;
+        let mut w = WorldDecl {
+            gravity: None,
+            scale: None,
+            substeps: None,
+            span: start,
+        };
+        self.attrs(|p, key, span| {
+            match key {
+                "gravity" => w.gravity = Some(p.expr()?),
+                "scale" => w.scale = Some(p.expr()?),
+                "substeps" => w.substeps = Some(p.expr()?),
+                _ => {
+                    return Err(Diagnostic::new(
+                        "E-SYN-001",
+                        format!("`world` has no setting `{key}`"),
+                    )
+                    .at(span)
+                    .help("settings: gravity, scale, substeps"))
+                }
+            }
+            Ok(())
+        })?;
+        Ok(w)
     }
 
     fn entity(&mut self) -> Res<EntityDecl> {

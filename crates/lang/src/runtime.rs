@@ -193,6 +193,7 @@ impl Runtime {
         self.modsets.clear();
         self.handles.clear();
         self.it.scene_name = sc.name.clone();
+        self.it.decls.start_scene();
         self.it.mod_counts.clear();
         self.pending.clear();
         self.channels.clear();
@@ -214,6 +215,7 @@ impl Runtime {
                     self.it.run_sync(&mut t)?;
                 }
                 self.it.freeze_pivots(); // pivots default to the bounding-box centre once building is over
+                self.it.build_physics()?; // the world starts from the shapes' poses after setup
                 self.register_timeline(sc)?;
                 if let Some(main) = &sc.main {
                     let id = self.new_task_id();
@@ -923,7 +925,43 @@ impl Runtime {
                     value: key_value(&k.keys, tick),
                 });
         }
-        let mut resolved = Resolved::default();
+        let mut physics = None;
+        if self.it.phys.is_some() {
+            // kinematic bodies follow the pose the other layers resolved; dynamic bodies write theirs
+            let mut kin = BTreeMap::new();
+            for n in self.it.kinematic_bodies() {
+                let mut get = |p: PropId| {
+                    let rest = self.rest_value(&n, p);
+                    by_prop
+                        .get_mut(&(n.clone(), p))
+                        .map_or(rest, |c| fold(rest, c))
+                };
+                let pose = [get(PropId::PosX), get(PropId::PosY), get(PropId::Rot)];
+                kin.insert(n.clone(), pose);
+            }
+            let poses = self.it.physics_tick(tick, &kin);
+            for (i, (n, x, y, r)) in poses.dynamic.into_iter().enumerate() {
+                for (prop, value) in [(PropId::PosX, x), (PropId::PosY, y), (PropId::Rot, r)] {
+                    by_prop
+                        .entry((n.clone(), prop))
+                        .or_default()
+                        .push(Contribution {
+                            layer: 2,
+                            mode: BlendMode::Override,
+                            weight: 1.0,
+                            priority: 0,
+                            start: 0,
+                            id: 0x4000_0000 + i as u32,
+                            value,
+                        });
+                }
+            }
+            physics = self.it.physics_snapshot();
+        }
+        let mut resolved = Resolved {
+            physics,
+            ..Resolved::default()
+        };
         for ((shape, prop), mut contribs) in by_prop {
             let v = fold(self.rest_value(&shape, prop), &mut contribs);
             let base = if prop.is_colour() {
@@ -988,6 +1026,7 @@ impl Runtime {
     }
 
     fn end_scene(&mut self) {
+        self.it.end_physics();
         let acts = std::mem::take(&mut self.acts);
         for a in acts.values() {
             self.commit(a, true); // cancelled actions keep their last sampled value

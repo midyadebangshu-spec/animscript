@@ -1,0 +1,6 @@
+[package]
+name = "animscript-physics"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

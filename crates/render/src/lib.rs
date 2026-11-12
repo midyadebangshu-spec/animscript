@@ -60,6 +60,62 @@ fn edge_path(edge: &Value) -> Option<Path> {
 
 /// Draw one snapshot. `scale` multiplies the canvas size; `debug` adds a dot on every vertex.
 pub fn render(snapshot: &Value, scale: f32, debug: bool) -> Result<Pixmap, String> {
+    render_with(snapshot, scale, debug, false)
+}
+
+/// Draw the physics section of a snapshot: contact points with their normals (red) and joints as
+/// lines between their anchors (blue). Only what the snapshot says; no simulation happens here.
+fn draw_physics(pm: &mut Pixmap, phys: &Value, tf: Transform) {
+    let xy = |v: &Value| {
+        (
+            v[0].as_f64().unwrap_or(0.0) as f32,
+            v[1].as_f64().unwrap_or(0.0) as f32,
+        )
+    };
+    let mut blue = Paint::default();
+    blue.set_color(Color::from_rgba8(0x20, 0x60, 0xd0, 255));
+    blue.anti_alias = true;
+    let line = Stroke {
+        width: 2.0,
+        ..Stroke::default()
+    };
+    for j in phys["joints"].as_array().into_iter().flatten() {
+        let ((ax, ay), (bx, by)) = (xy(&j["a"]), xy(&j["b"]));
+        let mut pb = PathBuilder::new();
+        pb.move_to(ax, ay);
+        pb.line_to(bx, by);
+        if let Some(p) = pb.finish() {
+            pm.stroke_path(&p, &blue, &line, tf, None);
+        }
+        if let Some(c) = PathBuilder::from_circle(ax, ay, 4.0) {
+            pm.stroke_path(&c, &blue, &line, tf, None);
+        }
+    }
+    let mut red = Paint::default();
+    red.set_color(Color::from_rgba8(0xd0, 0x30, 0x30, 255));
+    red.anti_alias = true;
+    for c in phys["contacts"].as_array().into_iter().flatten() {
+        let (x, y) = xy(&c["point"]);
+        let (nx, ny) = xy(&c["normal"]);
+        if let Some(d) = PathBuilder::from_circle(x, y, 3.0) {
+            pm.fill_path(&d, &red, FillRule::Winding, tf, None);
+        }
+        let mut pb = PathBuilder::new();
+        pb.move_to(x, y);
+        pb.line_to(x + nx * 14.0, y + ny * 14.0);
+        if let Some(p) = pb.finish() {
+            pm.stroke_path(&p, &red, &line, tf, None);
+        }
+    }
+}
+
+/// `render` plus optional overlays: `debug_physics` draws contacts and joints.
+pub fn render_with(
+    snapshot: &Value,
+    scale: f32,
+    debug: bool,
+    debug_physics: bool,
+) -> Result<Pixmap, String> {
     let cw = snapshot["canvas"][0]
         .as_u64()
         .ok_or("snapshot has no canvas")? as f32;
@@ -127,6 +183,9 @@ pub fn render(snapshot: &Value, scale: f32, debug: bool) -> Result<Pixmap, Strin
             }
         }
     }
+    if debug_physics {
+        draw_physics(&mut pm, &snapshot["physics"], tf);
+    }
     Ok(pm)
 }
 
@@ -136,7 +195,17 @@ pub fn render_png(
     scale: f32,
     debug: bool,
 ) -> Result<(), String> {
-    render(snapshot, scale, debug)?
+    render_png_with(snapshot, path, scale, debug, false)
+}
+
+pub fn render_png_with(
+    snapshot: &Value,
+    path: &std::path::Path,
+    scale: f32,
+    debug: bool,
+    debug_physics: bool,
+) -> Result<(), String> {
+    render_with(snapshot, scale, debug, debug_physics)?
         .save_png(path)
         .map_err(|e| e.to_string())
 }

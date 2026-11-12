@@ -37,6 +37,9 @@ enum Cmd {
         /// Draw a dot on every vertex.
         #[arg(long)]
         debug: bool,
+        /// Draw physics contacts (red, with normals) and joints (blue).
+        #[arg(long)]
+        debug_physics: bool,
     },
 }
 
@@ -102,6 +105,7 @@ fn main() -> ExitCode {
             tick,
             scale,
             debug,
+            debug_physics,
         } => {
             let src = match read(&file) {
                 Ok(s) => s,
@@ -122,7 +126,7 @@ fn main() -> ExitCode {
                 );
                 return ExitCode::from(1);
             };
-            match animscript_render::render_png(snap, &out, scale, debug) {
+            match animscript_render::render_png_with(snap, &out, scale, debug, debug_physics) {
                 Ok(()) => {
                     println!("wrote {}", out.display());
                     ExitCode::SUCCESS

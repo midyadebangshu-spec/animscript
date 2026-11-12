@@ -369,3 +369,72 @@ judgement calls I expect you to want to look at.
     `opacity` stand for themselves (`axis: y`, `property: rotation`) when no variable of that name exists.
 81. **Golden file.** The snapshot gained `opacity` and `tint` (and per-element colours are now computed in
     linear light), so the flower's hash changed again; its geometry digest did not.
+
+## Round 5: the physics engine (rigid bodies, joints and springs)
+
+82. **Own engine, no dependencies.** `crates/physics` is a Box2D-style 2D engine written for this project
+    (the plan was approved over wrapping Box2D): `f64`, single threaded, fixed iteration orders, only exactly
+    rounded arithmetic in the hot path (`sin`/`cos`/`atan2` only convert angles at the edges), so a program
+    always produces the same hashes. A `PhysicsWorld` trait (step, body count, events) marks where a 3D backend
+    (a Jolt wrapper) will plug in later; nothing 3D exists yet.
+83. **Solver.** Soft-step sequential impulses: 4 solver substeps per engine step, warm starting, relax pass,
+    speculative contacts (a contact within `0.02 m + speed * dt` is kept so a fast body is stopped at the
+    surface), 0.005 m linear slop, push-out speed capped at 3 m/s, Coulomb friction solved before the normal
+    constraint, restitution with a 1 m/s threshold, friction mixed as `sqrt(a * b)` and restitution as `max`.
+    Joints are soft constraints too (60 Hz, damping ratio 2).
+84. **Units.** The language is in pixels, seconds and kilograms; the engine in metres. `world: scale:` (default
+    100) is pixels per metre, `gravity` is in m/s^2 with y down (default `(0, 9.8)`), so 9.8 m/s^2 is 980 px/s^2.
+    Velocities read from a body are px/s; `apply_impulse((x, y))` is in kg*px/s (a 1 kg body gains x px/s).
+    Density is kg per square metre, so a 100 px square of density 1 weighs 1 kg.
+85. **`substeps`** (default 4) is the number of engine steps per frame, each of `1/(fps * substeps)` seconds. At
+    24 fps that is 1/96 s, which the engine tests use.
+86. **Shapes become bodies.** Each live face of the shape is flattened (curves at 0.5 px), and concave faces are
+    split into convex pieces (ear clipping, then Hertel-Mehlhorn merging) whose total area equals the face's.
+    A face that crosses itself or has no area is `E-PHY-001`. A static body with no faces uses its edges as thin
+    walls; a moving body needs area. Circles made with `circle(n, ...)` are n-gons. Face holes are not supported.
+87. **Pose.** At the start of every scene (after `setup:` and pivot freezing) each body's pivot is fixed at its
+    centre of mass and its `position` is set so the pose is unchanged; `position`/`rotation` of the shape then
+    *are* the body's pose. A uniform `scale` is baked into the collision shape at that moment; changing scale
+    later does not change the body, and a non-uniform scale is `E-PHY-001`.
+88. **Layers.** A dynamic body writes layer-2 *override* contributions on `position.x`, `position.y` and
+    `rotation`. Actions (layer 1) lose to physics, keyframes (layer 3) win and are not fed back into the world
+    (the body keeps simulating underneath). A kinematic body writes nothing: before each step the runtime folds
+    the other layers, and the body is given the velocity that reaches that pose by the end of the frame, so it
+    carries things by friction and pushes them. A static body is never moved; to move a platform make it
+    kinematic.
+89. **Scene boundaries.** The world is rebuilt at every scene start from the shapes' rest poses with zero
+    velocity (plus any `set_velocity`/`apply_impulse` made in `setup:` or at the top level, which are applied in
+    order); at scene end each dynamic body's final pose is written to `position`/`rotation`. The step for tick 0
+    is skipped so the first snapshot shows the starting pose. `rotation` accumulates across wraps (it can pass
+    1 turn).
+90. **Creation.** `.body()`, joint constructors and the `world:` block belong to the build phase or `setup:`;
+    in `main:`/rules they are `E-SHP-003`. Bodies made in `setup:` last for that scene only.
+91. **Events.** `a.touches(b)` is true while any of the two bodies' fixtures is touching (a rising edge is the
+    begin event, so `when a.touches(b):` fires once per contact). It becomes visible one tick after the contact
+    starts, like every state the runtime computes after the delta cycles. `a.leaves(b)` is an event true for
+    one tick. Touching starts when the closest point is within 1 cm and ends beyond 2 cm. A sensor
+    (`sensor: true`) never pushes: it only reports overlap through the same two predicates.
+92. **Joints.** `revolute`, `weld`, `prismatic`, `distance` (rigid, or a spring with `spring: (frequency,
+    damping)`), `rope` (a maximum length) and `follow` (pull a body to a target, `force` capped) return a joint;
+    `follow` joints have `set_target((x, y))`. Joined bodies do not collide unless `collide: true`. `distance`
+    with two shapes is the joint; with two points it is still the maths function. Angles in `limits` must be
+    angles (`60.deg`); a motor is `(speed, torque)` with the speed as an angle per second.
+93. **Arguments.** Tuples with named fields are not in the language yet, so `spring` and `motor` are positional
+    pairs. The names `static`, `dynamic` and `kinematic` stand for themselves in `kind:` like `x` and `y` do.
+    Tuples gained `.x` and `.y`.
+94. **An angle limit needs inertia.** The limit constrains only the relative angular velocity, so it cannot hold
+    a point mass on a long arm (its own inertia is almost zero), exactly as in Box2D. Limbs should be shapes with
+    area along the arm. The engine test uses a rod for this reason.
+95. **Sleeping.** A body sleeps when its island (bodies linked by touching contacts and joints, never through
+    static bodies) has stayed under 0.05 m/s and 2 deg/s for 0.5 s; touching a moving body, an impulse or a
+    velocity change wakes the whole island. A moving kinematic body keeps what touches it awake.
+96. **Snapshot.** When a world exists the snapshot has a `physics` section (bodies with `kind` and `awake`,
+    touching contact points with normals and impulses, joint anchors in pixels); it is part of the hash.
+    Programs without physics have no such key, so earlier hashes (the flower golden file) are unchanged.
+    `anim render --debug-physics` draws contacts (red, with normals) and joints (blue).
+97. **Diagnostics.** `E-PHY-001` (a body that cannot exist: no area, non-uniform scale, unknown kind, bad
+    value, second body on a shape, bad `world:` value), `E-PHY-002` (bad joint arguments, a joint or physics
+    member on a shape without a body) and `W-PHY-001` (bodies overlap by more than 1 cm at the start of a scene).
+98. **Not yet.** Continuous collision for very fast thin bodies, collision filtering by category, body
+    reading while building (`velocity` before the scene runs reads zero), face holes, and soft bodies, fluids,
+    particles and character rigs (the next rounds).

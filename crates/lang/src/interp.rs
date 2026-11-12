@@ -207,6 +207,9 @@ pub struct Interp {
     pub seed: i64,
     pub scene_name: String,
     pub mod_counts: BTreeMap<String, u32>,
+    pub world_cfg: crate::phys::WorldCfg,
+    pub decls: crate::phys::Decls,
+    pub phys: Option<crate::phys::Physics>,
 }
 
 pub const TOPOLOGY_METHODS: &[&str] = &[
@@ -269,6 +272,9 @@ impl Interp {
             seed: 0,
             scene_name: String::new(),
             mod_counts: BTreeMap::new(),
+            world_cfg: Default::default(),
+            decls: Default::default(),
+            phys: None,
             program: Program::default(),
         };
         if let Some(p) = &program.project {
@@ -306,6 +312,7 @@ impl Interp {
 
     /// Run the top-level statements (the build phase) and publish their `let` bindings as globals.
     pub fn build(&mut self) -> Res<()> {
+        self.eval_world()?;
         let block: Block = Rc::new(self.program.top.clone());
         let mut t = Task::new(0, block, Vars::new(), Mode::Build, false);
         self.run_sync(&mut t)?;
@@ -978,7 +985,7 @@ impl Interp {
         }
     }
 
-    fn num(&self, v: &Value, what: &str) -> Res<f64> {
+    pub(crate) fn num(&self, v: &Value, what: &str) -> Res<f64> {
         match v {
             Value::Int(i) => Ok(*i as f64),
             Value::Num(n) => Ok(*n),
@@ -992,7 +999,7 @@ impl Interp {
             ))),
         }
     }
-    fn int(&self, v: &Value, what: &str) -> Res<i64> {
+    pub(crate) fn int(&self, v: &Value, what: &str) -> Res<i64> {
         match v {
             Value::Int(i) => Ok(*i),
             other => Err(type_err(format!(
@@ -1015,7 +1022,7 @@ impl Interp {
             ))),
         }
     }
-    fn point(&self, v: &Value, what: &str) -> Res<[f64; 2]> {
+    pub(crate) fn point(&self, v: &Value, what: &str) -> Res<[f64; 2]> {
         match v {
             Value::Tuple(t) if t.len() == 2 => Ok([self.num(&t[0], what)?, self.num(&t[1], what)?]),
             Value::Elem(sn, r) if r.kind == Kind::V => {
@@ -1030,7 +1037,7 @@ impl Interp {
         }
     }
 
-    fn bind(
+    pub(crate) fn bind(
         &self,
         fname: &str,
         args: Vec<(Option<String>, Value)>,
@@ -1245,7 +1252,15 @@ impl Interp {
         // names that stand for themselves in arguments such as `axis: y` or `property: rotation`
         if matches!(
             n,
-            "x" | "y" | "both" | "position" | "scale" | "rotation" | "opacity"
+            "x" | "y"
+                | "both"
+                | "position"
+                | "scale"
+                | "rotation"
+                | "opacity"
+                | "static"
+                | "dynamic"
+                | "kinematic"
         ) {
             return Ok(Value::Str(n.to_string()));
         }
@@ -1267,6 +1282,9 @@ impl Interp {
     fn get_attr(&mut self, obj: Value, name: &str) -> Res<Value> {
         match obj {
             Value::Shape(sn) => {
+                if let Some(v) = self.phys_attr(&sn, name) {
+                    return v;
+                }
                 let sh = &self.shapes[&sn];
                 if let Some((k, id)) = parse_elem_name(name) {
                     return Ok(Value::Elem(sn.clone(), sh.get_ref(k, id)?));
@@ -1383,6 +1401,9 @@ impl Interp {
                         .help("this build supports `scene.starts`"),
                 ),
             },
+            Value::Tuple(t) if t.len() == 2 && (name == "x" || name == "y") => {
+                Ok(t[usize::from(name == "y")].clone())
+            }
             Value::List(items) => match name {
                 "count" => Ok(Value::Int(items.len() as i64)),
                 _ => Err(
@@ -1625,6 +1646,9 @@ impl Interp {
                 .map(|v| s.point(v, "`at`"))
                 .unwrap_or(Ok([0.0, 0.0]))
         };
+        if Interp::is_joint_function(name, &args) {
+            return self.joint_function(name, args, _mode);
+        }
         match name {
             "square" => {
                 let m = self.bind(name, args, &["size", "at"], &[])?;
@@ -1811,6 +1835,13 @@ impl Interp {
     ) -> Res<Value> {
         if TOPOLOGY_METHODS.contains(&name) {
             self.guard_topology(mode, name)?;
+        }
+        if let (Value::Shape(sn), true) = (&obj, Interp::is_body_method(name)) {
+            let sn = sn.clone();
+            return self.body_method(&sn, name, args, mode);
+        }
+        if let Value::Joint(j) = obj {
+            return self.joint_method(j, name, args, mode);
         }
         match name {
             "wobble" | "noise" => return self.modifier_method(obj, name, args, span, mode),

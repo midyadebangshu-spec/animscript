@@ -1274,6 +1274,119 @@ scene "Breathe" for 5.seconds:
 
 ---
 
+## 13b. Physics (rigid bodies, joints and springs)
+
+A shape becomes a physical body with `.body()`. Gravity, collisions, friction, bounce, sleeping and joints
+are simulated deterministically, so the same program always gives the same frames.
+
+```anim
+world:
+    gravity: (0, 9.8)     # metres per second squared, y points down (the default)
+    scale: 100            # pixels per metre (the default)
+    substeps: 4           # engine steps per frame (the default)
+
+shape floor = rectangle(width: 760, height: 30, at: (400, 570))
+shape ball  = circle(20, radius: 26, at: (170, 250))
+floor.body(kind: static)
+ball.body(restitution: 0.55, friction: 0.3)
+```
+
+`world:` is optional (the values above are the defaults). Write it once, at the top level, after `project`.
+
+### Bodies
+
+`shape.body(...)` takes these named arguments (all optional):
+
+| Argument | Meaning | Default |
+|---|---|---|
+| `kind` | `static` (never moves), `dynamic` (simulated), `kinematic` (follows your animation and pushes dynamic bodies) | `dynamic` |
+| `density` | kilograms per square metre; a 100 px square of density 1 weighs 1 kg | `1` |
+| `friction` | 0 is ice; two surfaces use the geometric mean | `0.6` |
+| `restitution` | bounciness, 0 to 1; two surfaces use the larger | `0` |
+| `linear_damping`, `angular_damping` | slows motion down, like air drag | `0` |
+| `gravity_scale` | `0` floats, `-1` rises | `1` |
+| `fixed_rotation` | `true` stops it from turning | `false` |
+| `sensor` | `true` reports overlap but never pushes | `false` |
+
+Every face of the shape collides, so a concave face (an L, a star) works: it is split into convex pieces for
+you. A moving body needs area; a static body may be a bare line of edges (a wall). A body's `scale` must be
+uniform and is fixed when the scene starts.
+
+Make bodies at the top level or in `setup:`, never in `main:` (`E-SHP-003`).
+
+### The pose is the shape's own
+
+A dynamic body drives the shape's `position` and `rotation`. Actions on those properties lose to physics;
+keyframes and `timeline:` win (the body keeps simulating underneath). A **kinematic** body is moved by your
+actions and keyframes, and carries or pushes dynamic bodies:
+
+```anim
+platform.body(kind: kinematic, friction: 1.0)
+scene "ride" for 2.seconds:
+    main:
+        platform.move_by(200, 0) over 2.seconds ease linear
+```
+
+Each scene starts the world again from the shapes' current poses with zero velocity, and leaves them where
+they ended.
+
+### Reading and nudging a body
+
+```anim
+ball.set_velocity((120, 0))     # px per second
+ball.apply_impulse((0, -300))   # kg * px / s: a 1 kg body gains 300 px/s
+let v = ball.velocity           # (x, y) in px/s;  v.x, v.y
+ball.speed                      # px/s
+ball.awake                      # false once it has come to rest
+ball.mass                       # kilograms
+```
+
+Before the scene runs `velocity` and `speed` read 0. Calls in `setup:` set the starting motion.
+
+### Reacting to contact
+
+```anim
+scene "s" for 6.seconds:
+    when ball.touches(ground):          # fires once, when they meet
+        ball.fill_to(#ffb347) over 6.frames
+    when ball.leaves(ground):           # an event, true for one tick
+        ...
+```
+
+`a.touches(b)` is true while the two are in contact; like all runtime state it is seen one tick after it
+happens.
+
+### Joints and springs
+
+```anim
+let hinge = revolute(door, frame, anchor: (200, 100), limits: (-60.deg, 60.deg), motor: (90.deg, 50))
+let s = distance(a, b, length: 120, spring: (4, 0.5))      # rest length, (frequency Hz, damping ratio)
+let r = rope(a, b, max: 150)                               # slack until it is taut
+let rail = prismatic(slider, track, axis: (1, 0), limits: (0, 200))   # slides, limits in px
+let w = weld(a, b, anchor: (x, y))                         # glued together
+let f = follow(ball, target: (300, 200), force: 500, spring: (5, 0.7))
+f.set_target((100, 100))
+```
+
+- `anchor` is where the joint sits in the world at the start. `distance` and `rope` default to the bodies'
+  centres (`anchor_a:`, `anchor_b:` choose other points); a `distance` without `spring` is a rigid rod.
+- Joined bodies do not collide with each other unless you add `collide: true`.
+- An angle `limits` needs angles (`60.deg`); `motor` is `(speed, torque)` with the speed an angle per second.
+- A limit holds a body that has some length along the joint (a limb), not a tiny weight on a long arm.
+- `distance(a, b)` with two *shapes* is the joint; with two points it is still the distance between points.
+
+### Looking at what the engine does
+
+```bash
+anim render scene.anim -o frame.png --tick 36 --debug-physics
+```
+
+draws contact points with their normals (red) and joints (blue). Snapshots carry a `physics` section (bodies
+and whether they are awake, touching contacts, joint anchors); it is part of the frame hash.
+
+New errors: `E-PHY-001` (a body that cannot exist), `E-PHY-002` (bad joint arguments), warning `W-PHY-001`
+(bodies overlap at the start of a scene). Worked example: `examples/physics.anim`.
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,

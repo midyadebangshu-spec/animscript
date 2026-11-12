@@ -1,0 +1,50 @@
+project "Physics":
+    anim_version: "0.1"
+    canvas: 800x600
+    fps: 24
+    background: #f4f1ea
+
+world:
+    gravity: (0, 9.8)
+    scale: 100
+
+# the floor and a ramp are static; everything else falls onto them
+shape floor = rectangle(width: 760, height: 30, at: (400, 570))
+shape wall = rectangle(width: 20, height: 600, at: (790, 300))
+shape ramp = polygon([(120, 330), (460, 440), (460, 455), (120, 345)])
+shape ball = circle(20, radius: 26, at: (170, 250))
+shape crate = rectangle(width: 70, height: 50, at: (600, 100))
+shape stack1 = square(size: 44, at: (640, 520))
+shape stack2 = square(size: 44, at: (640, 470))
+shape bob = square(size: 30, at: (330, 140))
+shape pin = square(size: 12, at: (230, 140))
+
+floor.fill = #6b5b4b
+wall.fill = #6b5b4b
+ramp.fill = #6b5b4b
+ball.fill = #e0674f
+crate.fill = #4f8fe0
+stack1.fill = #f2c14e
+stack2.fill = #f2c14e
+bob.fill = #7a5cc4
+pin.fill = #333333
+
+floor.body(kind: static)
+wall.body(kind: static)
+ramp.body(kind: static, friction: 0.4)
+ball.body(restitution: 0.55, friction: 0.3)
+crate.body(density: 0.6)
+stack1.body()
+stack2.body()
+pin.body(kind: static)
+bob.body(gravity_scale: 1.0)
+
+let hinge = revolute(pin, bob, anchor: (230, 140))
+
+scene "Physics" for 6.seconds:
+    when ball.touches(ramp):
+        ball.fill_to(#ffb347) over 6.frames
+    when crate.touches(floor):
+        crate.fill_to(#2f6fbf) over 6.frames
+    main:
+        wait 6.seconds

@@ -46,6 +46,11 @@ pub struct Diagnostic {
 pub type Res<T> = Result<T, Diagnostic>;
 
 impl Diagnostic {
+    /// The same diagnostic under another code (used when an argument error belongs to a feature).
+    pub fn with_code(mut self, code: &str) -> Self {
+        self.code = code.to_string();
+        self
+    }
     pub fn new(code: &str, message: impl Into<String>) -> Self {
         Diagnostic {
             code: code.to_string(),
