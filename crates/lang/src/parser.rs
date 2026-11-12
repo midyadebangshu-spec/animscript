@@ -403,15 +403,20 @@ impl Parser {
                 break;
             }
             let span = self.peek().span;
-            let kind = self.ident("`bone` or `ik`")?;
-            if kind != "bone" && kind != "ik" {
+            let kind = self.ident("`bone`, `ik` or `ragdoll`")?;
+            if kind != "bone" && kind != "ik" && kind != "ragdoll" {
                 return Err(Diagnostic::new(
                     "E-SYN-001",
-                    format!("an armature has `bone` and `ik` lines, not `{kind}`"),
+                    format!("an armature has `bone`, `ik` and `ragdoll` lines, not `{kind}`"),
                 )
                 .at(span));
             }
-            let iname = self.ident("a name")?;
+            // `ragdoll:` is one line per armature and has no name
+            let iname = if kind == "ragdoll" {
+                "ragdoll".to_string()
+            } else {
+                self.ident("a name")?
+            };
             self.expect_op(":")?;
             let mut attrs = vec![];
             loop {

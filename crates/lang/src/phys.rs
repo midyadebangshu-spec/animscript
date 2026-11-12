@@ -54,6 +54,32 @@ pub struct BodyDecl {
     pub sensor: bool,
 }
 
+/// A character controller: walk and jump a dynamic body that never tips over.
+#[derive(Clone, Debug)]
+pub struct ControllerDecl {
+    pub shape: String,
+    /// Top walking speed, px/s.
+    pub speed: f64,
+    /// How fast the horizontal velocity changes on the ground, px/s^2.
+    pub accel: f64,
+    /// Take-off speed of a jump, px/s.
+    pub jump: f64,
+    /// Fraction of `accel` available in the air.
+    pub air_control: f64,
+}
+
+/// Live controller state of the running scene.
+#[derive(Clone, Debug)]
+struct Ctrl {
+    decl: ControllerDecl,
+    input: f64,
+    jump_pending: bool,
+    grounded: bool,
+    /// Half width and the distance from the centre of mass to the feet, metres.
+    half_w: f64,
+    feet: f64,
+}
+
 #[derive(Clone, Debug)]
 pub enum JointSpec {
     Revolute {
@@ -110,6 +136,7 @@ pub struct Decls {
     pub soft: Vec<(bool, crate::soft::SoftDecl)>,
     pub binds: Vec<(bool, crate::rig::BindDecl)>,
     pub skins: Vec<(bool, crate::rig::SkinDecl)>,
+    pub controllers: Vec<(bool, ControllerDecl)>,
 }
 
 impl Decls {
@@ -120,6 +147,7 @@ impl Decls {
         self.soft.retain(|b| !b.0);
         self.binds.retain(|b| !b.0);
         self.skins.retain(|b| !b.0);
+        self.controllers.retain(|b| !b.0);
     }
     pub fn is_empty(&self) -> bool {
         self.bodies.is_empty()
@@ -134,8 +162,8 @@ pub struct Physics {
     pub world: ph::World,
     pub(crate) ppm: f64,
     steps: usize,
-    names: Vec<String>,
-    ids: BTreeMap<String, usize>,
+    pub(crate) names: Vec<String>,
+    pub(crate) ids: BTreeMap<String, usize>,
     com: BTreeMap<String, [f64; 2]>,
     kinds: BTreeMap<String, BodyKind>,
     angle: BTreeMap<String, f64>,
@@ -143,6 +171,43 @@ pub struct Physics {
     touching: BTreeSet<(usize, usize)>,
     /// Pairs whose contact began during the last frame, even if it already ended again.
     began: BTreeSet<(usize, usize)>,
+    ctrl: BTreeMap<String, Ctrl>,
+    pub(crate) rag: BTreeMap<String, crate::ragdoll::Rag>,
+}
+
+impl Physics {
+    /// Before each step: find out whether each controlled body stands on something, then move it
+    /// towards the velocity its input asks for and start a pending jump.
+    fn steer(&mut self, dt: f64) {
+        let names: Vec<String> = self.ctrl.keys().cloned().collect();
+        for n in names {
+            let id = self.ids[&n];
+            let (c, v) = {
+                let b = self.world.body(id);
+                (b.c, b.v)
+            };
+            let st = &self.ctrl[&n];
+            let reach = st.feet + 0.04;
+            let grounded = [-0.9, 0.0, 0.9].iter().any(|k| {
+                self.world
+                    .raycast(v2(c.x + k * st.half_w, c.y), v2(0.0, 1.0), reach, Some(id))
+                    .is_some_and(|h| h.normal.y < -0.5)
+            });
+            let st = self.ctrl.get_mut(&n).expect("controller");
+            st.grounded = grounded;
+            let d = st.decl.clone();
+            let target = st.input * d.speed / self.ppm;
+            let rate = d.accel / self.ppm * if grounded { 1.0 } else { d.air_control } * dt;
+            let mut nv = v;
+            nv.x += (target - v.x).clamp(-rate, rate);
+            if std::mem::take(&mut st.jump_pending) && grounded {
+                nv.y = -d.jump / self.ppm;
+            }
+            if nv != v {
+                self.world.set_linear_velocity(id, nv);
+            }
+        }
+    }
 }
 
 pub struct TickPoses {
@@ -385,6 +450,74 @@ impl Interp {
                 }
                 Ok(Value::None)
             }
+            "controller" => {
+                self.guard_build(mode, "controller")?;
+                let m = self.bind(name, args, &["speed", "accel", "jump", "air_control"], &[])?;
+                let f = |k: &str, d: f64| -> Res<f64> {
+                    m.get(k).map(|v| self.num(v, k)).unwrap_or(Ok(d))
+                };
+                let decl = ControllerDecl {
+                    shape: sn.to_string(),
+                    speed: f("speed", 200.0)?,
+                    accel: f("accel", 1200.0)?,
+                    jump: f("jump", 400.0)?,
+                    air_control: f("air_control", 0.5)?,
+                };
+                let Some(body) = self.decls.body(sn) else {
+                    return Err(phys_err(
+                        "E-PHY-002",
+                        format!("`{sn}` has no body; call `{sn}.body()` first"),
+                    ));
+                };
+                if body.kind != BodyKind::Dynamic {
+                    return Err(phys_err(
+                        "E-PHY-005",
+                        format!("`{sn}` is not a dynamic body, so it cannot have a controller"),
+                    ));
+                }
+                if decl.speed < 0.0
+                    || decl.accel <= 0.0
+                    || decl.jump < 0.0
+                    || !(0.0..=1.0).contains(&decl.air_control)
+                {
+                    return Err(phys_err("E-PHY-005", "`speed` and `jump` cannot be negative, `accel` must be positive and `air_control` between 0 and 1"));
+                }
+                if self.decls.controllers.iter().any(|c| c.1.shape == sn) {
+                    return Err(phys_err(
+                        "E-PHY-005",
+                        format!("`{sn}` already has a controller"),
+                    ));
+                }
+                let scene = self.is_scene_local(mode);
+                self.decls.controllers.push((scene, decl));
+                Ok(Value::None)
+            }
+            "move" | "jump" => {
+                if mode != Mode::Run {
+                    return Err(phys_err(
+                        "E-PHY-005",
+                        format!("`{name}` steers a character while a scene runs"),
+                    ));
+                }
+                let input = if name == "move" {
+                    let m = self.bind(name, args, &["direction"], &["direction"])?;
+                    Some(self.num(&m["direction"], "`direction`")?.clamp(-1.0, 1.0))
+                } else {
+                    self.bind(name, args, &[], &[])?;
+                    None
+                };
+                let Some(c) = self.phys.as_mut().and_then(|p| p.ctrl.get_mut(sn)) else {
+                    return Err(phys_err(
+                        "E-PHY-005",
+                        format!("`{sn}` has no controller; call `{sn}.controller()` first"),
+                    ));
+                };
+                match input {
+                    Some(d) => c.input = d,
+                    None => c.jump_pending = true,
+                }
+                Ok(Value::None)
+            }
             "touches" | "leaves" => {
                 let m = self.bind(name, args, &["other"], &["other"])?;
                 let Value::Shape(other) = &m["other"] else {
@@ -415,7 +548,14 @@ impl Interp {
     pub fn is_body_method(name: &str) -> bool {
         matches!(
             name,
-            "body" | "apply_impulse" | "set_velocity" | "touches" | "leaves"
+            "body"
+                | "apply_impulse"
+                | "set_velocity"
+                | "touches"
+                | "leaves"
+                | "controller"
+                | "move"
+                | "jump"
         )
     }
 
@@ -763,6 +903,14 @@ impl Interp {
         if let Some(r) = self.soft_attr(sn, name) {
             return Some(r);
         }
+        if name == "grounded" && self.decls.controllers.iter().any(|c| c.1.shape == sn) {
+            return Some(Ok(Value::Bool(
+                self.phys
+                    .as_ref()
+                    .and_then(|p| p.ctrl.get(sn))
+                    .is_some_and(|c| c.grounded),
+            )));
+        }
         if !matches!(
             name,
             "velocity" | "speed" | "awake" | "mass" | "angular_velocity"
@@ -803,7 +951,7 @@ impl Interp {
 
     /// Build the world for the scene that is starting, from the shapes' current poses.
     pub fn build_physics(&mut self) -> Res<()> {
-        if self.decls.is_empty() {
+        if self.decls.is_empty() && !self.has_ragdolls() {
             self.phys = None;
             return Ok(());
         }
@@ -822,10 +970,24 @@ impl Interp {
             last: BTreeMap::new(),
             touching: BTreeSet::new(),
             began: BTreeSet::new(),
+            ctrl: BTreeMap::new(),
+            rag: BTreeMap::new(),
         };
         let decls: Vec<BodyDecl> = self.decls.bodies.iter().map(|b| b.1.clone()).collect();
         for d in &decls {
             self.check_body_shape(d)?;
+            let ctrl = self
+                .decls
+                .controllers
+                .iter()
+                .find(|c| c.1.shape == d.shape)
+                .map(|c| c.1.clone());
+            let mut d = d.clone();
+            if ctrl.is_some() {
+                d.fixed_rotation = true;
+                d.friction = 0.0;
+            }
+            let d = &d;
             let sh = self.shapes[&d.shape].clone();
             let s = sh.scale[0];
             let faces: Vec<Vec<[f64; 2]>> = sh
@@ -890,6 +1052,26 @@ impl Interp {
                     })?;
                     world.add_fixture(id, &fixture(ph::Shape::Polygon(poly)));
                 }
+            }
+            if let Some(decl) = ctrl {
+                let ys: Vec<f64> = faces.iter().flatten().map(|p| p[1]).collect();
+                let xs: Vec<f64> = faces.iter().flatten().map(|p| p[0]).collect();
+                let hi = ys.iter().cloned().fold(f64::MIN, f64::max);
+                let (lo_x, hi_x) = (
+                    xs.iter().cloned().fold(f64::MAX, f64::min),
+                    xs.iter().cloned().fold(f64::MIN, f64::max),
+                );
+                ph.ctrl.insert(
+                    d.shape.clone(),
+                    Ctrl {
+                        decl,
+                        input: 0.0,
+                        jump_pending: false,
+                        grounded: false,
+                        half_w: (hi_x - lo_x) * s / ppm / 2.0,
+                        feet: (hi - com[1]) * s / ppm,
+                    },
+                );
             }
             ph.names.push(d.shape.clone());
             ph.ids.insert(d.shape.clone(), id);
@@ -978,6 +1160,7 @@ impl Interp {
             };
             world.create_joint(&def.collide_connected(j.collide));
         }
+        self.build_ragdolls(&mut world, &mut ph);
         let ops: Vec<InitOp> = self.decls.ops.iter().map(|o| o.1.clone()).collect();
         for op in &ops {
             match op {
@@ -1027,6 +1210,9 @@ impl Interp {
         let Some(ph) = self.phys.as_mut() else { return };
         ph.began.clear();
         if tick > 0 {
+            ph.steer(1.0 / fps);
+        }
+        if tick > 0 {
             for (name, pose) in kin {
                 let (id, com) = (ph.ids[name], ph.com[name]);
                 let p = v2((pose[0] + com[0]) / ph.ppm, (pose[1] + com[1]) / ph.ppm);
@@ -1067,7 +1253,7 @@ impl Interp {
         let mut dynamic = vec![];
         let names = ph.names.clone();
         for n in names {
-            if ph.kinds[&n] != BodyKind::Dynamic {
+            if ph.kinds.get(&n) != Some(&BodyKind::Dynamic) {
                 continue;
             }
             let b = ph.world.body(ph.ids[&n]);
@@ -1110,7 +1296,7 @@ impl Interp {
     pub fn physics_snapshot(&self) -> Option<J> {
         let ph = self.phys.as_ref()?;
         let px = |v: Vec2| json!([v.x * ph.ppm, v.y * ph.ppm]);
-        let bodies: Vec<J> = ph.names.iter().map(|n| json!({"shape": n, "kind": kind_name(ph.kinds[n]), "awake": ph.world.body(ph.ids[n]).awake})).collect();
+        let bodies: Vec<J> = ph.names.iter().map(|n| json!({"shape": n, "kind": kind_name(ph.world.body(ph.ids[n]).kind), "awake": ph.world.body(ph.ids[n]).awake})).collect();
         let contacts: Vec<J> = ph.world.contact_infos().iter().map(|c| json!({"a": ph.names[c.a], "b": ph.names[c.b], "point": px(c.point), "normal": [c.normal.x, c.normal.y], "impulse": c.normal_impulse})).collect();
         let joints: Vec<J> = (0..ph.world.joint_count())
             .map(|i| {
@@ -1125,7 +1311,7 @@ impl Interp {
     pub fn end_physics(&mut self) {
         let Some(ph) = self.phys.take() else { return };
         for n in &ph.names {
-            if ph.kinds[n] != BodyKind::Dynamic {
+            if ph.kinds.get(n) != Some(&BodyKind::Dynamic) {
                 continue;
             }
             let b = ph.world.body(ph.ids[n]);

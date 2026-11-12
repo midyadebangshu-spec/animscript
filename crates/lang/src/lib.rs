@@ -14,6 +14,7 @@ pub mod parser;
 pub mod particles;
 pub mod phys;
 pub mod procedural;
+pub mod ragdoll;
 pub mod rig;
 pub mod runtime;
 pub mod snapshot;

@@ -32,6 +32,7 @@ pub struct JointDef {
     pub motor: Option<(f64, f64)>,
     pub max_force: f64,
     pub collide_connected: bool,
+    pub ang_spring: Option<(f64, f64, f64)>,
 }
 
 impl JointDef {
@@ -52,6 +53,7 @@ impl JointDef {
             motor: None,
             max_force: 1e9,
             collide_connected: false,
+            ang_spring: None,
         }
     }
     pub fn revolute(a: BodyId, b: BodyId, anchor: Vec2) -> JointDef {
@@ -102,6 +104,13 @@ impl JointDef {
     }
     pub fn motor(mut self, speed: f64, max_torque: f64) -> JointDef {
         self.motor = Some((speed, max_torque));
+        self
+    }
+    /// Revolute only: a muscle that turns the joint towards a target angle (relative to the angle at
+    /// creation; set it with `World::set_joint_angle_target`). `frequency` in Hz, `damping` as a
+    /// ratio, `max_torque` in N m.
+    pub fn angle_spring(mut self, frequency: f64, damping: f64, max_torque: f64) -> JointDef {
+        self.ang_spring = Some((frequency, damping, max_torque));
         self
     }
     pub fn force(mut self, max_force: f64) -> JointDef {
@@ -187,6 +196,9 @@ pub struct Joint {
     spring: Option<(f64, f64)>,
     max_force: f64,
     pub target: Vec2,
+    ang_spring: Option<(f64, f64, f64)>,
+    pub ang_target: f64,
+    spring_imp: f64,
     // accumulated impulses
     lin: Vec2,
     ang: f64,
@@ -224,6 +236,11 @@ fn solve33(k: &[[f64; 3]; 3], b: [f64; 3]) -> [f64; 3] {
             + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
     };
     [d(0) / det, d(1) / det, d(2) / det]
+}
+
+fn wrap(a: f64) -> f64 {
+    let tau = std::f64::consts::TAU;
+    a - tau * (a / tau).round()
 }
 
 fn rel_angle(ba: &Body, bb: &Body, ref_q: Rot) -> f64 {
@@ -286,6 +303,9 @@ impl Joint {
             spring: def.spring,
             max_force: def.max_force,
             target: def.target,
+            ang_spring: def.ang_spring,
+            ang_target: 0.0,
+            spring_imp: 0.0,
             lin: Vec2::ZERO,
             ang: 0.0,
             imp: 0.0,
@@ -303,6 +323,13 @@ impl Joint {
         (ba.p + ba.q.rotate(self.la), bb.p + bb.q.rotate(self.lb))
     }
 
+    pub fn set_angle_spring(&mut self, spring: Option<(f64, f64, f64)>) {
+        self.ang_spring = spring;
+        if spring.is_none() {
+            self.spring_imp = 0.0;
+        }
+    }
+
     pub fn warm_start(&mut self, bodies: &mut [Body]) {
         if self.kind == JointKind::Target {
             let bb = &mut bodies[self.b];
@@ -316,7 +343,7 @@ impl Joint {
         let rb = bb.q.rotate(self.lb - bb.local_center);
         match self.kind {
             JointKind::Revolute => {
-                let axial = self.motor_imp + self.lower_imp - self.upper_imp;
+                let axial = self.motor_imp + self.lower_imp - self.upper_imp + self.spring_imp;
                 apply(ba, bb, ra, rb, self.lin);
                 ba.w -= ba.inv_i * axial;
                 bb.w += bb.inv_i * axial;
@@ -385,6 +412,21 @@ impl Joint {
                 let new = (self.motor_imp - axial_mass * cdot).clamp(-max, max);
                 let impulse = new - self.motor_imp;
                 self.motor_imp = new;
+                ba.w -= ia * impulse;
+                bb.w += ib * impulse;
+            }
+        }
+        if let Some((hz, zeta, torque)) = self.ang_spring.filter(|s| s.0 > 0.0) {
+            if ctx.use_bias && axial_mass > 0.0 {
+                let soft = make_soft(hz, zeta, ctx.h);
+                let c = wrap(rel_angle(ba, bb, self.ref_q) - self.ang_target);
+                let cdot = bb.w - ba.w;
+                let impulse = -soft.mass_scale * axial_mass * (cdot + soft.bias_rate * c)
+                    - soft.impulse_scale * self.spring_imp;
+                let max = ctx.h * torque;
+                let new = (self.spring_imp + impulse).clamp(-max, max);
+                let impulse = new - self.spring_imp;
+                self.spring_imp = new;
                 ba.w -= ia * impulse;
                 bb.w += ib * impulse;
             }

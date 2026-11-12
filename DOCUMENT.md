@@ -1673,6 +1673,68 @@ scene "s" for 4.seconds:
 - Errors: `E-RIG-001` (bad bone or armature), `E-RIG-002` (bad limits or IK chain), `E-RIG-003` (bad bind).
   `--debug-physics` draws the bones. Worked example: `examples/rig.anim`.
 
+## 13h. Ragdolls, active ragdolls and the character controller
+
+**Ragdoll.** Add a `ragdoll:` line to an armature and every bone also gets a physics body (a capsule: a box
+with a round end at each end) joined to its parent by a hinge that carries the bone's `limits`. Bones of one
+armature never collide with each other; they do collide with the world's bodies.
+
+```anim
+armature hero:
+    bone torso: at: (200, 465), length: 120, angle: -90.deg
+    bone head:  parent: torso, length: 36, limits: (-40.deg, 40.deg), radius: 14   # own capsule radius
+    ragdoll: radius: 9, density: 1, friction: 0.8, restitution: 0                  # all optional
+
+hero.ragdoll()                          # limp: the bones are dynamic and keep their motion
+hero.ragdoll(push: (-120, -90))         # ... with an extra velocity (px/s) on every bone
+hero.ragdoll(strength: 0.9)             # active ragdoll: muscles pull the joints towards the animated pose
+hero.animate()                          # back to the animation (the bones snap to the animated pose)
+hero.ragdolled                          # true while the bones belong to physics
+```
+
+- **Animated** (the start of every scene): the bodies are kinematic and follow the pose that keyframes, actions
+  and IK produce, so an animated bone can push things.
+- **Limp** (`strength: 0`): dynamic bodies, free hinges within their limits, the root bone falls like any body.
+- **Active** (`strength` 0 to 1): every hinge gets a muscle (an angle spring) aimed at the animated pose, with a
+  strength of up to eight times what holds the limb up against gravity, and the root bone's velocity is blended
+  towards its animated one. At 1 the pose is followed firmly, a small value sags. Animate the bones as usual
+  (`hero.arm.rotate_to(...)`) and the muscles chase the result.
+- While physical, bound and skinned art, `hero.bone.head`, `tip`, `angle` and the snapshot's `rigs` come from the
+  bodies. The ragdoll state starts over (animated) with every scene. `ragdoll()`/`animate()` run during a scene.
+- `body()` on a bone is still `E-RIG-003`; the `ragdoll:` line is how a bone gets a body.
+- Errors: `E-RIG-004` (no `ragdoll:` line, used outside a running scene, bad `strength`, bad ragdoll value).
+
+**Character controller.** Steer a dynamic body like a character: it does not tip over and ignores friction
+with walls.
+
+```anim
+runner.body()
+runner.controller(speed: 220, accel: 1500, jump: 480, air_control: 0.5)
+
+runner.move(1)         # walk right at `speed` (px/s); -1 left; 0 stop; stays until changed
+runner.jump()          # leaves the ground at `jump` px/s, only when grounded (no double jump)
+runner.grounded        # true while something solid is under its feet
+```
+
+`speed` is the top walking speed, `accel` (px/s^2) how fast the velocity changes on the ground and `air_control`
+the fraction of it in the air. `move` and `jump` are used while a scene runs. Errors: `E-PHY-005` (a controller on
+a body that is not dynamic, a bad value, `move`/`jump` without a controller or outside a running scene).
+
+Because expressions read the current animated state (section 8), a chasing behaviour is a plain action:
+
+```anim
+action run_to(self: Shape, x: Number):
+    while abs(center(self).x - x) > 8:
+        if center(self).x < x:
+            self.move(1)
+        else:
+            self.move(-1)
+        wait 1.frame
+    self.move(0)
+```
+
+Worked example: `examples/ragdoll.anim`.
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,

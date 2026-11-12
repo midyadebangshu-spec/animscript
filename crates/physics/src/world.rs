@@ -216,6 +216,73 @@ fn wake_body(bodies: &mut [Body], id: usize) {
     }
 }
 
+/// Where a ray hit: the body, the world point, the outward surface normal and the distance.
+#[derive(Clone, Copy, Debug)]
+pub struct RayHit {
+    pub body: BodyId,
+    pub point: Vec2,
+    pub normal: Vec2,
+    pub distance: f64,
+}
+
+/// Distance and local normal of the first hit of a ray (local space) with a shape, within `max`.
+fn ray_shape(shape: &Shape, o: Vec2, d: Vec2, max: f64) -> Option<(f64, Vec2)> {
+    match shape {
+        Shape::Circle { center, radius } => {
+            let m = o - *center;
+            let b = m.dot(d);
+            let c = m.length_sq() - radius * radius;
+            if c <= 0.0 || b > 0.0 {
+                return None; // starts inside, or points away
+            }
+            let disc = b * b - c;
+            if disc < 0.0 {
+                return None;
+            }
+            let t = -b - disc.sqrt();
+            (0.0..=max)
+                .contains(&t)
+                .then(|| (t, (m + d * t).normalized()))
+        }
+        Shape::Polygon(p) => {
+            let (mut enter, mut exit, mut normal) = (0.0f64, max, None);
+            for i in 0..p.verts.len() {
+                let (n, v) = (p.normals[i], p.verts[i]);
+                let (denom, num) = (n.dot(d), n.dot(v - o));
+                if denom == 0.0 {
+                    if num < 0.0 {
+                        return None;
+                    }
+                } else if denom < 0.0 && num < enter * denom {
+                    enter = num / denom;
+                    normal = Some(n);
+                } else if denom > 0.0 && num < exit * denom {
+                    exit = num / denom;
+                }
+                if exit < enter {
+                    return None;
+                }
+            }
+            normal.map(|n| (enter, n))
+        }
+        Shape::Edge { a, b } => {
+            let e = *b - *a;
+            let denom = d.cross(e);
+            if denom.abs() < 1e-12 {
+                return None;
+            }
+            let w = *a - o;
+            let t = w.cross(e) / denom;
+            let u = w.cross(d) / denom;
+            if !(0.0..=max).contains(&t) || !(0.0..=1.0).contains(&u) {
+                return None;
+            }
+            let n = v2(e.y, -e.x).normalized();
+            Some((t, if n.dot(d) > 0.0 { -n } else { n }))
+        }
+    }
+}
+
 pub struct World {
     pub gravity: Vec2,
     pub substeps: usize,
@@ -427,6 +494,64 @@ impl World {
         let b = self.joints[id].b;
         self.joints[id].target = target;
         wake_body(&mut self.bodies, b);
+    }
+    /// Aim a revolute joint's angle spring (see `JointDef::angle_spring`) at `angle` radians.
+    pub fn set_joint_angle_target(&mut self, id: JointId, angle: f64) {
+        let b = self.joints[id].b;
+        self.joints[id].ang_target = angle;
+        wake_body(&mut self.bodies, b);
+    }
+    /// Switch a revolute joint's angle spring on (`Some((hertz, damping ratio, max torque))`) or off.
+    pub fn set_joint_angle_spring(&mut self, id: JointId, spring: Option<(f64, f64, f64)>) {
+        let b = self.joints[id].b;
+        self.joints[id].set_angle_spring(spring);
+        wake_body(&mut self.bodies, b);
+    }
+    /// Change what kind a body is, keeping its pose and velocity (mass is recomputed).
+    pub fn set_body_kind(&mut self, id: BodyId, kind: BodyKind) {
+        self.bodies[id].kind = kind;
+        if kind == BodyKind::Static {
+            self.bodies[id].v = Vec2::ZERO;
+            self.bodies[id].w = 0.0;
+        }
+        self.recompute_mass(id);
+        wake_body(&mut self.bodies, id);
+    }
+    /// Stop two bodies from colliding with each other.
+    pub fn disable_collision(&mut self, a: BodyId, b: BodyId) {
+        self.no_collide.insert((a.min(b), a.max(b)));
+    }
+    /// The nearest solid surface along a ray from `origin` in unit direction `dir`, within `max`
+    /// metres. Sensors are ignored, a ray that starts inside a shape does not hit it, and
+    /// `exclude` skips one body.
+    pub fn raycast(
+        &self,
+        origin: Vec2,
+        dir: Vec2,
+        max: f64,
+        exclude: Option<BodyId>,
+    ) -> Option<RayHit> {
+        let mut best: Option<RayHit> = None;
+        for f in &self.fixtures {
+            if f.sensor || exclude == Some(f.body) {
+                continue;
+            }
+            let b = &self.bodies[f.body];
+            let xf = Xf { p: b.p, q: b.q };
+            let (o, d) = (b.q.inv_rotate(origin - b.p), b.q.inv_rotate(dir));
+            let limit = best.map_or(max, |h| h.distance);
+            if let Some((t, n)) = ray_shape(&f.shape, o, d, limit) {
+                if best.is_none_or(|h| t < h.distance) {
+                    best = Some(RayHit {
+                        body: f.body,
+                        point: origin + dir * t,
+                        normal: xf.q.rotate(n),
+                        distance: t,
+                    });
+                }
+            }
+        }
+        best
     }
     pub fn joint_anchors(&self, id: JointId) -> (Vec2, Vec2) {
         self.joints[id].anchors(&self.bodies)

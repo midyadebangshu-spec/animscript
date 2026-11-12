@@ -24,11 +24,24 @@ pub struct IkDef {
     pub rest_tip: [f64; 2],
 }
 
+/// The `ragdoll:` line of an armature: how its bones look to physics.
+#[derive(Clone, Copy, Debug)]
+pub struct RagCfg {
+    /// Capsule radius in px (a bone's own `radius:` overrides it).
+    pub radius: f64,
+    pub density: f64,
+    pub friction: f64,
+    pub restitution: f64,
+}
+
 pub struct RigDef {
     pub name: String,
     pub sk: ph::Skeleton,
     pub bones: Vec<String>,
     pub ik: Vec<IkDef>,
+    pub ragdoll: Option<RagCfg>,
+    /// Per-bone `radius:` overrides.
+    pub radius: Vec<Option<f64>>,
 }
 
 #[derive(Clone, Debug)]
@@ -62,6 +75,14 @@ pub struct RigSim {
     warned: BTreeSet<(String, usize)>,
 }
 
+/// One armature's pose for a tick: pose rotations (radians, relative to rest), world poses, and the
+/// IK part of the snapshot.
+pub struct RigPose {
+    pub rots: Vec<f64>,
+    pub pose: Vec<ph::BonePose>,
+    ik: Vec<J>,
+}
+
 pub struct RigOut {
     pub overrides: Vec<(String, PropId, f64)>,
     pub snapshot: J,
@@ -86,6 +107,10 @@ fn name_of(e: &crate::ast::Expr) -> Option<String> {
     }
 }
 
+fn e4(msg: impl Into<String>) -> Diagnostic {
+    Diagnostic::new("E-RIG-004", msg)
+}
+
 fn lerp_angle(a: f64, b: f64, t: f64) -> f64 {
     a + ph::wrap_angle(b - a) * t
 }
@@ -103,6 +128,7 @@ impl Interp {
             }
             let mut bones: Vec<String> = vec![];
             let mut defs: Vec<ph::BoneDef> = vec![];
+            let mut radius: Vec<Option<f64>> = vec![];
             for it in d.items.iter().filter(|i| i.kind == "bone") {
                 if bones.contains(&it.name)
                     || d.items.iter().any(|o| o.kind == "ik" && o.name == it.name)
@@ -113,9 +139,10 @@ impl Interp {
                     ))
                     .at(it.span));
                 }
-                let def = self.eval_bone(d.name.as_str(), it, &bones, &vars)?;
+                let (def, r) = self.eval_bone(d.name.as_str(), it, &bones, &vars)?;
                 bones.push(it.name.clone());
                 defs.push(def);
+                radius.push(r);
             }
             if bones.is_empty() {
                 return Err(e1(format!("armature `{}` has no bones", d.name))
@@ -134,6 +161,15 @@ impl Interp {
                     .at(it.span));
                 }
                 iks.push(self.eval_ik(it, &bones, &sk, &rest)?);
+            }
+            let mut ragdoll = None;
+            for it in d.items.iter().filter(|i| i.kind == "ragdoll") {
+                if ragdoll.is_some() {
+                    return Err(
+                        e1(format!("armature `{}` has two `ragdoll:` lines", d.name)).at(it.span),
+                    );
+                }
+                ragdoll = Some(self.eval_ragdoll(it, &vars)?);
             }
             // the hidden pseudo-shapes
             for (i, b) in bones.iter().enumerate() {
@@ -157,10 +193,42 @@ impl Interp {
                     sk,
                     bones,
                     ik: iks,
+                    ragdoll,
+                    radius,
                 },
             );
         }
         Ok(())
+    }
+
+    fn eval_ragdoll(&mut self, it: &ArmItem, vars: &crate::interp::Vars) -> Res<RagCfg> {
+        let mut cfg = RagCfg {
+            radius: 8.0,
+            density: 1.0,
+            friction: 0.6,
+            restitution: 0.0,
+        };
+        for (key, expr, span) in &it.attrs {
+            let v = self.eval(expr, vars, Mode::Build)?;
+            let n = self.num(&v, key).map_err(|e| e4(e.message).at(*span))?;
+            match key.as_str() {
+                "radius" if n > 0.0 => cfg.radius = n,
+                "density" if n > 0.0 => cfg.density = n,
+                "friction" if n >= 0.0 => cfg.friction = n,
+                "restitution" if n >= 0.0 => cfg.restitution = n,
+                "radius" | "density" | "friction" | "restitution" => {
+                    return Err(e4(format!("`{key}` of a ragdoll is out of range"))
+                        .at(*span)
+                        .help("`radius` and `density` must be positive, `friction` and `restitution` cannot be negative"))
+                }
+                other => {
+                    return Err(e1(format!("a ragdoll line has no setting `{other}`"))
+                        .at(*span)
+                        .help("settings: radius, density, friction, restitution"))
+                }
+            }
+        }
+        Ok(cfg)
     }
 
     fn eval_bone(
@@ -169,7 +237,8 @@ impl Interp {
         it: &ArmItem,
         bones: &[String],
         vars: &crate::interp::Vars,
-    ) -> Res<ph::BoneDef> {
+    ) -> Res<(ph::BoneDef, Option<f64>)> {
+        let mut radius = None;
         let mut def = ph::BoneDef {
             parent: None,
             at: 1.0,
@@ -246,10 +315,19 @@ impl Interp {
                         .at(*span))
                     }
                 },
+                "radius" => {
+                    let r = self
+                        .num(&v, "`radius`")
+                        .map_err(|e| e1(e.message).at(*span))?;
+                    if r <= 0.0 {
+                        return Err(e4("a bone's `radius` must be positive").at(*span));
+                    }
+                    radius = Some(r);
+                }
                 other => {
                     return Err(e1(format!("a bone has no setting `{other}`"))
                         .at(*span)
-                        .help("settings: parent, at, length, angle, limits"))
+                        .help("settings: parent, at, length, angle, limits, radius"))
                 }
             }
         }
@@ -287,7 +365,7 @@ impl Interp {
                 }
             }
         }
-        Ok(def)
+        Ok((def, radius))
     }
 
     fn eval_ik(
@@ -378,6 +456,9 @@ impl Interp {
         let r = &self.rigs[arm];
         if r.bones.iter().any(|b| b == name) || r.ik.iter().any(|k| k.name == name) {
             return Ok(Value::Shape(format!("{arm}.{name}")));
+        }
+        if name == "ragdolled" && r.ragdoll.is_some() {
+            return Ok(Value::Bool(self.is_ragdolled(arm)));
         }
         let mut all: Vec<&str> = r.bones.iter().map(String::as_str).collect();
         all.extend(r.ik.iter().map(|k| k.name.as_str()));
@@ -709,15 +790,15 @@ impl Interp {
         Ok(())
     }
 
-    /// Solve every armature for this tick. `bones`: `[rotation (turns), x offset, y offset]` of each
-    /// bone pseudo-shape as the layer stack resolved it; `iks`: `[x offset, y offset, weight]`.
-    pub fn rig_tick(
+    /// Solve the animated pose of every armature for this tick (FK, limits, IK). `bones`:
+    /// `[rotation (turns), x offset, y offset]` of each bone pseudo-shape as the layer stack resolved it;
+    /// `iks`: `[x offset, y offset, weight]`. Physics may replace a pose before `rig_finish`.
+    pub fn rig_solve(
         &mut self,
         bones: &BTreeMap<String, [f64; 3]>,
         iks: &BTreeMap<String, [f64; 3]>,
-    ) -> RigOut {
-        let mut overrides = vec![];
-        let mut snap = vec![];
+    ) -> BTreeMap<String, RigPose> {
+        let mut out = BTreeMap::new();
         let names: Vec<String> = self.rigs.keys().cloned().collect();
         for name in names {
             let (sk, bone_names, ik_defs) = {
@@ -774,10 +855,33 @@ impl Interp {
                 ik_snap.push(json!({"name": iname, "target": [target.x, target.y], "weight": w}));
             }
             let pose = sk.pose(&rots, off);
+            out.insert(
+                name,
+                RigPose {
+                    rots,
+                    pose,
+                    ik: ik_snap,
+                },
+            );
+        }
+        out
+    }
+
+    /// Turn the final poses into the snapshot and the overrides for bound and skinned art.
+    pub fn rig_finish(&mut self, poses: &BTreeMap<String, RigPose>) -> RigOut {
+        let mut overrides = vec![];
+        let mut snap = vec![];
+        for (name, rp) in poses {
+            let (sk, bone_names) = {
+                let r = &self.rigs[name];
+                (r.sk.clone(), r.bones.clone())
+            };
+            let n = sk.bones.len();
+            let pose = &rp.pose;
             let rest = sk.pose(&vec![0.0; n], Vec2::ZERO);
             let bone_snap: Vec<J> = (0..n)
                 .map(|i| {
-                    let tip = sk.tip(&pose, i);
+                    let tip = sk.tip(pose, i);
                     self.rig_live.insert(
                         format!("{name}.{}", bone_names[i]),
                         ([pose[i].head.x, pose[i].head.y], [tip.x, tip.y], pose[i].angle / TAU),
@@ -785,9 +889,9 @@ impl Interp {
                     json!({"name": bone_names[i], "head": [pose[i].head.x, pose[i].head.y], "tip": [tip.x, tip.y], "angle": pose[i].angle / TAU})
                 })
                 .collect();
-            snap.push(json!({"name": name, "bones": bone_snap, "ik": ik_snap}));
+            snap.push(json!({"name": name, "bones": bone_snap, "ik": rp.ik}));
             if let Some(sim) = &self.rig_sim {
-                for (b, head, angle) in sim.binds.iter().filter(|b| b.0.arm == name) {
+                for (b, head, angle) in sim.binds.iter().filter(|b| b.0.arm == *name) {
                     overrides.push((b.shape.clone(), PropId::PosX, pose[b.bone].head.x - head.x));
                     overrides.push((b.shape.clone(), PropId::PosY, pose[b.bone].head.y - head.y));
                     overrides.push((
@@ -796,9 +900,9 @@ impl Interp {
                         (pose[b.bone].angle - angle) / TAU,
                     ));
                 }
-                for s in sim.skins.iter().filter(|s| s.arm == name) {
+                for s in sim.skins.iter().filter(|s| s.arm == *name) {
                     for (k, id) in s.ids.iter().enumerate() {
-                        let p = ph::skin_point(&sk, &rest, &pose, &s.weights[k], s.rest[k]);
+                        let p = ph::skin_point(&sk, &rest, pose, &s.weights[k], s.rest[k]);
                         overrides.push((s.shape.clone(), PropId::Vx(*id), p.x));
                         overrides.push((s.shape.clone(), PropId::Vy(*id), p.y));
                     }

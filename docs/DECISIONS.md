@@ -757,3 +757,46 @@ judgement calls I expect you to want to look at.
     (world px) and `angle` (Angle) from the last solved pose, or the rest pose before the first tick. Live state is
     cleared at the end of every scene, so a new scene reads rest values again. Only transforms are live; colours,
     opacity and vertex positions still read rest values.
+165. **Engine additions for sub-round B.** `World::raycast(origin, dir, max, exclude)` returns the nearest solid
+    hit (body, point, outward normal, distance); sensors are ignored and a ray that starts inside a shape does not
+    hit it. `set_body_kind` keeps pose and velocity and recomputes mass; `disable_collision(a, b)` filters a pair.
+    A revolute joint can carry an *angle spring* (`JointDef::angle_spring`, `set_joint_angle_target`,
+    `set_joint_angle_spring`): a soft constraint on the angle relative to the rest angle, solved in the biased pass
+    like the distance spring, with accumulated impulse clamped to `max_torque * h`, and switchable at runtime.
+166. **Character controller.** `body.controller(speed: 200, accel: 1200, jump: 400, air_control: 0.5)` on a dynamic
+    body makes it `fixed_rotation` with friction 0 (so it neither tips nor sticks to walls). Every tick, before the
+    step, three rays from the centre of mass (centre and +-90% of the half width) go down for the distance to the
+    feet plus 4 px; grounded means any hit with an upward-facing normal (`normal.y < -0.5`). The horizontal
+    velocity moves towards `input * speed` by at most `accel * dt` (times `air_control` in the air); a pending
+    jump sets the vertical velocity to `-jump` only if grounded and is dropped otherwise (no buffering, no
+    double jump). There is no step-up: slopes and ledges are handled by the contact solver. `move`/`jump` are Run
+    only; the declaration is build/setup only. A controller on a non-dynamic body or with a bad value is the new
+    `E-PHY-005`, as is `move`/`jump` on a shape without one.
+167. **Ragdoll declaration.** `ragdoll: radius: 8, density: 1, friction: 0.6, restitution: 0` is a nameless
+    armature line (one per armature); a bone's own `radius:` overrides it. Each bone becomes a kinematic body at
+    the rest pose with a box (half length x radius) and a circle at each end; each non-root bone gets a revolute
+    joint to its parent at its own head, carrying the bone's `limits` (relative to the rest pose, the same
+    reference as the pose rotation). All bones of an armature have collisions with each other disabled (not only
+    neighbours). Bone bodies take the names `armature.bone` in the physics name table, so `touches` and
+    `leaves` work for bones; they are not in `kinds`/`com`, so a bone is never written back as a shape pose.
+168. **Ragdoll states.** Every scene starts animated: kinematic bodies moved to the animated pose each tick with
+    `move_kinematic` (teleported at tick 0). `ragdoll(strength, push)` switches the bodies to dynamic, keeping their
+    velocity (so a moving animation throws the body), adds `push` px/s to every bone and, at strength 0, switches
+    all muscles off. `animate()` makes them kinematic again with zero velocity and the next tick snaps them to
+    the animated pose (no blending back). The state is per scene and is not carried over. Both are Run-only; with
+    no `ragdoll:` line, outside a running scene or with a `strength` outside 0..1 they are `E-RIG-004`.
+169. **Active ragdoll.** With strength s > 0 each non-root hinge's angle spring is aimed every tick at the animated
+    pose rotation of that bone (after limit clamping and IK) with frequency `3 + 9 s` Hz, damping ratio 0.7 and
+    max torque `s * 8 * g * m * r`, where m is the mass of the bone and its descendants and r the farthest
+    distance from the hinge to a descendant's tip. The root has no hinge, so its linear and angular velocity are
+    blended by `s` towards the velocity that would reach the animated placement this tick: s = 1 follows the
+    animation closely, small s sags and falls. This is a heuristic, not a balance controller: a standing pose
+    that needs foot placement is gait work (sub-round C).
+170. **Order of the tick.** The animated pose of every armature (FK, limits, IK) is solved first
+    (`rig_solve`), then the physics step runs with ragdoll bodies targeting it (`ragdoll_prepare`), then physical
+    armatures' poses are read back from the bodies (`ragdoll_poses`) and `rig_finish` writes the snapshot, the
+    live bone values and the art overrides. A physical bone's angle is kept within half a turn of the animated
+    angle (so it is continuous when the animation is); only its placement is the physics'.
+171. **Limits recorded.** A shape cannot be both rig-driven art and a rigid body (still `E-RIG-003`); fluids and
+    soft bodies do not see bone bodies as anything special (they collide with them as with any rigid body).
+    Torque and frequency in 169 are tuned by eye; no per-bone strength yet.

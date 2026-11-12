@@ -23,7 +23,7 @@ pub use rig::{auto_weights, skin_point, solve_ik, wrap_angle, Bend, BoneDef, Bon
 pub use shape::{decompose, find_pairs, Aabb, MassData, Polygon, Shape};
 pub use soft::{coupled_step, soft_step, SoftBody, SoftParams};
 pub use world::{
-    Body, BodyDef, BodyId, BodyKind, ContactEvent, ContactInfo, FixtureDef, JointId, World,
+    Body, BodyDef, BodyId, BodyKind, ContactEvent, ContactInfo, FixtureDef, JointId, RayHit, World,
 };
 
 /// The boundary a 3D backend (a Jolt wrapper) will implement later. The language runtime only

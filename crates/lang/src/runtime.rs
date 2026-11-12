@@ -1011,6 +1011,35 @@ impl Runtime {
                     value: key_value(&k.keys, tick),
                 });
         }
+        // the animated pose of every armature (FK, limits, IK) comes first: ragdoll bodies follow it
+        // through the physics step, and the final pose (physics may replace it) is written afterwards
+        let mut anim_poses = BTreeMap::new();
+        if self.it.has_rigs() {
+            let (bone_keys, ik_keys) = self.it.rig_keys();
+            let mut bones = BTreeMap::new();
+            for key in bone_keys {
+                let mut get = |p: PropId| {
+                    let rest = self.rest_value(&key, p);
+                    by_prop
+                        .get_mut(&(key.clone(), p))
+                        .map_or(rest, |c| fold(rest, c))
+                };
+                let v = [get(PropId::Rot), get(PropId::PosX), get(PropId::PosY)];
+                bones.insert(key, v);
+            }
+            let mut iks = BTreeMap::new();
+            for key in ik_keys {
+                let mut get = |p: PropId| {
+                    let rest = self.rest_value(&key, p);
+                    by_prop
+                        .get_mut(&(key.clone(), p))
+                        .map_or(rest, |c| fold(rest, c))
+                };
+                let v = [get(PropId::PosX), get(PropId::PosY), get(PropId::Opacity)];
+                iks.insert(key, v);
+            }
+            anim_poses = self.it.rig_solve(&bones, &iks);
+        }
         let mut physics = None;
         let mut soft_snap = None;
         let mut fluid_snap = None;
@@ -1033,6 +1062,7 @@ impl Runtime {
                 kin.insert(n.clone(), pose);
             }
             self.it.physics_prepare(tick, &kin);
+            self.it.ragdoll_prepare(tick, 1.0 / fps, &anim_poses);
             // soft pins follow the pose of the shape they are pinned to
             let mut targets = BTreeMap::new();
             for n in self.it.soft_pin_targets() {
@@ -1118,32 +1148,8 @@ impl Runtime {
         }
         let mut rigs_snap = None;
         if self.it.has_rigs() {
-            // read the pose of every bone and ik handle as the layer stack resolved it, solve, and
-            // write the bound and skinned shapes as layer-2 overrides
-            let (bone_keys, ik_keys) = self.it.rig_keys();
-            let mut bones = BTreeMap::new();
-            for key in bone_keys {
-                let mut get = |p: PropId| {
-                    let rest = self.rest_value(&key, p);
-                    by_prop
-                        .get_mut(&(key.clone(), p))
-                        .map_or(rest, |c| fold(rest, c))
-                };
-                let v = [get(PropId::Rot), get(PropId::PosX), get(PropId::PosY)];
-                bones.insert(key, v);
-            }
-            let mut iks = BTreeMap::new();
-            for key in ik_keys {
-                let mut get = |p: PropId| {
-                    let rest = self.rest_value(&key, p);
-                    by_prop
-                        .get_mut(&(key.clone(), p))
-                        .map_or(rest, |c| fold(rest, c))
-                };
-                let v = [get(PropId::PosX), get(PropId::PosY), get(PropId::Opacity)];
-                iks.insert(key, v);
-            }
-            let out = self.it.rig_tick(&bones, &iks);
+            self.it.ragdoll_poses(&mut anim_poses);
+            let out = self.it.rig_finish(&anim_poses);
             for (k, (shape, prop, value)) in out.overrides.into_iter().enumerate() {
                 by_prop
                     .entry((shape, prop))

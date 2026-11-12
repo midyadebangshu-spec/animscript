@@ -2068,6 +2068,10 @@ impl Interp {
             let sn = sn.clone();
             return self.rig_method(&sn, name, args, mode, span);
         }
+        if let (Value::Armature(arm), "ragdoll" | "animate") = (&obj, name) {
+            let arm = arm.clone();
+            return self.armature_method(&arm, name, args, mode);
+        }
         if let Value::Fluid(fname) = &obj {
             let fname = fname.clone();
             return self.fluid_method(&fname, name, args);
