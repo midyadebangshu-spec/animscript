@@ -148,6 +148,8 @@ pub struct WorldDecl {
     pub gravity: Option<Expr>,
     pub scale: Option<Expr>,
     pub substeps: Option<Expr>,
+    pub soft_substeps: Option<Expr>,
+    pub soft_iterations: Option<Expr>,
     pub span: Span,
 }
 

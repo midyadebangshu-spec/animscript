@@ -321,6 +321,8 @@ impl Parser {
             gravity: None,
             scale: None,
             substeps: None,
+            soft_substeps: None,
+            soft_iterations: None,
             span: start,
         };
         self.attrs(|p, key, span| {
@@ -328,13 +330,15 @@ impl Parser {
                 "gravity" => w.gravity = Some(p.expr()?),
                 "scale" => w.scale = Some(p.expr()?),
                 "substeps" => w.substeps = Some(p.expr()?),
+                "soft_substeps" => w.soft_substeps = Some(p.expr()?),
+                "soft_iterations" => w.soft_iterations = Some(p.expr()?),
                 _ => {
                     return Err(Diagnostic::new(
                         "E-SYN-001",
                         format!("`world` has no setting `{key}`"),
                     )
                     .at(span)
-                    .help("settings: gravity, scale, substeps"))
+                    .help("settings: gravity, scale, substeps, soft_substeps, soft_iterations"))
                 }
             }
             Ok(())

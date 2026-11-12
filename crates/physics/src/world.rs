@@ -132,6 +132,16 @@ pub struct ContactEvent {
     pub sensor: bool,
 }
 
+/// Result of `World::circle_hit`.
+#[derive(Clone, Debug)]
+pub struct CircleHit {
+    pub normal: Vec2,
+    pub sep: f64,
+    pub vel: Vec2,
+    pub body: BodyId,
+    pub point: Vec2,
+}
+
 /// A contact point for debug drawing and the snapshot.
 #[derive(Clone, Debug)]
 pub struct ContactInfo {
@@ -480,6 +490,20 @@ impl World {
         radius: f64,
         margin: f64,
     ) -> Option<(Vec2, f64, Vec2)> {
+        self.circle_hit(center, radius, margin)
+            .map(|h| (h.normal, h.sep, h.vel))
+    }
+
+    /// Like `collide_circle`, but also says which body was hit and where (soft bodies push back).
+    pub fn circle_hit(&self, center: Vec2, radius: f64, margin: f64) -> Option<CircleHit> {
+        self.circle_hits(center, radius, margin)
+            .into_iter()
+            .min_by(|a, b| a.sep.total_cmp(&b.sep))
+    }
+
+    /// Every non-sensor fixture the circle touches or will touch within `margin`, one hit per
+    /// fixture (its deepest point), in fixture order.
+    pub fn circle_hits(&self, center: Vec2, radius: f64, margin: f64) -> Vec<CircleHit> {
         let circle = Shape::Circle {
             center: Vec2::ZERO,
             radius,
@@ -488,7 +512,7 @@ impl World {
             p: center,
             q: Rot::IDENTITY,
         };
-        let mut best: Option<(Vec2, f64, Vec2)> = None;
+        let mut out: Vec<CircleHit> = vec![];
         for f in self.fixtures.iter().filter(|f| !f.sensor) {
             let b = &self.bodies[f.body];
             let xf = Xf { p: b.p, q: b.q };
@@ -504,14 +528,19 @@ impl World {
             let Some(m) = collide(&circle, &xc, &f.shape, &xf, margin) else {
                 continue;
             };
-            for pt in &m.points {
-                if best.is_none_or(|bst| pt.sep < bst.1) {
-                    best = Some((m.normal, pt.sep, b.v + cross_sv(b.w, pt.point - b.c)));
-                }
+            if let Some(pt) = m.points.iter().min_by(|a, b| a.sep.total_cmp(&b.sep)) {
+                out.push(CircleHit {
+                    normal: m.normal,
+                    sep: pt.sep,
+                    vel: b.v + cross_sv(b.w, pt.point - b.c),
+                    body: f.body,
+                    point: pt.point,
+                });
             }
         }
-        best
+        out
     }
+
     /// All contact points of touching, non-sensor contacts (for the snapshot and debug drawing).
     pub fn contact_infos(&self) -> Vec<ContactInfo> {
         let mut out = vec![];

@@ -1436,6 +1436,50 @@ scene "s" for 6.seconds:
 - Emitters start stopped at the start of every scene.
 - Errors: `E-PTC-001` (bad setting), `E-PTC-002` (`at` is not a point or shape). Example: `examples/particles.anim`.
 
+## 13d. Soft bodies
+
+`shape.soft(...)` makes a shape squash, stretch, swing and drape. The shape's vertices become simulated
+points, its edges springs and its faces optional "air" that keeps the volume.
+
+```anim
+shape jelly = grid(4, width: 110, height: 110, at: (130, 90))
+jelly.soft(stiffness: 0.55, pressure: 1.0, restitution: 0.3)      # a jelly cube
+
+shape rope = line((470, 50), (650, 50))
+rope.e1.subdivide(14)                  # more vertices = a smoother, softer rope
+rope.soft(stiffness: 1.0, bend: 0.4)
+rope.pin(rope.v[1])                    # hold one end where it is
+
+shape flag = grid(9, width: 150, height: 100, at: (700, 230))
+flag.soft(stiffness: 0.45, bend: 0.04)
+flag.pin(flag.vertices.where(v -> v.x < 626))    # pin a whole column with a selection
+flag.soft_impulse((600, -150))                     # a puff of wind (kg*px/s)
+```
+
+| Argument | Meaning | Default |
+|---|---|---|
+| `stiffness` | above 0, at most 1: how hard it resists stretching (1 = rigid) | `0.8` |
+| `bend` | 0 to 1: resistance to folding sharply (ropes, cloth) | `0.3` |
+| `pressure` | 1 keeps the volume, above 1 inflates, 0 ignores volume | `1` |
+| `density` | kg per square metre (edges with no face: per 5 cm of width) | `1` |
+| `friction`, `restitution` | against bodies, like rigid bodies | `0.5`, `0.1` |
+| `damping` | slows motion down | `0.1` |
+| `thickness` | collision size of a vertex, px | `2` |
+| `self_collide` | let the shape's edges stop its own vertices | `false` |
+
+- **Pins:** `pin(vertex)` or `pin(list)` hold vertices in place; `pin(v, to: other_shape)` makes them follow
+  that shape, so a moving platform can carry a rope or a cloth. `unpin(v)` lets go (also while running).
+- **Collision:** soft shapes collide with rigid bodies (`.body()`) and with each other. They rest on them,
+  bounce, and push dynamic bodies (a soft pad supports a box). Put a `grid` or `subdivide` fine enough that
+  no obstacle can slip between two vertices.
+- **A shape is either rigid or soft:** `.body()` and `.soft()` on the same shape is `E-PHY-003`.
+- **Moving it:** the simulation owns the vertices. Moving the shape's own `position`/`rotation` moves the
+  picture, not the simulation; pin vertices to a moving shape instead. Keyframes on a single vertex still win.
+- **Reading it:** `shape.volume` (px^2) and `shape.stretch` (largest edge strain, 0 means none).
+- `grid(cells, width:, height:, at:)` makes a `cells` x `cells` grid of square faces.
+- In `world:` the settings `soft_substeps` (16) and `soft_iterations` (4) trade speed for accuracy.
+- Errors: `E-PHY-003`, `E-PHY-004`. Worked example: `examples/soft.anim`.
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,

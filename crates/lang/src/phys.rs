@@ -20,6 +20,8 @@ pub struct WorldCfg {
     pub gravity: [f64; 2],
     pub scale: f64,
     pub substeps: usize,
+    pub soft_substeps: usize,
+    pub soft_iterations: usize,
 }
 
 impl Default for WorldCfg {
@@ -28,6 +30,8 @@ impl Default for WorldCfg {
             gravity: [0.0, 9.8],
             scale: 100.0,
             substeps: 4,
+            soft_substeps: 16,
+            soft_iterations: 4,
         }
     }
 }
@@ -99,6 +103,7 @@ pub struct Decls {
     pub bodies: Vec<(bool, BodyDecl)>,
     pub joints: Vec<(bool, JointDecl)>,
     pub ops: Vec<(bool, InitOp)>,
+    pub soft: Vec<(bool, crate::soft::SoftDecl)>,
 }
 
 impl Decls {
@@ -106,6 +111,7 @@ impl Decls {
         self.bodies.retain(|b| !b.0);
         self.joints.retain(|b| !b.0);
         self.ops.retain(|b| !b.0);
+        self.soft.retain(|b| !b.0);
     }
     pub fn is_empty(&self) -> bool {
         self.bodies.is_empty()
@@ -192,6 +198,27 @@ impl Interp {
                 return Err(phys_err("E-PHY-001", "`substeps` must be between 1 and 64").at(e.span));
             }
             cfg.substeps = n as usize;
+        }
+        for (e, name, lo, hi) in [
+            (&w.soft_substeps, "soft_substeps", 1, 128),
+            (&w.soft_iterations, "soft_iterations", 1, 64),
+        ] {
+            if let Some(e) = e {
+                let v = self.eval(e, &vars, Mode::Build)?;
+                let n = self.int(&v, name)?;
+                if !(lo..=hi).contains(&n) {
+                    return Err(phys_err(
+                        "E-PHY-001",
+                        format!("`{name}` must be between {lo} and {hi}"),
+                    )
+                    .at(e.span));
+                }
+                if name == "soft_substeps" {
+                    cfg.soft_substeps = n as usize;
+                } else {
+                    cfg.soft_iterations = n as usize;
+                }
+            }
         }
         self.world_cfg = cfg;
         Ok(())
@@ -291,6 +318,12 @@ impl Interp {
                 }
                 if self.decls.body(sn).is_some() {
                     return Err(phys_err("E-PHY-001", format!("`{sn}` already has a body")));
+                }
+                if self.decls.soft.iter().any(|d| d.1.shape == sn) {
+                    return Err(Diagnostic::new(
+                        "E-PHY-003",
+                        format!("`{sn}` is soft; a shape is either rigid or soft"),
+                    ));
                 }
                 self.check_body_shape(&decl)?;
                 let scene = self.is_scene_local(mode);
@@ -705,6 +738,9 @@ impl Interp {
     // ---- member reads -------------------------------------------------------------------
 
     pub fn phys_attr(&self, sn: &str, name: &str) -> Option<Res<Value>> {
+        if let Some(r) = self.soft_attr(sn, name) {
+            return Some(r);
+        }
         if !matches!(
             name,
             "velocity" | "speed" | "awake" | "mass" | "angular_velocity"
@@ -962,33 +998,47 @@ impl Interp {
             .unwrap_or_default()
     }
 
-    /// Step the world to this tick. `kin` holds each kinematic body's resolved (x offset, y offset, turns).
-    pub fn physics_tick(&mut self, tick: i64, kin: &BTreeMap<String, [f64; 3]>) -> TickPoses {
+    /// First part of a physics tick: kinematic bodies are given the velocity that reaches the pose
+    /// the other layers resolved (`kin`: x offset, y offset, turns). Nothing moves yet.
+    pub fn physics_prepare(&mut self, tick: i64, kin: &BTreeMap<String, [f64; 3]>) {
         let fps = self.fps.to_f64();
-        let mut leaves: Vec<String> = vec![];
-        let Some(ph) = self.phys.as_mut() else {
-            return TickPoses { dynamic: vec![] };
-        };
+        let Some(ph) = self.phys.as_mut() else { return };
         ph.began.clear();
         if tick > 0 {
-            let dt = 1.0 / fps;
             for (name, pose) in kin {
                 let (id, com) = (ph.ids[name], ph.com[name]);
                 let p = v2((pose[0] + com[0]) / ph.ppm, (pose[1] + com[1]) / ph.ppm);
                 ph.world
-                    .move_kinematic(id, p, pose[2] * std::f64::consts::TAU, dt);
+                    .move_kinematic(id, p, pose[2] * std::f64::consts::TAU, 1.0 / fps);
             }
+        }
+    }
+
+    /// Step the world for this frame (used when no soft body drives the stepping).
+    pub fn physics_advance(&mut self, tick: i64) {
+        let fps = self.fps.to_f64();
+        let Some(ph) = self.phys.as_mut() else { return };
+        if tick > 0 {
             for _ in 0..ph.steps {
-                ph.world.step(dt / ph.steps as f64);
-                for e in ph.world.take_events() {
-                    if e.begin {
-                        ph.touching.insert((e.a, e.b));
-                        ph.began.insert((e.a, e.b));
-                    } else {
-                        ph.touching.remove(&(e.a, e.b));
-                        leaves.push(leave_key(&ph.names[e.a], &ph.names[e.b]));
-                    }
-                }
+                ph.world.step(1.0 / fps / ph.steps as f64);
+            }
+        }
+    }
+
+    /// Last part of a physics tick: turn the frame's contact events into `touches`/`leaves` state and
+    /// read the dynamic bodies' poses.
+    pub fn physics_collect(&mut self) -> TickPoses {
+        let mut leaves: Vec<String> = vec![];
+        let Some(ph) = self.phys.as_mut() else {
+            return TickPoses { dynamic: vec![] };
+        };
+        for e in ph.world.take_events() {
+            if e.begin {
+                ph.touching.insert((e.a, e.b));
+                ph.began.insert((e.a, e.b));
+            } else {
+                ph.touching.remove(&(e.a, e.b));
+                leaves.push(leave_key(&ph.names[e.a], &ph.names[e.b]));
             }
         }
         let tau = std::f64::consts::TAU;
@@ -1012,6 +1062,23 @@ impl Interp {
             self.events.insert(l);
         }
         TickPoses { dynamic }
+    }
+
+    /// The pose a dynamic rigid body had when the frame began (what a pin to it follows).
+    pub fn dynamic_pose(&self, name: &str) -> Option<Transform> {
+        let ph = self.phys.as_ref()?;
+        if ph.kinds.get(name) != Some(&BodyKind::Dynamic) {
+            return None;
+        }
+        let b = ph.world.body(ph.ids[name]);
+        let com = ph.com[name];
+        let sh = &self.shapes[name];
+        Some(Transform {
+            position: [b.p.x * ph.ppm - com[0], b.p.y * ph.ppm - com[1]],
+            scale: sh.scale,
+            rotation: ph.angle[name] / std::f64::consts::TAU,
+            pivot: com,
+        })
     }
 
     pub fn physics_snapshot(&self) -> Option<J> {

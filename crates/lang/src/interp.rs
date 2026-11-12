@@ -212,6 +212,7 @@ pub struct Interp {
     pub phys: Option<crate::phys::Physics>,
     pub emitters: BTreeMap<String, crate::particles::EmitterCfg>,
     pub parts: BTreeMap<String, animscript_physics::Emitter>,
+    pub soft: Option<crate::soft::SoftSim>,
 }
 
 pub const TOPOLOGY_METHODS: &[&str] = &[
@@ -279,6 +280,7 @@ impl Interp {
             phys: None,
             emitters: BTreeMap::new(),
             parts: BTreeMap::new(),
+            soft: None,
             program: Program::default(),
         };
         if let Some(p) = &program.project {
@@ -1659,6 +1661,21 @@ impl Interp {
             return self.joint_function(name, args, _mode);
         }
         match name {
+            "grid" => {
+                let m = self.bind(name, args, &["cells", "width", "height", "at"], &["cells"])?;
+                let n = self.int(&m["cells"], "`cells`")?;
+                let w = m.get("width").map(|v| self.num(v, "`width`")).unwrap_or(Ok(100.0))?;
+                let h = m.get("height").map(|v| self.num(v, "`height`")).unwrap_or(Ok(w))?;
+                if !(1..=100).contains(&n) || w <= 0.0 || h <= 0.0 {
+                    return Err(type_err("`grid` needs 1 to 100 cells and a positive width and height"));
+                }
+                let mut sh = rectangle(w, h, at_default(&m, self)?);
+                if n > 1 {
+                    let f = sh.get_ref(Kind::F, 1)?;
+                    sh.subdivide(f, n as usize, &[])?;
+                }
+                Ok(Value::Fresh(Box::new(sh)))
+            }
             "square" => {
                 let m = self.bind(name, args, &["size", "at"], &[])?;
                 let size = m.get("size").map(|v| self.num(v, "`size`")).unwrap_or(Ok(100.0))?;
@@ -1848,6 +1865,10 @@ impl Interp {
         if let (Value::Shape(sn), true) = (&obj, Interp::is_body_method(name)) {
             let sn = sn.clone();
             return self.body_method(&sn, name, args, mode);
+        }
+        if let (Value::Shape(sn), true) = (&obj, Interp::is_soft_method(name)) {
+            let sn = sn.clone();
+            return self.soft_method(&sn, name, args, mode);
         }
         if let Value::Emitter(en) = &obj {
             let en = en.clone();

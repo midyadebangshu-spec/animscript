@@ -480,3 +480,55 @@ judgement calls I expect you to want to look at.
     touching test (closest point within 1 cm at the start of a step) never saw it, so `touches` rules missed
     every bounce. A contact the solver pushed on now counts as touching, and `touches` is also true for a tick
     in which a contact began, even if it already ended.
+
+## Round 7: soft bodies
+
+108. **A shape is rigid or soft.** `shape.soft(...)` and `shape.body(...)` on the same shape is `E-PHY-003` in
+    either order, as is `.soft()` on a shape without edges. A soft shape's vertices are the particles, its
+    edges stretch constraints and its faces optional volume constraints; nothing new is needed in the shape
+    model. A mixed shape (soft skin, rigid core) is not supported.
+109. **Solver.** XPBD (extended position-based dynamics with compliance) in `crates/physics/src/soft.rs`: per
+    substep predict positions, run `iterations` passes over distance constraints then area constraints (the
+    sweep direction alternates each pass, so a heavy end mass is felt along a chain), then rigid contacts, then
+    soft-vs-soft; velocities come from the position change. Defaults are `soft_substeps: 16` and
+    `soft_iterations: 4` in `world:` (small steps converge far better than many iterations; 16 x 4 keeps a
+    rope with a 20:1 end mass within about 6% strain). Everything is in fixed order, so results are
+    reproducible.
+110. **Stiffness.** `stiffness` (above 0, at most 1) maps to a compliance `(1 - s) / s * 0.02` m/N; 1 is rigid.
+    `bend` (0 to 1) uses the same mapping for the links that stop a rope or cloth folding sharply: the far ends
+    of two edges that run straight through a vertex are joined. Cells with four corners get both diagonals
+    (the shear bracing that keeps a jelly square from collapsing). `pressure` (default 1) is an area
+    constraint per face at `pressure` times its starting area, with a compliance a quarter of the stiffness
+    one, so 1 keeps the volume, above 1 inflates and 0 turns volume off.
+111. **Mass.** Each face shares `density` (kg per square metre) times its area among its vertices; edges that
+    belong to no face (a rope) count `density * 0.05 m` of width. Pinned vertices behave as infinitely heavy.
+112. **Pins.** `pin(vertex or list of vertices)` holds vertices where they are; `pin(v, to: shape)` makes them
+    follow that shape's pose (the offset in its frame is remembered), so a kinematic platform or an animated
+    shape can carry a soft body. Pins to a *dynamic* rigid body use the pose it had when the frame began (one
+    frame of lag). `unpin` and `pin` work while running too; `soft_impulse((x, y))` is in kg*px/s spread over
+    the whole body (calls before the scene runs set its starting motion).
+113. **Pose.** The simulation runs in world space using the shape's transform at the start of the scene; the
+    result is written back as layer-2 overrides of the local vertex positions (so keyframes on a vertex still
+    win), and as the rest positions at the end of the scene. Animating the soft shape's own `position` or
+    `rotation` therefore moves the drawn shape without affecting the simulation; to move a soft body, pin
+    some vertices to a shape that moves.
+114. **Collision with rigid bodies.** Every vertex, and the middle of every edge, is a small circle
+    (`thickness`, default 2 px) tested against all non-sensor fixtures, each fixture separately (a pad
+    squeezed between a box and the floor sees both). The vertex is pushed out and takes the surface velocity
+    of a moving body; friction removes tangential speed in proportion to the support (normal) impulse and
+    `restitution` bounces fast approaches. A dynamic body is pushed back with the momentum the push-out
+    represents, so a soft body supports a rigid one. Soft and rigid bodies advance in lockstep: the soft step
+    drives the world's substeps (`soft_substeps` of them per frame) so neither sees stale poses; rigid-only
+    scenes still use `substeps`.
+115. **Soft against soft.** A vertex is kept on the side of another soft body's edge it started the substep
+    on, so it cannot tunnel through; between two different soft shapes this is always on, within one shape only
+    with `self_collide: true`. Edges of the same shape sharing a vertex never collide with it.
+116. **Limits.** An obstacle thinner than the vertex spacing can pass between vertices (the edge midpoints
+    help; subdivide more); a rigid body is not pushed by a soft body whose vertices are all pinned; the grid
+    primitive is `grid(cells, width:, height:, at:)` with `cells` x `cells` square-ish cells (use `subdivide`
+    on a rectangle for other splits).
+117. **Output.** The snapshot has a `soft` section `{bodies: [{shape, volume, stretch, pins}]}` (volume in px^2
+    from the faces, stretch the largest edge strain, pins in world pixels), included in the hash; it is absent
+    without soft bodies. `anim render --debug-physics` draws pins as blue squares. `shape.volume` and
+    `shape.stretch` read the same numbers while running. New errors: `E-PHY-003` (soft and rigid at once, or
+    nothing to simulate) and `E-PHY-004` (a bad soft value, or `pin`/`unpin` misuse).

@@ -217,6 +217,7 @@ impl Runtime {
                 }
                 self.it.freeze_pivots(); // pivots default to the bounding-box centre once building is over
                 self.it.build_physics()?; // the world starts from the shapes' poses after setup
+                self.it.build_soft()?;
                 self.register_timeline(sc)?;
                 if let Some(main) = &sc.main {
                     let id = self.new_task_id();
@@ -927,7 +928,9 @@ impl Runtime {
                 });
         }
         let mut physics = None;
-        if self.it.phys.is_some() {
+        let mut soft_snap = None;
+        let (has_phys, has_soft) = (self.it.phys.is_some(), self.it.soft.is_some());
+        if has_phys || has_soft {
             // kinematic bodies follow the pose the other layers resolved; dynamic bodies write theirs
             let mut kin = BTreeMap::new();
             for n in self.it.kinematic_bodies() {
@@ -940,7 +943,35 @@ impl Runtime {
                 let pose = [get(PropId::PosX), get(PropId::PosY), get(PropId::Rot)];
                 kin.insert(n.clone(), pose);
             }
-            let poses = self.it.physics_tick(tick, &kin);
+            self.it.physics_prepare(tick, &kin);
+            // soft pins follow the pose of the shape they are pinned to
+            let mut targets = BTreeMap::new();
+            for n in self.it.soft_pin_targets() {
+                if let Some(t) = self.it.dynamic_pose(&n) {
+                    targets.insert(n, t);
+                    continue;
+                }
+                let mut get = |p: PropId| {
+                    let rest = self.rest_value(&n, p);
+                    by_prop
+                        .get_mut(&(n.clone(), p))
+                        .map_or(rest, |c| fold(rest, c))
+                };
+                let t = Transform {
+                    position: [get(PropId::PosX), get(PropId::PosY)],
+                    scale: [get(PropId::ScaleX), get(PropId::ScaleY)],
+                    rotation: get(PropId::Rot),
+                    pivot: self.it.shapes[&n].transform().pivot,
+                };
+                targets.insert(n, t);
+            }
+            let soft_out = if has_soft {
+                self.it.soft_tick(tick, &targets)
+            } else {
+                self.it.physics_advance(tick);
+                vec![]
+            };
+            let poses = self.it.physics_collect();
             for (i, (n, x, y, r)) in poses.dynamic.into_iter().enumerate() {
                 for (prop, value) in [(PropId::PosX, x), (PropId::PosY, y), (PropId::Rot, r)] {
                     by_prop
@@ -957,10 +988,28 @@ impl Runtime {
                         });
                 }
             }
+            for (k, (n, vid, x, y)) in soft_out.into_iter().enumerate() {
+                for (prop, value) in [(PropId::Vx(vid), x), (PropId::Vy(vid), y)] {
+                    by_prop
+                        .entry((n.clone(), prop))
+                        .or_default()
+                        .push(Contribution {
+                            layer: 2,
+                            mode: BlendMode::Override,
+                            weight: 1.0,
+                            priority: 0,
+                            start: 0,
+                            id: 0x6000_0000 + k as u32,
+                            value,
+                        });
+                }
+            }
             physics = self.it.physics_snapshot();
+            soft_snap = self.it.soft_snapshot();
         }
         let mut resolved = Resolved {
             physics,
+            soft: soft_snap,
             ..Resolved::default()
         };
         for ((shape, prop), mut contribs) in by_prop {
@@ -1028,6 +1077,7 @@ impl Runtime {
     }
 
     fn end_scene(&mut self) {
+        self.it.end_soft();
         self.it.end_physics();
         self.it.parts.clear();
         let acts = std::mem::take(&mut self.acts);

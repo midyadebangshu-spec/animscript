@@ -30,6 +30,8 @@ pub struct Resolved {
     pub physics: Option<J>,
     /// Live particles per emitter, when the program declares emitters.
     pub particles: Option<J>,
+    /// Soft bodies: volume, stretch and pinned points, when any exist.
+    pub soft: Option<J>,
 }
 
 /// The complete description of one tick. Vertex positions, curve handles and styles are fully resolved
@@ -128,6 +130,9 @@ pub fn build_snapshot(
     });
     if let Some(p) = &resolved.physics {
         snap["physics"] = p.clone();
+    }
+    if let Some(p) = &resolved.soft {
+        snap["soft"] = p.clone();
     }
     if let Some(p) = &resolved.particles {
         snap["particles"] = p.clone();

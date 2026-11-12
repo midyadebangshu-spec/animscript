@@ -1,0 +1,46 @@
+project "Soft bodies":
+    anim_version: "0.1"
+    canvas: 800x600
+    fps: 24
+    background: #f4f1ea
+
+world:
+    gravity: (0, 9.8)
+    scale: 100
+
+shape ground = rectangle(width: 780, height: 30, at: (400, 570))
+ground.fill = #6b5b4b
+ground.body(kind: static)
+
+# a jelly cube: a 4x4 grid of cells, fairly soft, keeps its volume
+shape jelly = grid(4, width: 110, height: 110, at: (130, 90))
+jelly.fill = #e0674f
+jelly.stroke = #9b3b2a
+jelly.soft(stiffness: 0.55, pressure: 1.0, restitution: 0.3, friction: 0.6)
+
+# an inflated ball: one ring of vertices pushed out by pressure
+shape balloon = circle(28, radius: 55, at: (330, 110))
+balloon.fill = #4f8fe0
+balloon.stroke = #2f5fa8
+balloon.soft(stiffness: 0.5, pressure: 1.25, restitution: 0.5)
+
+# a hanging rope, pinned at its left end
+shape rope = line((470, 50), (650, 50))
+rope.e1.subdivide(14)
+rope.stroke = #333333
+rope.stroke_width = 4
+rope.soft(stiffness: 1.0, bend: 0.4)
+rope.pin(rope.v[1])
+
+# a flag: a cloth grid pinned along its left column
+shape flag = grid(9, width: 150, height: 100, at: (700, 230))
+flag.fill = #f2c14e
+flag.stroke = #b88a1e
+flag.soft(stiffness: 0.45, bend: 0.04)
+flag.pin(flag.vertices.where(v -> v.x < 626))
+
+scene "Soft" for 6.seconds:
+    main:
+        wait 2.seconds
+        flag.soft_impulse((600, -150))
+        wait 4.seconds

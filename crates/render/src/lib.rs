@@ -65,7 +65,7 @@ pub fn render(snapshot: &Value, scale: f32, debug: bool) -> Result<Pixmap, Strin
 
 /// Draw the physics section of a snapshot: contact points with their normals (red) and joints as
 /// lines between their anchors (blue). Only what the snapshot says; no simulation happens here.
-fn draw_physics(pm: &mut Pixmap, phys: &Value, tf: Transform) {
+fn draw_physics(pm: &mut Pixmap, phys: &Value, soft: &Value, tf: Transform) {
     let xy = |v: &Value| {
         (
             v[0].as_f64().unwrap_or(0.0) as f32,
@@ -89,6 +89,19 @@ fn draw_physics(pm: &mut Pixmap, phys: &Value, tf: Transform) {
         }
         if let Some(c) = PathBuilder::from_circle(ax, ay, 4.0) {
             pm.stroke_path(&c, &blue, &line, tf, None);
+        }
+    }
+    for b in soft["bodies"].as_array().into_iter().flatten() {
+        for p in b["pins"].as_array().into_iter().flatten() {
+            let (x, y) = xy(p);
+            let mut pb = PathBuilder::new();
+            pb.push_rect(
+                tiny_skia::Rect::from_xywh(x - 4.0, y - 4.0, 8.0, 8.0)
+                    .unwrap_or(tiny_skia::Rect::from_xywh(0.0, 0.0, 1.0, 1.0).unwrap()),
+            );
+            if let Some(path) = pb.finish() {
+                pm.stroke_path(&path, &blue, &line, tf, None);
+            }
         }
     }
     let mut red = Paint::default();
@@ -202,7 +215,7 @@ pub fn render_with(
         }
     }
     if debug_physics {
-        draw_physics(&mut pm, &snapshot["physics"], tf);
+        draw_physics(&mut pm, &snapshot["physics"], &snapshot["soft"], tf);
     }
     Ok(pm)
 }

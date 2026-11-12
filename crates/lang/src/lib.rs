@@ -13,6 +13,7 @@ pub mod phys;
 pub mod procedural;
 pub mod runtime;
 pub mod snapshot;
+pub mod soft;
 pub mod value;
 
 pub use animscript_core::{Diagnostic, Res, Severity, Span};
