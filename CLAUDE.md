@@ -37,6 +37,11 @@ Trivial single-step edits (e.g. fixing a typo) do not need a plan.
 - `crates/lang`: lexer, parser, interpreter, tick loop, snapshots, `check`.
 - `crates/render`: snapshot to PNG (`tiny-skia`). Pure function of the snapshot.
 - `crates/anim`: the `anim` CLI (`check`, `run`, `render`).
+- `crates/editor`: the `anim-editor` desktop app (`eframe`/`egui`, `egui_dock`): code, preview, hierarchy,
+  inspector, timeline, console. `model.rs` holds what the panels show (tested without a window);
+  `panels/` draws it. Not a default workspace member.
+- `crates/lang/src/journal.rs`: the run journal (scenes, timed items, notes, declarations with source
+  lines) the editor reads. A side table: never part of a snapshot or hash.
 - `docs/DECISIONS.md`: every spec ambiguity resolved so far. `DOCUMENT.md`: the user-facing syntax guide.
 - Golden snapshot: `UPDATE_GOLDEN=1 cargo test -p animscript-lang --test flower` regenerates it.
 
@@ -44,3 +49,7 @@ Trivial single-step edits (e.g. fixing a typo) do not need a plan.
 - Build: `cargo build`
 - Test: `cargo test`
 - Lint/format: `cargo clippy --all-targets` and `cargo fmt`
+- Editor: `cargo run -p anim-editor -- file.anim`; its tests: `cargo test -p anim-editor` (plain
+  `cargo build` / `cargo test` skip the editor; add `--workspace` to include it)
+- Editor on a machine without a display: `xvfb-run -a target/debug/anim-editor file.anim` (needs
+  `libxkbcommon-x11-0`); `import -window root shot.png` takes a picture of it

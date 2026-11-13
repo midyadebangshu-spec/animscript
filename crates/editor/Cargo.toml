@@ -1,0 +1,28 @@
+[package]
+name = "anim-editor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The AnimScript editor: code, preview, hierarchy, inspector, timeline and console"
+
+[lib]
+name = "anim_editor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "anim-editor"
+path = "src/main.rs"
+
+[dependencies]
+animscript-core.workspace = true
+animscript-lang.workspace = true
+animscript-render.workspace = true
+serde_json.workspace = true
+# the OpenGL backend: it runs everywhere, including software rendering and remote displays
+eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "x11", "wayland", "accesskit"] }
+egui = "0.36"
+egui_dock = "0.21"
+rfd = "0.18"
+
+[dev-dependencies]
+egui_kittest = "0.36"

@@ -11,6 +11,7 @@ pub mod fluid;
 pub mod freehand;
 pub mod imports;
 pub mod interp;
+pub mod journal;
 pub mod layers;
 pub mod lexer;
 pub mod mathfx;
@@ -32,7 +33,8 @@ pub mod value;
 pub use animscript_core::{Diagnostic, Res, Severity, Span};
 pub use check::{check, check_in};
 pub use interp::Interp;
-pub use runtime::{run, run_in, RunOptions, RunResult};
+pub use journal::Journal;
+pub use runtime::{run, run_in, run_partial, run_partial_in, RunOptions, RunResult};
 pub use snapshot::snapshot_hash;
 
 /// Parse a program and run its build phase (top-level statements and `shape` blocks).
