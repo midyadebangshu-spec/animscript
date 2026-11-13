@@ -284,6 +284,11 @@ pub struct Interp {
     pub decls: crate::phys::Decls,
     pub phys: Option<crate::phys::Physics>,
     pub emitters: BTreeMap<String, crate::particles::EmitterCfg>,
+    pub fields: BTreeMap<String, crate::field::FieldCfg>,
+    pub part_forces: BTreeMap<String, crate::particles::PartForce>,
+    pub field_rt: BTreeMap<String, crate::field::FieldRt>,
+    /// Names that equations may index with neighbour offsets while one is being compiled.
+    pub eq_stencils: std::collections::HashSet<String>,
     pub parts: BTreeMap<String, animscript_physics::Emitter>,
     pub soft: Option<crate::soft::SoftSim>,
     pub fluid_cfg: BTreeMap<String, crate::fluid::FluidCfg>,
@@ -385,6 +390,10 @@ impl Interp {
             decls: Default::default(),
             phys: None,
             emitters: BTreeMap::new(),
+            fields: BTreeMap::new(),
+            part_forces: BTreeMap::new(),
+            field_rt: BTreeMap::new(),
+            eq_stencils: Default::default(),
             parts: BTreeMap::new(),
             soft: None,
             fluid_cfg: BTreeMap::new(),
@@ -458,6 +467,7 @@ impl Interp {
         self.run_sync(&mut t)?;
         self.globals = t.vars.scopes[0].clone();
         self.freeze_pivots();
+        self.eval_fields()?; // before the emitters, whose `fields:` may name them
         self.eval_emitters()?;
         self.eval_fluids()?;
         Ok(())
@@ -1788,6 +1798,9 @@ impl Interp {
         if self.emitters.contains_key(n) {
             return Ok(Value::Emitter(n.to_string()));
         }
+        if self.fields.contains_key(n) {
+            return Ok(Value::Field(n.to_string()));
+        }
         if self.fluid_cfg.contains_key(n) {
             return Ok(Value::Fluid(n.to_string()));
         }
@@ -2559,6 +2572,10 @@ impl Interp {
         if let Value::Fluid(fname) = &obj {
             let fname = fname.clone();
             return self.fluid_method(&fname, name, args);
+        }
+        if let Value::Field(fname) = &obj {
+            let fname = fname.clone();
+            return self.field_method(&fname, name, args);
         }
         if let Value::Emitter(en) = &obj {
             let en = en.clone();

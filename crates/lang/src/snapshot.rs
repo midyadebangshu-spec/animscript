@@ -165,6 +165,9 @@ pub fn build_snapshot(
     if let Some(p) = &resolved.particles {
         snap["particles"] = p.clone();
     }
+    if let Some(p) = it.field_snapshot() {
+        snap["fields"] = p;
+    }
     snap
 }
 

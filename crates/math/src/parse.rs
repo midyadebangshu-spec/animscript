@@ -21,6 +21,8 @@ impl std::fmt::Display for ParseError {
 pub struct Env {
     pub names: HashMap<String, Id>,
     pub noise_seed: u32,
+    /// Names that may be indexed with neighbour offsets: `h[-1, 0]` reads the input `h@-1,0`.
+    pub stencils: std::collections::HashSet<String>,
 }
 
 impl Env {
@@ -105,6 +107,8 @@ fn lex(src: &str) -> Result<Vec<(Tok, usize)>, ParseError> {
                 '^' => "^",
                 '(' => "(",
                 ')' => ")",
+                '[' => "[",
+                ']' => "]",
                 ',' => ",",
                 '<' => "<",
                 '>' => ">",
@@ -290,6 +294,9 @@ impl P<'_> {
                     let args = self.args()?;
                     return self.call(&name, &args, at);
                 }
+                if matches!(self.peek(), Tok::Op("[")) {
+                    return self.stencil(&name, at);
+                }
                 if let Some(id) = self.env.names.get(&name) {
                     return Ok(*id);
                 }
@@ -315,6 +322,46 @@ impl P<'_> {
             )),
         }
     }
+    /// `name[dx, dy]`: the value of a field at a neighbouring cell, as the point input `name@dx,dy`.
+    fn stencil(&mut self, name: &str, at: usize) -> Result<Id, ParseError> {
+        if !self.env.stencils.contains(name) {
+            return Err(ParseError {
+                msg: format!("`{name}` is not a field, so it cannot be indexed"),
+                at,
+            });
+        }
+        self.expect("[")?;
+        let mut off = [0i32; 2];
+        for (k, slot) in off.iter_mut().enumerate() {
+            if k == 1 && !self.eat(",") {
+                return self.err("a neighbour offset needs two whole numbers, like `h[-1, 0]`");
+            }
+            let neg = self.eat("-");
+            let at_num = self.at();
+            let Tok::Num(v) = self.peek().clone() else {
+                return self.err("a neighbour offset must be a whole number");
+            };
+            self.i += 1;
+            if v.fract() != 0.0 {
+                return Err(ParseError {
+                    msg: "a neighbour offset must be a whole number".into(),
+                    at: at_num,
+                });
+            }
+            if v > 16.0 {
+                return Err(ParseError {
+                    msg: "a neighbour offset is at most 16 cells".into(),
+                    at: at_num,
+                });
+            }
+            *slot = if neg { -(v as i32) } else { v as i32 };
+        }
+        self.expect("]")?;
+        Ok(self
+            .b
+            .input(&format!("{name}@{},{}", off[0], off[1]), Rate::Point))
+    }
+
     fn call(&mut self, name: &str, a: &[Id], at: usize) -> Result<Id, ParseError> {
         apply_fn(self.b, name, a, self.env.noise_seed).map_err(|msg| ParseError { msg, at })
     }

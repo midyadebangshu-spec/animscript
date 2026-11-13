@@ -408,6 +408,8 @@ pub struct Drive {
     pub replace: bool,
     /// Multiplies time (`t` is seconds since the drive started, times this).
     pub speed: f64,
+    /// Extra point inputs after `x, y, i, u`: a field's channel sampled at each point (field name, channel).
+    pub fields: Vec<(String, usize)>,
 }
 
 /// One output of a drive: `props[k]` receives point `k`'s value (vertex drives) or all receive point 0 (shape level).
@@ -559,6 +561,8 @@ pub enum Value {
     Brush(Rc<crate::paint::BrushSpec>),
     /// A fluid, by name.
     Fluid(String),
+    /// A field (user equations stepped over a grid), by name.
+    Field(String),
     /// A loaded picture, for `shape.fill = image("file.png")`.
     Image(ImageFill),
     /// An armature, by name; its bones and IK handles are members.
@@ -614,6 +618,7 @@ impl Value {
             Value::Joint(_) => "Joint",
             Value::Emitter(_) => "Emitter",
             Value::Fluid(_) => "Fluid",
+            Value::Field(_) => "Field",
             Value::Image(_) => "Image",
             Value::Armature(_) => "Armature",
             Value::Call(_) => "Action call",

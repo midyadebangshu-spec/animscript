@@ -320,6 +320,74 @@ fn draw_paint(pm: &mut Pixmap, sh: &Value, view: &View) {
     pm.draw_pixmap(0, 0, (*layer).as_ref(), &paint, tf, None);
 }
 
+fn base64_decode(s: &str) -> Vec<u8> {
+    let val = |c: u8| -> Option<u32> {
+        match c {
+            b'A'..=b'Z' => Some((c - b'A') as u32),
+            b'a'..=b'z' => Some((c - b'a') as u32 + 26),
+            b'0'..=b'9' => Some((c - b'0') as u32 + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    };
+    let mut out = Vec::with_capacity(s.len() / 4 * 3);
+    for chunk in s.as_bytes().chunks(4) {
+        let vals: Vec<u32> = chunk.iter().filter_map(|c| val(*c)).collect();
+        if vals.len() < 2 {
+            break;
+        }
+        let n = vals
+            .iter()
+            .enumerate()
+            .fold(0u32, |a, (i, v)| a | v << (18 - 6 * i));
+        out.push((n >> 16) as u8);
+        if vals.len() > 2 {
+            out.push((n >> 8) as u8);
+        }
+        if vals.len() > 3 {
+            out.push(n as u8);
+        }
+    }
+    out
+}
+
+/// A field: its colour-mapped image (RGBA, `iw` x `ih`) stretched over its rectangle, through the camera.
+fn draw_field(pm: &mut Pixmap, f: &Value, view: &View) {
+    let (Some(iw), Some(ih), Some(b64)) = (f["iw"].as_u64(), f["ih"].as_u64(), f["rgba"].as_str())
+    else {
+        return;
+    };
+    let mut bytes = base64_decode(b64);
+    if iw == 0 || ih == 0 || bytes.len() != (iw * ih * 4) as usize {
+        return;
+    }
+    for px in bytes.chunks_mut(4) {
+        // tiny-skia pictures are premultiplied
+        let a = px[3] as u32;
+        for c in px.iter_mut().take(3) {
+            *c = ((*c as u32 * a + 127) / 255) as u8;
+        }
+    }
+    let Some(size) = tiny_skia::IntSize::from_wh(iw as u32, ih as u32) else {
+        return;
+    };
+    let Some(img) = Pixmap::from_vec(bytes, size) else {
+        return;
+    };
+    let r = &f["rect"];
+    let g = |i: usize| r[i].as_f64().unwrap_or(0.0) as f32;
+    let tf = Transform::from_scale(g(2) / iw as f32, g(3) / ih as f32)
+        .post_translate(g(0), g(1))
+        .post_concat(view.tf);
+    let paint = tiny_skia::PixmapPaint {
+        opacity: f["opacity"].as_f64().unwrap_or(1.0) as f32,
+        blend_mode: blend_mode(f["blend"].as_str().unwrap_or("normal")),
+        quality: tiny_skia::FilterQuality::Bilinear,
+    };
+    pm.draw_pixmap(0, 0, img.as_ref(), &paint, tf, None);
+}
+
 /// Foam and spray: small white specks that fade with age.
 fn draw_foam(pm: &mut Pixmap, fl: &Value, view: &View) {
     let spacing = fl["spacing"].as_f64().unwrap_or(8.0);
@@ -832,11 +900,25 @@ fn render_view(
     let mut textures: std::collections::HashMap<String, Option<Pixmap>> = Default::default();
     draw_fluids(&mut pm, &snapshot["fluids"], &view, true);
     draw_fluid_foam(&mut pm, &snapshot["fluids"], &view, true);
+    // fields are drawn in order with the shapes, by z (a field goes before a shape of the same z)
+    let mut fields: Vec<&Value> = snapshot["fields"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .collect();
+    fields.sort_by_key(|f| f["z"].as_i64().unwrap_or(0));
+    let mut next_field = 0usize;
     for sh in snapshot["shapes"]
         .as_array()
         .map(|v| v.as_slice())
         .unwrap_or(&[])
     {
+        while next_field < fields.len()
+            && fields[next_field]["z"].as_i64().unwrap_or(0) <= sh["z"].as_i64().unwrap_or(0)
+        {
+            draw_field(&mut pm, fields[next_field], &view);
+            next_field += 1;
+        }
         if sh["visible"] == Value::Bool(false) {
             continue;
         }
@@ -911,6 +993,10 @@ fn render_view(
                 pm.fill_path(&c, &paint, FillRule::Winding, tf, None);
             }
         }
+    }
+    while next_field < fields.len() {
+        draw_field(&mut pm, fields[next_field], &view);
+        next_field += 1;
     }
     if debug_physics {
         draw_physics(

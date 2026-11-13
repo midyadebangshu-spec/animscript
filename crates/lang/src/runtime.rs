@@ -305,6 +305,8 @@ impl Runtime {
         self.it.decls.start_scene();
         self.it.reset_particles();
         self.it.reset_fluids();
+        self.it.reset_fields()?;
+        self.it.reset_particle_forces()?;
         self.it.mod_counts.clear();
         self.pending.clear();
         self.channels.clear();
@@ -391,6 +393,7 @@ impl Runtime {
                         .help("a chain of zero-time reactions must end; add `wait 1.frame` to one of the rules involved"));
                 }
             }
+            self.it.step_fields(n)?;
             self.advance_actions();
             let snap = build_snapshot(
                 &self.it,
@@ -1812,9 +1815,21 @@ impl Runtime {
                     };
                 let n = xs.len();
                 let nf = if d.verts.is_empty() { 1.0 } else { n as f64 };
+                let extra: Vec<Vec<f64>> = d
+                    .fields
+                    .iter()
+                    .map(|(f, c)| {
+                        xs.iter()
+                            .zip(&ys)
+                            .map(|(x, y)| self.it.field_sample(f, *c, *x, *y))
+                            .collect()
+                    })
+                    .collect();
+                let mut cols: Vec<&[f64]> = vec![&xs, &ys, &idx, &us];
+                cols.extend(extra.iter().map(|c| c.as_slice()));
                 let out = d
                     .prog
-                    .eval_n(n, &[&xs, &ys, &idx, &us], &[t, nf], &[])
+                    .eval_n(n, &cols, &[t, nf], &[])
                     .expect("a drive program matches its inputs");
                 for (k, o) in d.outs.iter().enumerate() {
                     for (vi, prop) in o.props.iter().enumerate() {

@@ -1,0 +1,40 @@
+project "Turing":
+    anim_version: "0.1"
+    canvas: 1280x720
+    fps: 24
+    background: #120d14
+
+# Reaction-diffusion (Gray-Scott): two chemicals on a grid. u is fed in, v eats u and makes more v; both spread at
+# different speeds. Out of a few random seeds grow spots, stripes and mazes, the kind of pattern that Turing
+# described for animal coats. Everything below is an equation per cell, stepped 14 times per frame, deterministic.
+field coat:
+    grid: (256, 144)
+    rect: (0, 0, 1280, 720)
+    state: ["u", "v"]
+    edges: "wrap"
+    du: 0.16
+    dv: 0.08
+    f: 0.0545                             # feed rate
+    k: 0.062                              # kill rate: with `f` this chooses the pattern (mazes here)
+    init: [("u", "1 - 0.5 * ((abs(x - 640) < 50 && abs(y - 360) < 50) || hash(i * 977 + j * 31) > 0.992 ? 1 : 0)"),
+           ("v", "(abs(x - 640) < 50 && abs(y - 360) < 50) || hash(i * 977 + j * 31) > 0.992 ? 0.5 : 0")]
+    step: [[("u", "u + du * (u[-1, 0] + u[1, 0] + u[0, -1] + u[0, 1] - 4 * u) - u * v * v + f * (1 - u)"),
+            ("v", "v + dv * (v[-1, 0] + v[1, 0] + v[0, -1] + v[0, 1] - 4 * v) + u * v * v - (f + k) * v")]]
+    substeps: 14
+    ramp: [#120d14, #2b1a3a, #7a2f4f, #d9734e, #f6d9a8, #fff8e8]
+    channel: "v"
+    range: (0, 0.42)
+    z: 1
+
+scene "Turing" for 16.seconds:
+    main:
+        # the pattern grows by itself from the seeds; now and then a drop of chemical v starts a new patch
+        wait 4.seconds
+        coat.poke(240, 190, amount: 0.5, radius: 46, channel: "v")
+        wait 3.seconds
+        coat.poke(1040, 560, amount: 0.5, radius: 46, channel: "v")
+        wait 3.seconds
+        coat.poke(250, 590, amount: 0.5, radius: 46, channel: "v")
+        wait 1.second
+        coat.poke(1050, 170, amount: 0.5, radius: 46, channel: "v")
+        wait 5.seconds

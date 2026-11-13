@@ -188,6 +188,20 @@ impl Parser {
                         span: start,
                     });
                 }
+                T::Ident(s) if s == "field" && matches!(&self.peek_at(1).t, T::Ident(_)) => {
+                    let start = self.next().span;
+                    let name = self.ident("a field name")?;
+                    let mut attrs = vec![];
+                    self.attrs(|p, key, span| {
+                        attrs.push((key.to_string(), p.expr()?, span));
+                        Ok(())
+                    })?;
+                    prog.fields.push(EmitterDecl {
+                        name,
+                        attrs,
+                        span: start,
+                    });
+                }
                 T::Ident(s) if s == "armature" && matches!(&self.peek_at(1).t, T::Ident(_)) => {
                     let a = self.armature()?;
                     prog.armatures.push(a);

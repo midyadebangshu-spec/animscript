@@ -195,3 +195,76 @@ fn noise_at_huge_coordinates_does_not_overflow() {
         .unwrap();
     assert!(r[0].iter().all(|v| (-1.0..=1.0).contains(v)));
 }
+
+// ---- stencil reads: `h[-1, 0]` is the input `h@-1,0` ------------------------------------------------------------------
+
+fn stencil_env(b: &mut Builder) -> Env {
+    let h = b.input("h", Rate::Point);
+    let mut env = Env::new().with("h", h);
+    env.stencils.insert("h".to_string());
+    env
+}
+
+#[test]
+fn a_stencil_read_becomes_a_named_point_input() {
+    let mut b = Builder::new();
+    let env = stencil_env(&mut b);
+    let id = parse("h[-1, 0] + h[1,0] + h[0, 2] - 3 * h", &mut b, &env).unwrap();
+    let p = b.finish(&[id]);
+    let names = p.input_names();
+    for want in ["h", "h@-1,0", "h@1,0", "h@0,2"] {
+        assert!(names.contains(&want), "{want} in {names:?}");
+    }
+    // evaluate with the neighbours as plain columns
+    let cols: Vec<Vec<f64>> = names
+        .iter()
+        .map(|n| match *n {
+            "h" => vec![10.0],
+            "h@-1,0" => vec![1.0],
+            "h@1,0" => vec![2.0],
+            _ => vec![4.0],
+        })
+        .collect();
+    let refs: Vec<&[f64]> = cols.iter().map(|c| c.as_slice()).collect();
+    assert_eq!(
+        p.eval(&refs, &[], &[]).unwrap()[0][0],
+        1.0 + 2.0 + 4.0 - 30.0
+    );
+}
+
+#[test]
+fn the_same_stencil_twice_is_one_input() {
+    let mut b = Builder::new();
+    let env = stencil_env(&mut b);
+    let id = parse("h[1, 0] * h[1, 0]", &mut b, &env).unwrap();
+    let p = b.finish(&[id]);
+    assert_eq!(p.input_names().iter().filter(|n| **n == "h@1,0").count(), 1);
+}
+
+#[test]
+fn stencil_errors() {
+    let mut b = Builder::new();
+    let env = stencil_env(&mut b);
+    assert!(parse("h[x, 0]", &mut b, &env)
+        .unwrap_err()
+        .msg
+        .contains("whole number"));
+    assert!(parse("h[1]", &mut b, &env).unwrap_err().msg.contains("two"));
+    assert!(parse("h[1.5, 0]", &mut b, &env)
+        .unwrap_err()
+        .msg
+        .contains("whole number"));
+    assert!(parse("h[40, 0]", &mut b, &env)
+        .unwrap_err()
+        .msg
+        .contains("at most"));
+    assert!(parse("h[1, 0", &mut b, &env).is_err());
+    // only names declared as stencil fields can be indexed
+    let mut b2 = Builder::new();
+    let x = b2.input("x", Rate::Point);
+    let env2 = Env::new().with("x", x);
+    assert!(parse("x[1, 0]", &mut b2, &env2)
+        .unwrap_err()
+        .msg
+        .contains("not a field"));
+}

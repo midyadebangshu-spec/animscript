@@ -6,6 +6,7 @@ pub mod check;
 pub mod color;
 pub mod defs;
 pub mod derive;
+pub mod field;
 pub mod fluid;
 pub mod freehand;
 pub mod imports;

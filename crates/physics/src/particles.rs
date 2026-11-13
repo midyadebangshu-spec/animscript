@@ -107,6 +107,10 @@ impl Emitter {
     pub fn particles(&self) -> &[Particle] {
         &self.parts
     }
+    /// For forces applied from outside (the language's `force_x` / `force_y` equations).
+    pub fn particles_mut(&mut self) -> &mut [Particle] {
+        &mut self.parts
+    }
     /// How many particles have been spawned in total (including ones that died or were over the cap).
     pub fn emitted(&self) -> u64 {
         self.next_index

@@ -471,6 +471,13 @@ pub struct Program {
 }
 
 impl Program {
+    /// Every declared input with its rate, in the order the evaluator expects its columns.
+    pub fn input_decls(&self) -> Vec<(&str, Rate)> {
+        self.inputs
+            .iter()
+            .map(|i| (i.name.as_str(), i.rate))
+            .collect()
+    }
     pub fn input_names(&self) -> Vec<&str> {
         self.inputs.iter().map(|i| i.name.as_str()).collect()
     }

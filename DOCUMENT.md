@@ -2129,6 +2129,63 @@ The renderer **caches each painted layer** by its content (brushes, strokes with
 that only moves, turns or fades is not painted again, only drawn through its new transform. That brings a 16 second,
 about 1200-stroke scene from roughly fifteen minutes to a couple.
 
+## 13r. Fields: equations stepped over a grid (round M4)
+
+A **field** is a grid of cells holding one or more numbers, updated every frame by equations you write: a wave, heat,
+a chemical reaction. It is deterministic (fixed time step, double buffered, one thread) and it can be shown, read from
+scripts, and used to move shapes and particles.
+
+```anim
+field pond:
+    grid: (256, 104)                        # cells (at most 512 on a side, 512 x 512 in all): E-FLD-002
+    rect: (0, 200, 1280, 520)               # where it lies: x, y, width, height
+    state: ["h", "v"]                       # the channels (scalars)
+    init: [("h", "exp(-((x - 400)^2 + (y - 300)^2) / 400)"), ("v", "0")]
+    step: [[("v", "v + dt * (c2 * (h[-1, 0] + h[1, 0] + h[0, -1] + h[0, 1] - 4 * h) - damp * v)")],
+           [("h", "h + dt * v")]]           # two phases: the second reads the new v
+    c2: 1100                                # any other name with a number is a constant of the equations
+    damp: 0.9
+    edges: "mirror"                         # clamp (default) | wrap | mirror | zero: what lies beyond the grid
+    substeps: 4                             # 1 to 64 steps per frame; dt = 1 / (fps * substeps)
+    ramp: [#061827, #1b6fa3, #ffffff]       # show it: the colours, the channel and the range they cover
+    channel: "h"
+    range: (-0.5, 0.9)
+    z: 2                                    # drawing order among the shapes (opacity: and blend: too)
+```
+
+- **Equations** are strings or lambdas (the math engine, section 13p). Inputs: `x`, `y` (the cell's centre), `i`, `j`
+  (its column and row), `t` (seconds since the scene began, at the end of the substep), `dt`, the channels by name, and
+  your constants. **Neighbours:** `h[-1, 0]` is the cell to the left, `h[0, 1]` the one below (offsets of at most 16;
+  lambdas write `h(-1, 0)`). A one-row field can only read along x.
+- **Phases.** `step:` is a list; pairs written one after another form one phase, a nested list is a phase of its own.
+  Inside a phase every equation reads the state as it was before the phase (so `a`/`b` swap correctly); the next phase
+  sees the result. A channel appears once per phase. `init:` gives the starting state (channels you leave out start at
+  0); `noise(...)` and `hash(...)` are seeded by the script, so every run starts the same.
+- **Edges.** `clamp` repeats the border cell, `wrap` joins opposite sides, `mirror` reflects (the cell beyond the edge
+  is the border cell itself), `zero` reads 0.
+- **From the script** (while a scene runs): `pond.poke(x, y, amount: 1, radius: 20, channel: "h")` adds a smooth bump,
+  `pond.fill(0, channel: "h")`, `pond.at(x, y)` reads the value there (bilinear between cell centres), and
+  `pond.sum()`, `pond.max()`, `pond.min()`. A field starts over with every scene.
+- **A chain.** `chain: wave` (a shape) makes a one-dimensional field with one cell per vertex, in id order: a string or
+  a water line that is *simulated*.
+- **Reading a field from a drive.** `w.drive(y: "-pond_h * 40", fields: [pond])` gives the equation the inputs
+  `<field>_<channel>` (and `<field>` for the first channel), sampled at each vertex's rest position (a shape-level
+  drive: at the shape's rest centre). A boat that bobs and tilts: `drive(pos_y: "-pond * 110", rotation: "atan(pond_gx * 26) / tau", fields: [pond])`.
+- **Particles with forces.** An emitter takes `force_x: "..."`, `force_y: "..."` (px per second squared) over `x`, `y`,
+  `vx`, `vy`, `age`, `i`, `t`, and the fields named in `fields: [pond]`: leaves that slide down a wave's slope.
+- **Snapshots** carry, per field, the name, grid and rectangle, a checksum of all the numbers, the sum, minimum and
+  maximum of each channel, and (with a `ramp`) the colour-mapped picture (at most 256 cells on a side). `raw: true`
+  adds every number. The renderer draws the picture smoothly inside the rectangle.
+- **Errors:** `E-FLD-001` bad declaration (missing grid or channels, unknown channel, bad edge rule, a second row read in
+  a one-row field, a duplicate name), `-002` size limits, `-003` a value became infinite or not a number (the message
+  says where and when; usually the time step is too large: lower the coefficients or raise `substeps`).
+  Equation syntax is `E-MTH-001` as usual.
+- **Machine code.** With the `jit` feature, equations of fields with 128 or more cells run as machine code, with
+  identical results.
+
+Worked examples: `examples/pond.anim` (the wave equation, rain, a boat and leaves driven by the surface) and
+`examples/turing.anim` (reaction-diffusion growing mazes).
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,
@@ -2159,6 +2216,7 @@ help: did you mean `over: 1.second`?
 | Statements | `E-STM-001` blocking statement in `setup:`, `-003` zero-time loop body |
 | Scenes | `E-SCN-001` `for auto` without `main:`, `-002` unknown set, `E-SCR-001` script heading names no known set |
 | Properties | `E-CON-001` constraint cycle, `E-PRP-002` two locks on one component, `-003` overlapping keyframes |
+| Fields | `E-FLD-001` bad field declaration, `-002` size limit, `-003` value became infinite or NaN |
 | Equations | `E-MTH-001` equation syntax, `-002` construct not allowed in an equation, `-003` bad arguments, `-004` unknown or mixed drive property, `-005` non-finite value |
 | Camera / assets | `E-CAM-001` zoom outside [1, 8], `E-AST-001` asset file not found |
 | Runtime | `E-RUN-001` tick did not settle in 64 deltas, `-002` action failed or rejected, `-004` `assert` failed |

@@ -139,7 +139,7 @@ impl Interp {
     }
 
     /// Compile equations over named inputs into one program (one output per equation).
-    fn compile_equations(
+    pub(crate) fn compile_equations(
         &mut self,
         eqs: &[(&str, &Value)],
         point: &[&str],
@@ -157,6 +157,7 @@ impl Interp {
         }
         let mut env = m::Env::new();
         env.noise_seed = seed;
+        env.stencils = self.eq_stencils.clone();
         env.names = scope.clone();
         for (k, v) in consts {
             env.names.insert(k.clone(), b.constant(*v));
@@ -271,7 +272,7 @@ impl Interp {
         Ok((named, consts))
     }
 
-    fn seed32(&mut self, base: &str) -> u32 {
+    pub(crate) fn seed32(&mut self, base: &str) -> u32 {
         (self.mod_seed(base) & 0xffff_ffff) as u32
     }
 
@@ -415,7 +416,7 @@ impl Interp {
     }
 
     /// The interpreter or, in a `jit` build, machine code for the same program (see `JitMode`).
-    fn make_kernel(&mut self, prog: m::Program, points: usize) -> Kernel {
+    pub(crate) fn make_kernel(&mut self, prog: m::Program, points: usize) -> Kernel {
         #[cfg(feature = "jit")]
         {
             let want = match self.jit {
@@ -459,7 +460,7 @@ impl Interp {
             ("pos_x", "pos_x"),
             ("pos_y", "pos_y"),
         ];
-        let known: [&'static str; 12] = [
+        let known: [&'static str; 13] = [
             "x",
             "y",
             "opacity",
@@ -472,6 +473,7 @@ impl Interp {
             "mode",
             "blend_in",
             "blend_out",
+            "fields",
         ];
         let mut args = args;
         // `over` may be given as an argument like for `wobble`
@@ -586,7 +588,13 @@ impl Interp {
             )
         };
         let eqs: Vec<(&str, &Value)> = names.iter().map(|k| (*k, &m[k])).collect();
-        let prog = self.compile_equations(&eqs, &DRIVE_POINT, &DRIVE_FRAME, &consts, seed)?;
+        let field_in = match m.get("fields") {
+            Some(v) => self.field_inputs(v, "`drive`")?,
+            None => vec![],
+        };
+        let mut point: Vec<&str> = DRIVE_POINT.to_vec();
+        point.extend(field_in.iter().map(|f| f.0.as_str()));
+        let prog = self.compile_equations(&eqs, &point, &DRIVE_FRAME, &consts, seed)?;
         let prog = self.make_kernel(prog, verts.len());
         let drive = Drive {
             prog,
@@ -594,6 +602,7 @@ impl Interp {
             outs: props.into_iter().map(|props| DriveOut { props }).collect(),
             replace,
             speed,
+            fields: field_in.iter().map(|f| (f.1.clone(), f.2)).collect(),
         };
         Ok(Value::Modifier(Box::new(ModReq {
             label: format!("{shape}.drive"),

@@ -28,6 +28,15 @@ pub struct EmitterCfg {
     pub color: [u8; 4],
     pub color_end: [u8; 4],
     pub opacity: (f64, f64),
+    /// `force_x` / `force_y` (px / s^2) and the fields they read: equations over x, y, vx, vy, age, i, t.
+    pub force: [Option<Value>; 2],
+    pub fields: Option<Value>,
+}
+
+/// A compiled `force_x` / `force_y` pair for one emitter.
+pub struct PartForce {
+    pub kernel: Kernel,
+    pub fields: Vec<(String, usize)>,
 }
 
 const HARD_LIMIT: usize = 20_000;
@@ -83,6 +92,8 @@ impl Interp {
                 color: [255; 4],
                 color_end: [255; 4],
                 opacity: (1.0, 1.0),
+                force: [None, None],
+                fields: None,
             };
             let (mut color_end, mut opacity_end) = (None, None);
             for (key, expr, span) in &d.attrs {
@@ -136,6 +147,13 @@ impl Interp {
                         Value::Bool(b) => cfg.def.collide = b,
                         _ => return Err(e1("`collide` must be true or false").at(*span)),
                     },
+                    "force_x" | "force_y" => {
+                        if !matches!(v, Value::Str(_) | Value::Lambda(_) | Value::Int(_) | Value::Num(_)) {
+                            return Err(Diagnostic::new("E-PTC-002", format!("`{key}` must be an equation (a string or a lambda) or a number, found {}", v.type_name())).at(*span));
+                        }
+                        cfg.force[usize::from(key == "force_y")] = Some(v.clone());
+                    }
+                    "fields" => cfg.fields = Some(v.clone()),
                     "max" => {
                         let n = self.int(&v, "`max`").map_err(|e| e1(e.message).at(*span))?;
                         if !(1..=HARD_LIMIT as i64).contains(&n) {
@@ -143,7 +161,7 @@ impl Interp {
                         }
                         cfg.def.max = n as usize;
                     }
-                    other => return Err(e1(format!("an emitter has no setting `{other}`")).at(*span).help("settings: at, rate, lifetime, speed, angle, size, size_end, color, color_end, opacity, opacity_end, gravity, drag, restitution, collide, max")),
+                    other => return Err(e1(format!("an emitter has no setting `{other}`")).at(*span).help("settings: force_x, force_y, fields, at, rate, lifetime, speed, angle, size, size_end, color, color_end, opacity, opacity_end, gravity, drag, restitution, collide, max")),
                 }
             }
             cfg.color_end = color_end.unwrap_or(cfg.color);
@@ -169,6 +187,91 @@ impl Interp {
             self.parts
                 .insert(name.clone(), ph::Emitter::new(cfg.def.clone(), seed));
         }
+    }
+
+    /// Compile the force equations of every emitter that has them (at the start of each scene).
+    pub fn reset_particle_forces(&mut self) -> Res<()> {
+        self.part_forces.clear();
+        let emitters: Vec<(String, EmitterCfg)> = self
+            .emitters
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        for (name, cfg) in emitters {
+            if cfg.force[0].is_none() && cfg.force[1].is_none() {
+                continue;
+            }
+            let field_in = match &cfg.fields {
+                Some(v) => self.field_inputs(v, "an emitter")?,
+                None => vec![],
+            };
+            let mut point: Vec<&str> = vec!["x", "y", "vx", "vy", "age", "i"];
+            point.extend(field_in.iter().map(|f| f.0.as_str()));
+            let (fx, fy) = (
+                cfg.force[0].clone().unwrap_or(Value::Int(0)),
+                cfg.force[1].clone().unwrap_or(Value::Int(0)),
+            );
+            let seed = self.seed32(&format!("{}/force/{name}", self.scene_name));
+            let prog = self.compile_equations(
+                &[("force_x", &fx), ("force_y", &fy)],
+                &point,
+                &["t"],
+                &BTreeMap::new(),
+                seed,
+            )?;
+            let kernel = self.make_kernel(prog, cfg.def.max);
+            self.part_forces.insert(
+                name,
+                PartForce {
+                    kernel,
+                    fields: field_in.iter().map(|f| (f.1.clone(), f.2)).collect(),
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// The velocity change `force * dt` of every live particle of one emitter (none if it has no force equations).
+    fn force_deltas(&self, name: &str, dt: f64, t: f64) -> Option<Vec<(f64, f64)>> {
+        let pf = self.part_forces.get(name)?;
+        let ps = self.parts[name].particles();
+        if ps.is_empty() {
+            return None;
+        }
+        let n = ps.len();
+        let (xs, ys): (Vec<f64>, Vec<f64>) = ps.iter().map(|p| (p.p.x, p.p.y)).unzip();
+        let vx: Vec<f64> = ps.iter().map(|p| p.v.x).collect();
+        let vy: Vec<f64> = ps.iter().map(|p| p.v.y).collect();
+        let age: Vec<f64> = ps.iter().map(|p| p.age).collect();
+        let idx: Vec<f64> = ps.iter().map(|p| p.index as f64).collect();
+        let extra: Vec<Vec<f64>> = pf
+            .fields
+            .iter()
+            .map(|(f, c)| {
+                xs.iter()
+                    .zip(&ys)
+                    .map(|(x, y)| self.field_sample(f, *c, *x, *y))
+                    .collect()
+            })
+            .collect();
+        let mut cols: Vec<&[f64]> = vec![&xs, &ys, &vx, &vy, &age, &idx];
+        cols.extend(extra.iter().map(|c| c.as_slice()));
+        let out = pf
+            .kernel
+            .eval_n(n, &cols, &[t], &[])
+            .expect("force inputs match");
+        // a force that is not a number leaves the particle alone
+        Some(
+            (0..n)
+                .map(|k| {
+                    if out[0][k].is_finite() && out[1][k].is_finite() {
+                        (out[0][k] * dt, out[1][k] * dt)
+                    } else {
+                        (0.0, 0.0)
+                    }
+                })
+                .collect(),
+        )
     }
 
     pub fn emitter_method(&mut self, name: &str, method: &str, args: Args) -> Res<Value> {
@@ -271,10 +374,19 @@ impl Interp {
                 }
                 v2((xr[0] + xr[1]) / 2.0, (yr[0] + yr[1]) / 2.0)
             };
-            let em = self.parts.get_mut(&name).expect("reset at scene start");
+            let t_now = tick as f64 / self.fps.to_f64();
             for _ in 0..steps {
+                if let Some(dv) = self.force_deltas(&name, dt, t_now) {
+                    let em = self.parts.get_mut(&name).expect("reset at scene start");
+                    for (p, d) in em.particles_mut().iter_mut().zip(dv) {
+                        p.v.x += d.0;
+                        p.v.y += d.1;
+                    }
+                }
+                let em = self.parts.get_mut(&name).expect("reset at scene start");
                 em.step(dt, world, &mut spawn);
             }
+            let em = self.parts.get_mut(&name).expect("reset at scene start");
             let (c0, c1) = (to_linear(cfg.color), to_linear(cfg.color_end));
             let items: Vec<J> = em
                 .particles()

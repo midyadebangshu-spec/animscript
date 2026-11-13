@@ -337,6 +337,7 @@ pub struct Program {
     pub world: Option<WorldDecl>,
     pub emitters: Vec<EmitterDecl>,
     pub fluids: Vec<EmitterDecl>,
+    pub fields: Vec<EmitterDecl>,
     pub armatures: Vec<ArmatureDecl>,
     pub defs: Vec<Rc<Def>>,
     pub entities: Vec<EntityDecl>,

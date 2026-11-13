@@ -1,0 +1,97 @@
+project "Pond":
+    anim_version: "0.1"
+    canvas: 1280x720
+    fps: 24
+    background: #0b1d2d
+
+# ---- the water: a field. Two channels make the wave equation (height h and its speed v) and two more hold the slope
+# of the surface (gx, gy). Every phase is an equation over the whole grid; `h[-1, 0]` is the cell to the left.
+field pond:
+    grid: (256, 104)
+    rect: (0, 200, 1280, 520)
+    state: ["h", "v", "gx", "gy"]
+    edges: "mirror"                       # waves bounce off the banks
+    c2: 1100                              # wave speed squared, in cells per second squared
+    damp: 0.9
+    init: [("h", "0"), ("v", "0"), ("gx", "0"), ("gy", "0")]
+    step: [[("v", "v + dt * (c2 * (h[-1, 0] + h[1, 0] + h[0, -1] + h[0, 1] - 4 * h) - damp * v)")],
+           [("h", "h + dt * v")],
+           [("gx", "(h[1, 0] - h[-1, 0]) * 0.5"), ("gy", "(h[0, 1] - h[0, -1]) * 0.5")]]
+    substeps: 4
+    ramp: [#04121f, #0a3454, #17669a, #4fb0e4, #cdeeff, #ffffff]
+    channel: "h"
+    range: (-0.32, 0.6)
+    z: 2
+
+# ---- the evening: sky, moon, far bank
+shape sky = polygon([(0, 0), (1280, 0), (1280, 230), (0, 230)])
+sky.fill = #1d2b4a
+sky.stroke_width = 0
+sky.z = 0
+shape glow = polygon([(0, 130), (1280, 130), (1280, 230), (0, 230)])
+glow.fill = #5a4a6a
+glow.stroke_width = 0
+glow.opacity = 0.7
+glow.z = 1
+shape moon = circle(n: 32, radius: 46, at: (980, 110))
+moon.fill = #f6f0d2
+moon.stroke_width = 0
+moon.z = 1
+shape bank = polygon([(0, 210), (180, 190), (420, 205), (700, 188), (1000, 200), (1280, 186), (1280, 232), (0, 232)])
+bank.fill = #0d1626
+bank.stroke_width = 0
+bank.z = 1
+
+# ---- reeds: curves bent by a wind equation (replace mode: each vertex is placed by the equation)
+shape reed1 = curve(x: "120 + 14 * sin(2.3 * u)", y: "690 - 250 * u", from: 0, to: 1, n: 24)
+shape reed2 = curve(x: "160 + 12 * sin(2.0 * u + 1)", y: "700 - 300 * u", from: 0, to: 1, n: 24)
+shape reed3 = curve(x: "1130 + 13 * sin(2.4 * u + 2)", y: "695 - 270 * u", from: 0, to: 1, n: 24)
+shape reed4 = curve(x: "1170 + 12 * sin(2.1 * u + 3)", y: "705 - 310 * u", from: 0, to: 1, n: 24)
+for r in [reed1, reed2, reed3, reed4]:
+    r.stroke = #3c6b4a
+    r.stroke_width = 6
+    r.z = 5
+
+# ---- a paper boat that rides the surface, and a few leaves that drift downhill
+shape hull = polygon([(600, 420), (690, 420), (668, 446), (622, 446)])
+hull.fill = #f4efe2
+hull.stroke = #8a8372
+hull.stroke_width = 3
+hull.z = 4
+shape sail = polygon([(640, 418), (640, 362), (676, 418)])
+sail.fill = #fffaf0
+sail.stroke = #8a8372
+sail.stroke_width = 3
+sail.z = 4
+
+emitter leaves:
+    at: (260, 450)
+    rate: 0
+    lifetime: (30, 30)
+    speed: (10, 40)
+    size: (6, 9)
+    color: #e0a94a
+    drag: 0.6
+    max: 10
+    force_x: "-pond_gx * 5200 + 30"       # a leaf slides down the slope of the surface it floats on, and a current carries it
+    force_y: "-pond_gy * 5200 + 6 * sin(t)"
+    fields: [pond]
+
+# ------------------------------------------------------------------------------------------------------------------
+scene "Pond" for 14.seconds:
+    main:
+        leaves.burst(8)
+        # the wind
+        for k in [0, 1, 2, 3]:
+            let r = [reed1, reed2, reed3, reed4][k]
+            start r.drive(x: "(clamp((700 - y) / 280, 0, 1) ^ 2) * (18 * sin(tau * (0.32 * t + 0.21 * x / 100)) + 7 * noise(t * 0.8, 0.31 * x))")
+        # the boat: height and slope of the water under it (the field is read at the shape's centre)
+        start hull.drive(pos_y: "-pond * 110", rotation: "atan(pond_gx * 26) / tau", fields: [pond])
+        start sail.drive(pos_y: "-pond * 110", rotation: "atan(pond_gx * 26) / tau", fields: [pond])
+        # a first big drop under the boat, then rain
+        wait 0.4.seconds
+        pond.poke(430, 480, amount: 2.4, radius: 34)
+        for i in 0..24:
+            pond.poke(120 + (i * 367) % 1040, 270 + (i * 191) % 400, amount: 1.3 + (i % 3) * 0.4, radius: 16)
+            wait 1.second * (0.3 + (i % 4) * 0.12)
+        wait 14.seconds
