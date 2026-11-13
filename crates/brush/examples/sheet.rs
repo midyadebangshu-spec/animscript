@@ -15,7 +15,7 @@ fn main() {
                 Point {
                     x: 20.0 + 360.0 * t,
                     y: y0 + 10.0 * (t * 12.0).sin(),
-                    pressure: 0.3 + 0.6 * (t * 3.14).sin(),
+                    pressure: 0.3 + 0.6 * (t * std::f32::consts::PI).sin(),
                     xtilt: 0.0,
                     ytilt: 0.0,
                     dt: 0.012,
