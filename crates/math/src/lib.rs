@@ -8,7 +8,11 @@ mod eval;
 mod ir;
 #[cfg(feature = "jit")]
 mod jit;
+#[cfg(feature = "llvm")]
+mod llvm;
 mod parse;
+#[cfg(any(feature = "jit", feature = "llvm"))]
+mod thunks;
 
 pub use diff::DiffError;
 pub use eval::EvalError;
@@ -17,3 +21,5 @@ pub use parse::{apply_fn, parse, Env, ParseError};
 
 #[cfg(feature = "jit")]
 pub use jit::{Compiled, JitError};
+#[cfg(feature = "llvm")]
+pub use llvm::{LlvmCompiled, LlvmError};

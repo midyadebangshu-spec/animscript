@@ -11,6 +11,8 @@ build = "build.rs"
 exprtk = []
 # a Cranelift JIT whose results are bit-identical to the interpreter's (see docs/DECISIONS.md)
 jit = ["dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-jit", "dep:cranelift-module", "dep:cranelift-native"]
+# an LLVM 18 backend, a spike to compare with Cranelift (needs llvm-18-dev; see docs/DECISIONS.md)
+llvm = ["dep:inkwell"]
 
 [dependencies]
 cranelift-codegen = { version = "=0.137.1", optional = true }
@@ -18,6 +20,7 @@ cranelift-frontend = { version = "=0.137.1", optional = true }
 cranelift-jit = { version = "=0.137.1", optional = true }
 cranelift-module = { version = "=0.137.1", optional = true }
 cranelift-native = { version = "=0.137.1", optional = true }
+inkwell = { version = "=0.11.0", default-features = false, features = ["llvm18-1-prefer-dynamic", "target-x86"], optional = true }
 # the maths library in pure Rust: sin, exp, pow, ... give the same bits on every platform
 libm = "0.2"
 

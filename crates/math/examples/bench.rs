@@ -71,6 +71,19 @@ fn main() {
                 });
                 println!("    jit speedup  {:.2}x", a / j);
             }
+            #[cfg(feature = "llvm")]
+            {
+                let t0 = Instant::now();
+                let c = p.compile_llvm().expect("llvm");
+                println!(
+                    "    llvm compile {:>9.1} us",
+                    t0.elapsed().as_secs_f64() * 1e6
+                );
+                let l = time("llvm", reps, || {
+                    c.eval(&[&xs], &[0.7], &[]).unwrap()[0][n / 2]
+                });
+                println!("    llvm speedup {:.2}x", a / l);
+            }
             let mut out = vec![0.0; n];
             let b = time("fused native", reps, || {
                 for (o, x) in out.iter_mut().zip(&xs) {

@@ -2103,6 +2103,9 @@ interpreter's bit for bit (a NaN stays a NaN), so scripts, snapshots and hashes 
 with `anim --jit auto|always|off` (default `auto`); if the machine does not allow it the interpreter is used and a
 `JIT` line appears in the trace.
 
+(`animscript-math` also has an experimental `llvm` feature, an LLVM 18 backend that is faster only on equations without
+`sin`, `exp`, `noise` and the like; it is not used by the language. See `docs/DECISIONS.md`, items 249-252.)
+
 Diagnostics: `E-MTH-001` equation syntax, `-002` construct not allowed in an equation, `-003` bad arguments (missing
 equation, `n`, `res`, bounds, `mode`), `-004` unknown or mixed drive property, `-005` non-finite value while building a shape.
 

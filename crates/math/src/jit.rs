@@ -56,31 +56,7 @@ impl std::fmt::Debug for Compiled {
 
 // ---- the thunks: the same Rust functions as the interpreter's -------------------------------------------------
 
-macro_rules! un_thunks {
-    ($($name:ident = $op:ident),* $(,)?) => {
-        $(extern "C" fn $name(x: f64) -> f64 { un_apply(Un::$op, x) })*
-        fn un_thunk(op: Un) -> Option<usize> {
-            match op { $(Un::$op => Some($name as *const () as usize),)* _ => None }
-        }
-    };
-}
-un_thunks! {
-    t_sin = Sin, t_cos = Cos, t_tan = Tan, t_asin = Asin, t_acos = Acos, t_atan = Atan,
-    t_sinh = Sinh, t_cosh = Cosh, t_tanh = Tanh, t_exp = Exp, t_log = Log, t_log2 = Log2,
-    t_log10 = Log10, t_round = Round,
-}
-macro_rules! bin_thunks {
-    ($($name:ident = $op:ident),* $(,)?) => {
-        $(extern "C" fn $name(a: f64, b: f64) -> f64 { bin_apply(Bin::$op, a, b) })*
-        fn bin_thunk(op: Bin) -> Option<usize> {
-            match op { $(Bin::$op => Some($name as *const () as usize),)* _ => None }
-        }
-    };
-}
-bin_thunks! { t_rem = Rem, t_pow = Pow, t_atan2 = Atan2 }
-extern "C" fn t_noise(dims: u32, seed: u32, x: f64, y: f64, z: f64) -> f64 {
-    noise_apply(dims as u8, seed, x, y, z)
-}
+use crate::thunks::{bin_thunk, t_noise, un_thunk};
 
 // ---- code generation -------------------------------------------------------------------------------------------
 
