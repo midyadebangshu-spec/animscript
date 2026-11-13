@@ -541,7 +541,7 @@ fn keyframe_errors() {
     );
     // unknown property, wrong unit
     assert_eq!(
-        run_err(&main("            at 0.s: position.z = 0\n")).code,
+        run_err(&main("            at 0.s: position.q = 0\n")).code,
         "E-NAM-003"
     );
     assert_eq!(

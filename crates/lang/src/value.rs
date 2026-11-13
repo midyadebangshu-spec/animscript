@@ -228,6 +228,11 @@ pub enum PropId {
     ScaleX,
     ScaleY,
     Rot,
+    /// 3D: depth, turns about x and y, and scale along z (meshes and `camera3`).
+    PosZ,
+    RotX,
+    RotY,
+    ScaleZ,
     /// One component (0 r, 1 g, 2 b, 3 a; linear light) of a face's own fill.
     FillC(u32, u8),
     /// ... of an edge's own stroke colour.

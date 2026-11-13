@@ -4,6 +4,7 @@
 pub mod diag;
 pub mod fit;
 pub mod geometry;
+pub mod mesh;
 
 pub use diag::{Diagnostic, Res, Severity, Span};
 pub use fit::{fit_curve, path_length, resample, simplify, FitSeg};

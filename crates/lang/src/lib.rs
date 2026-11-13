@@ -14,6 +14,7 @@ pub mod interp;
 pub mod layers;
 pub mod lexer;
 pub mod mathfx;
+pub mod mesh3d;
 pub mod paint;
 pub mod parser;
 pub mod particles;

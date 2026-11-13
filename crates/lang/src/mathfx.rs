@@ -452,15 +452,19 @@ impl Interp {
                 .help("use it in `main:` or a rule; a drive adds motion over time"));
         }
         const VERT: [&str; 2] = ["x", "y"];
-        const SHAPE: [(&str, &str); 6] = [
+        const SHAPE: [(&str, &str); 10] = [
             ("opacity", "opacity"),
             ("width", "width"),
             ("rotation", "rotation"),
             ("scale", "scale"),
             ("pos_x", "pos_x"),
             ("pos_y", "pos_y"),
+            ("pos_z", "pos_z"),
+            ("rot_x", "rot_x"),
+            ("rot_y", "rot_y"),
+            ("scale_z", "scale_z"),
         ];
-        let known: [&'static str; 13] = [
+        let known: [&'static str; 17] = [
             "x",
             "y",
             "opacity",
@@ -469,6 +473,10 @@ impl Interp {
             "scale",
             "pos_x",
             "pos_y",
+            "pos_z",
+            "rot_x",
+            "rot_y",
+            "scale_z",
             "speed",
             "mode",
             "blend_in",
@@ -495,7 +503,7 @@ impl Interp {
             .collect();
         if vert_eqs.is_empty() && shape_eqs.is_empty() {
             return Err(mth("E-MTH-003", "`drive` needs at least one equation")
-                .help("for example `w.drive(y: \"sin(x / 40 + t * 3) * 8\")`; properties: x, y, opacity, width, rotation, scale, pos_x, pos_y"));
+                .help("for example `w.drive(y: \"sin(x / 40 + t * 3) * 8\")`; properties: x, y, opacity, width, rotation, scale, pos_x, pos_y, pos_z, rot_x, rot_y, scale_z"));
         }
         if !vert_eqs.is_empty() && !shape_eqs.is_empty() {
             return Err(mth(
@@ -582,6 +590,10 @@ impl Interp {
                         "rotation" => vec![PropId::Rot],
                         "scale" => vec![PropId::ScaleX, PropId::ScaleY],
                         "pos_x" => vec![PropId::PosX],
+                        "pos_z" => vec![PropId::PosZ],
+                        "rot_x" => vec![PropId::RotX],
+                        "rot_y" => vec![PropId::RotY],
+                        "scale_z" => vec![PropId::ScaleZ],
                         _ => vec![PropId::PosY],
                     })
                     .collect(),

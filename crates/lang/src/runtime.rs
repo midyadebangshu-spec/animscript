@@ -461,6 +461,10 @@ impl Runtime {
             PropId::ScaleX => sh.scale[0],
             PropId::ScaleY => sh.scale[1],
             PropId::Rot => sh.rotation,
+            PropId::PosZ => sh.pos_z,
+            PropId::RotX => sh.rot_x,
+            PropId::RotY => sh.rot_y,
+            PropId::ScaleZ => sh.scale_z,
             PropId::EdgeWidth(e) => sh.edges[&e].width.unwrap_or(sh.stroke_width),
             PropId::ShapeWidth => sh.stroke_width,
             PropId::Opacity => sh.opacity,
@@ -2112,6 +2116,18 @@ impl Runtime {
                         PropId::ScaleX => t.scale[0] = v,
                         PropId::ScaleY => t.scale[1] = v,
                         _ => t.rotation = v,
+                    }
+                }
+                PropId::PosZ | PropId::RotX | PropId::RotY | PropId::ScaleZ => {
+                    let t = resolved
+                        .t3
+                        .entry(shape.clone())
+                        .or_insert([sh.pos_z, sh.rot_x, sh.rot_y, sh.scale_z]);
+                    match prop {
+                        PropId::PosZ => t[0] = v,
+                        PropId::RotX => t[1] = v,
+                        PropId::RotY => t[2] = v,
+                        _ => t[3] = v,
                     }
                 }
                 PropId::FillC(f, _) => {

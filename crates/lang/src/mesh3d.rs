@@ -1,0 +1,366 @@
+//! 3D in the language: meshes are shapes (`shape box = cube(size: 100)`), animated through the same properties as any
+//! shape plus `position.z`, `rotation.x`, `rotation.y` and `scale.z`; `camera3` is a hidden shape that moves and turns
+//! the 3D camera; `stage3(...)` sets the lens and the light. The renderer draws all meshes with a z-buffer.
+//!
+//! Axes are the canvas's (x right, y down) plus z away from the viewer, and the default camera shows the `z = 0` plane
+//! at canvas scale, so a mesh placed at `(400, 300, 0)` appears at `(400, 300)` next to 2D shapes.
+use crate::interp::Interp;
+use crate::value::*;
+use animscript_core::mesh::{Mesh, Transform3};
+use animscript_core::*;
+use serde_json::{json, Value as J};
+use std::collections::HashMap;
+
+type Args = Vec<(Option<String>, Value)>;
+
+fn msh(msg: impl Into<String>) -> Diagnostic {
+    Diagnostic::new("E-MSH-001", msg)
+}
+
+/// The lens and the light shared by every mesh.
+#[derive(Clone, Debug)]
+pub struct Stage3 {
+    /// Vertical field of view in degrees.
+    pub fov: f64,
+    /// The direction the light travels (unit length).
+    pub light: [f64; 3],
+    pub ambient: f64,
+    /// Shading levels (0 or 1: smooth lighting without bands).
+    pub bands: u32,
+    /// Edges between faces turned by more than this many degrees are inked (silhouettes always are).
+    pub crease: f64,
+    /// Shading is smooth across edges between faces turned by less than this many degrees (0: flat facets).
+    pub smooth: f64,
+}
+
+impl Default for Stage3 {
+    fn default() -> Stage3 {
+        let l = [-0.4f64, 0.7, 0.6];
+        let n = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).sqrt();
+        Stage3 {
+            fov: 40.0,
+            light: [l[0] / n, l[1] / n, l[2] / n],
+            ambient: 0.35,
+            bands: 3,
+            crease: 40.0,
+            smooth: 50.0,
+        }
+    }
+}
+
+impl Interp {
+    pub fn ensure_camera3(&mut self) {
+        if !self.shapes.contains_key("camera3") {
+            let mut sh = Shape::new("camera3");
+            sh.visible = false;
+            self.shapes.insert("camera3".to_string(), sh);
+        }
+    }
+
+    fn positive(
+        &self,
+        m: &HashMap<&'static str, Value>,
+        key: &'static str,
+        default: f64,
+    ) -> Res<f64> {
+        let v = match m.get(key) {
+            Some(v) => self.num(v, &format!("`{key}`"))?,
+            None => default,
+        };
+        if v <= 0.0 || !v.is_finite() {
+            return Err(msh(format!("`{key}` must be a positive number")));
+        }
+        Ok(v)
+    }
+
+    fn count(
+        &self,
+        m: &HashMap<&'static str, Value>,
+        key: &'static str,
+        default: i64,
+        min: i64,
+    ) -> Res<usize> {
+        let v = match m.get(key) {
+            Some(v) => self.int(v, &format!("`{key}`"))?,
+            None => default,
+        };
+        if v < min || v > 2000 {
+            return Err(msh(format!(
+                "`{key}` must be a whole number from {min} to 2000"
+            )));
+        }
+        Ok(v as usize)
+    }
+
+    fn at3(&self, m: &HashMap<&'static str, Value>) -> Res<Option<[f64; 3]>> {
+        let Some(v) = m.get("at") else {
+            return Ok(None);
+        };
+        match v {
+            Value::Tuple(t) if t.len() == 2 || t.len() == 3 => {
+                let mut p = [0.0; 3];
+                for (k, x) in t.iter().enumerate() {
+                    p[k] = self.num(x, "`at`")?;
+                }
+                Ok(Some(p))
+            }
+            o => Err(msh(format!(
+                "`at` must be (x, y) or (x, y, z), found {}",
+                o.type_name()
+            ))),
+        }
+    }
+
+    /// A mesh as a new shape: centred on the middle of its bounding box (its pivot), which goes to `at`.
+    fn mesh_shape(&self, mesh: Mesh, at: Option<[f64; 3]>) -> Value {
+        let (lo, hi) = mesh.bbox();
+        let pivot = [
+            (lo[0] + hi[0]) / 2.0,
+            (lo[1] + hi[1]) / 2.0,
+            (lo[2] + hi[2]) / 2.0,
+        ];
+        let mut sh = Shape::new("mesh");
+        sh.pivot3 = pivot;
+        if let Some(a) = at {
+            sh.position = [a[0] - pivot[0], a[1] - pivot[1]];
+            sh.pos_z = a[2] - pivot[2];
+        }
+        sh.mesh = Some(mesh);
+        Value::Fresh(Box::new(sh))
+    }
+
+    pub(crate) fn mesh_builtin(&mut self, name: &str, args: Args) -> Res<Value> {
+        match name {
+            "cube" => {
+                let m = self.bind(name, args, &["size", "width", "height", "depth", "at"], &[])?;
+                let size = self.positive(&m, "size", 100.0)?;
+                let (w, h, d) = (
+                    self.positive(&m, "width", size)?,
+                    self.positive(&m, "height", size)?,
+                    self.positive(&m, "depth", size)?,
+                );
+                Ok(self.mesh_shape(Mesh::cube(w, h, d), self.at3(&m)?))
+            }
+            "sphere" => {
+                let m = self.bind(name, args, &["radius", "segments", "rings", "at"], &[])?;
+                let r = self.positive(&m, "radius", 50.0)?;
+                let (s, g) = (
+                    self.count(&m, "segments", 24, 3)?,
+                    self.count(&m, "rings", 12, 2)?,
+                );
+                Ok(self.mesh_shape(Mesh::sphere(r, s, g), self.at3(&m)?))
+            }
+            "cylinder" | "cone" => {
+                let m = self.bind(name, args, &["radius", "height", "segments", "at"], &[])?;
+                let (r, h) = (
+                    self.positive(&m, "radius", 40.0)?,
+                    self.positive(&m, "height", 100.0)?,
+                );
+                let s = self.count(&m, "segments", 32, 3)?;
+                let mesh = if name == "cylinder" {
+                    Mesh::cylinder(r, h, s)
+                } else {
+                    Mesh::cone(r, h, s)
+                };
+                Ok(self.mesh_shape(mesh, self.at3(&m)?))
+            }
+            "plane" => {
+                let m = self.bind(name, args, &["width", "depth", "nx", "nz", "at"], &[])?;
+                let (w, d) = (
+                    self.positive(&m, "width", 400.0)?,
+                    self.positive(&m, "depth", 400.0)?,
+                );
+                let (nx, nz) = (self.count(&m, "nx", 1, 1)?, self.count(&m, "nz", 1, 1)?);
+                Ok(self.mesh_shape(Mesh::plane(w, d, nx, nz), self.at3(&m)?))
+            }
+            "lathe" => {
+                let m = self.bind(name, args, &["profile", "segments", "at"], &["profile"])?;
+                let Value::List(items) = &m["profile"] else {
+                    return Err(msh("`profile` must be a list of (radius, height) points"));
+                };
+                let pts: Vec<[f64; 2]> = items
+                    .iter()
+                    .map(|p| self.point(p, "a profile point"))
+                    .collect::<Res<_>>()?;
+                let s = self.count(&m, "segments", 32, 3)?;
+                let mesh = Mesh::lathe(&pts, s).map_err(msh)?;
+                Ok(self.mesh_shape(mesh, self.at3(&m)?))
+            }
+            "extrude" => {
+                let m = self.bind(name, args, &["of", "depth", "points", "at"], &[])?;
+                let poly: Vec<[f64; 2]> = match (m.get("of"), m.get("points")) {
+                    (Some(shape), None) => self.outline_points(shape, true)?,
+                    (None, Some(Value::List(items))) => items
+                        .iter()
+                        .map(|p| self.point(p, "a polygon point"))
+                        .collect::<Res<_>>()?,
+                    (None, Some(o)) => {
+                        return Err(msh(format!(
+                            "`points` must be a list of points, found {}",
+                            o.type_name()
+                        )))
+                    }
+                    (None, None) => return Err(Diagnostic::new(
+                        "E-TYP-003",
+                        "`extrude` needs a shape (`extrude(star, depth: 30)`) or `points: [...]`",
+                    )),
+                    (Some(_), Some(_)) => {
+                        return Err(msh("give `extrude` a shape or `points`, not both"))
+                    }
+                };
+                let depth = self.positive(&m, "depth", 40.0)?;
+                // a closed outline repeats its first point
+                let poly = match (poly.first(), poly.last()) {
+                    (Some(a), Some(b))
+                        if poly.len() > 3
+                            && (a[0] - b[0]).abs() < 1e-9
+                            && (a[1] - b[1]).abs() < 1e-9 =>
+                    {
+                        poly[..poly.len() - 1].to_vec()
+                    }
+                    _ => poly,
+                };
+                let mesh = Mesh::extrude(&poly, depth).map_err(msh)?;
+                Ok(self.mesh_shape(mesh, self.at3(&m)?))
+            }
+            "stage3" => {
+                let m = self.bind(
+                    name,
+                    args,
+                    &["fov", "light", "ambient", "bands", "crease", "smooth"],
+                    &[],
+                )?;
+                let mut st = self.stage3.clone();
+                if let Some(v) = m.get("fov") {
+                    st.fov = self.num(v, "`fov`")?;
+                    if !(st.fov > 0.0 && st.fov < 170.0) {
+                        return Err(msh("`fov` (the vertical field of view in degrees) must be between 0 and 170"));
+                    }
+                }
+                if let Some(v) = m.get("light") {
+                    let Value::Tuple(t) = v else {
+                        return Err(msh("`light` must be a direction (x, y, z)"));
+                    };
+                    if t.len() != 3 {
+                        return Err(msh("`light` must be a direction (x, y, z)"));
+                    }
+                    let d = [
+                        self.num(&t[0], "`light`")?,
+                        self.num(&t[1], "`light`")?,
+                        self.num(&t[2], "`light`")?,
+                    ];
+                    let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                    if l == 0.0 || !l.is_finite() {
+                        return Err(msh("`light` needs a direction, not (0, 0, 0)"));
+                    }
+                    st.light = [d[0] / l, d[1] / l, d[2] / l];
+                }
+                if let Some(v) = m.get("ambient") {
+                    st.ambient = self.num(v, "`ambient`")?;
+                    if !(0.0..=1.0).contains(&st.ambient) {
+                        return Err(msh("`ambient` is between 0 and 1"));
+                    }
+                }
+                if let Some(v) = m.get("bands") {
+                    let b = self.int(v, "`bands`")?;
+                    if !(0..=16).contains(&b) {
+                        return Err(msh("`bands` is 0 to 16 (0 or 1: smooth lighting)"));
+                    }
+                    st.bands = b as u32;
+                }
+                if let Some(v) = m.get("crease") {
+                    let Value::Angle(a) = v else {
+                        return Err(msh("`crease` must be an angle, like `40.deg`"));
+                    };
+                    st.crease = a * 360.0;
+                    if !(0.0..=180.0).contains(&st.crease) {
+                        return Err(msh("`crease` is between 0 and 180 degrees"));
+                    }
+                }
+                if let Some(v) = m.get("smooth") {
+                    let Value::Angle(a) = v else {
+                        return Err(msh(
+                            "`smooth` must be an angle, like `50.deg` (0.deg: flat facets)",
+                        ));
+                    };
+                    st.smooth = a * 360.0;
+                    if !(0.0..=180.0).contains(&st.smooth) {
+                        return Err(msh("`smooth` is between 0 and 180 degrees"));
+                    }
+                }
+                self.stage3 = st;
+                Ok(Value::None)
+            }
+            _ => unreachable!("dispatched by name"),
+        }
+    }
+
+    pub fn any_visible_mesh(&self) -> bool {
+        self.shape_order
+            .iter()
+            .any(|n| self.shapes[n].mesh.is_some() && self.shapes[n].visible)
+    }
+
+    /// The camera for the renderer: where it is and which way it looks (positions in canvas units).
+    pub fn camera3_json(&self, resolved: &crate::snapshot::Resolved) -> J {
+        let (w, h) = (self.canvas.0 as f64, self.canvas.1 as f64);
+        let f0 = (h / 2.0) / (self.stage3.fov.to_radians() / 2.0).tan();
+        let (pos, scale, roll, t3) = match self.shapes.get("camera3") {
+            Some(sh) => {
+                let tf = resolved
+                    .tf
+                    .get("camera3")
+                    .copied()
+                    .unwrap_or_else(|| sh.transform());
+                let t3 = resolved
+                    .t3
+                    .get("camera3")
+                    .copied()
+                    .unwrap_or([sh.pos_z, sh.rot_x, sh.rot_y, sh.scale_z]);
+                (tf.position, tf.scale[0], tf.rotation, t3)
+            }
+            None => ([0.0, 0.0], 1.0, 0.0, [0.0, 0.0, 0.0, 1.0]),
+        };
+        let eye = [w / 2.0 + pos[0], h / 2.0 + pos[1], -f0 + t3[0]];
+        let rot = Transform3 {
+            position: [0.0; 3],
+            rot: [t3[1], t3[2], roll],
+            scale: [1.0; 3],
+            pivot: [0.0; 3],
+        };
+        let (right, down, forward) = (
+            rot.apply([1.0, 0.0, 0.0]),
+            rot.apply([0.0, 1.0, 0.0]),
+            rot.apply([0.0, 0.0, 1.0]),
+        );
+        // exact basis for the common case of an unturned camera
+        let clean = |v: [f64; 3]| v.map(|x| if x.abs() < 1e-15 { 0.0 } else { x });
+        json!({"eye": eye, "right": clean(right), "down": clean(down), "forward": clean(forward), "focal": f0 * scale, "cx": w / 2.0, "cy": h / 2.0})
+    }
+
+    pub fn light3_json(&self) -> J {
+        let s = &self.stage3;
+        json!({"dir": s.light, "ambient": s.ambient, "bands": s.bands, "crease": s.crease, "smooth": s.smooth})
+    }
+}
+
+/// A mesh in world space for the snapshot.
+pub fn mesh_json(
+    sh: &Shape,
+    tf: &Transform,
+    t3: Option<[f64; 4]>,
+    fill: J,
+    outline: J,
+    width: f64,
+) -> J {
+    let mesh = sh.mesh.as_ref().expect("a mesh shape");
+    let t3 = t3.unwrap_or([sh.pos_z, sh.rot_x, sh.rot_y, sh.scale_z]);
+    let t = Transform3 {
+        position: [tf.position[0], tf.position[1], t3[0]],
+        rot: [t3[1], t3[2], tf.rotation],
+        scale: [tf.scale[0], tf.scale[1], t3[3]],
+        pivot: sh.pivot3,
+    };
+    let verts: Vec<J> = mesh.verts.iter().map(|v| json!(t.apply(*v))).collect();
+    json!({"verts": verts, "faces": mesh.faces, "double_sided": mesh.double_sided, "fill": fill, "outline": outline, "width": width})
+}

@@ -1,6 +1,8 @@
 //! Renders a FrameSnapshot to an image. This crate contains no shape logic: it only fills the
 //! faces and strokes the edges that the runtime already resolved into the snapshot.
 use serde_json::Value;
+
+mod mesh3;
 use tiny_skia::{
     Color, FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform,
 };
@@ -908,6 +910,7 @@ fn render_view(
         .collect();
     fields.sort_by_key(|f| f["z"].as_i64().unwrap_or(0));
     let mut next_field = 0usize;
+    let mut meshes_drawn = false;
     for sh in snapshot["shapes"]
         .as_array()
         .map(|v| v.as_slice())
@@ -924,6 +927,14 @@ fn render_view(
         }
         if sh["paint"].is_object() {
             draw_paint(&mut pm, sh, &view);
+            continue;
+        }
+        if sh["mesh"].is_object() {
+            // all the meshes are drawn together, with one z-buffer, where the first of them comes in the z order
+            if !meshes_drawn {
+                mesh3::draw_meshes(&mut pm, snapshot, &view);
+                meshes_drawn = true;
+            }
             continue;
         }
         // every face is filled with its own resolved colour, every edge stroked with its own

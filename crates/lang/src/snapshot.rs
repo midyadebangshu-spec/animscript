@@ -17,6 +17,8 @@ fn pt(p: &P) -> J {
 pub struct Resolved {
     pub verts: BTreeMap<String, BTreeMap<u32, P>>,
     pub tf: BTreeMap<String, Transform>,
+    /// Animated 3D components per shape: position z, turns about x and y, scale z.
+    pub t3: BTreeMap<String, [f64; 4]>,
     /// Linear-light colours of faces and edges whose own colour is animated.
     pub fills: BTreeMap<(String, u32), [f64; 4]>,
     pub strokes: BTreeMap<(String, u32), [f64; 4]>,
@@ -116,6 +118,10 @@ pub fn build_snapshot(
             if let Some(p) = it.paint_snapshot(n, &resolved.stroke_progress) {
                 shape_json["paint"] = p;
             }
+            if sh.mesh.is_some() {
+                let fill = finish(shape_fill.or(Some(to_linear([200, 200, 208, 255]))));
+                shape_json["mesh"] = crate::mesh3d::mesh_json(sh, &tf, resolved.t3.get(*n).copied(), fill, finish(shape_stroke), shape_width);
+            }
             if let Some(img) = &sh.image {
                 let tris = textured_triangles(sh, ov, &tf);
                 shape_json["image"] = json!({"src": img.src, "w": img.w, "h": img.h, "hash": format!("{:016x}", img.hash), "tris": tris});
@@ -167,6 +173,10 @@ pub fn build_snapshot(
     }
     if let Some(p) = it.field_snapshot() {
         snap["fields"] = p;
+    }
+    if it.any_visible_mesh() {
+        snap["camera3"] = it.camera3_json(resolved);
+        snap["light3"] = it.light3_json();
     }
     snap
 }

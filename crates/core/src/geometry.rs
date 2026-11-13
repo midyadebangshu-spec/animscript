@@ -190,6 +190,15 @@ pub struct Shape {
     pub image: Option<ImageFill>,
     /// Set on a paint layer (`paint_layer()`): its size in canvas pixels and resolution; the strokes live in the runtime.
     pub paint: Option<PaintInfo>,
+    /// A 3D shape (`cube`, `sphere`, `lathe`, ...): the mesh in local coordinates, centred about `pivot3`. A mesh has no
+    /// 2D vertices, edges or faces. Its position (x, y: `position`; z: `pos_z`), turns about x, y and z (`rot_x`,
+    /// `rot_y`, `rotation`) and scale (`scale` and `scale_z`) are animated like any shape's.
+    pub mesh: Option<crate::mesh::Mesh>,
+    pub pos_z: f64,
+    pub rot_x: f64,
+    pub rot_y: f64,
+    pub scale_z: f64,
+    pub pivot3: [f64; 3],
     /// Texture coordinates `[u, v]` (0 to 1) fixed when the image was assigned.
     pub uv: BTreeMap<u32, [f64; 2]>,
 }
@@ -420,6 +429,12 @@ impl Shape {
             tint: [255, 255, 255, 255],
             image: None,
             paint: None,
+            mesh: None,
+            pos_z: 0.0,
+            rot_x: 0.0,
+            rot_y: 0.0,
+            scale_z: 1.0,
+            pivot3: [0.0; 3],
             uv: BTreeMap::new(),
         }
     }

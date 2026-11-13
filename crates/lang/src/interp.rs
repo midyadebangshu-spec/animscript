@@ -285,6 +285,8 @@ pub struct Interp {
     pub phys: Option<crate::phys::Physics>,
     pub emitters: BTreeMap<String, crate::particles::EmitterCfg>,
     pub fields: BTreeMap<String, crate::field::FieldCfg>,
+    /// The lens and the light for 3D meshes (`stage3(...)`).
+    pub stage3: crate::mesh3d::Stage3,
     pub part_forces: BTreeMap<String, crate::particles::PartForce>,
     pub field_rt: BTreeMap<String, crate::field::FieldRt>,
     /// Names that equations may index with neighbour offsets while one is being compiled.
@@ -391,6 +393,7 @@ impl Interp {
             phys: None,
             emitters: BTreeMap::new(),
             fields: BTreeMap::new(),
+            stage3: Default::default(),
             part_forces: BTreeMap::new(),
             field_rt: BTreeMap::new(),
             eq_stencils: Default::default(),
@@ -694,9 +697,13 @@ impl Interp {
                     ));
                 }
                 sh.name = name.clone();
+                let is_mesh = sh.mesh.is_some();
                 self.shapes.insert(name.clone(), *sh);
                 self.shape_order.push(name.clone());
                 self.register_paint(name);
+                if is_mesh {
+                    self.ensure_camera3();
+                }
                 if let Some(b) = body {
                     t.push_block(Rc::clone(b), vec![]);
                 }
@@ -2311,6 +2318,7 @@ impl Interp {
                 Ok(Value::Fresh(Box::new(polygon(&pts)?)))
             }
             "plot" | "curve" | "polar" | "implicit" => self.math_shape(name, args),
+            "cube" | "sphere" | "cylinder" | "cone" | "plane" | "lathe" | "extrude" | "stage3" => self.mesh_builtin(name, args),
             "line" => {
                 let m = self.bind(name, args, &["a", "b"], &["a", "b"])?;
                 Ok(Value::Fresh(Box::new(line(self.point(&m["a"], "`a`")?, self.point(&m["b"], "`b`")?))))
@@ -3159,6 +3167,10 @@ pub fn set_transform_prop(sh: &mut Shape, prop: PropId, v: f64, by: bool) {
         PropId::ScaleX => Some(&mut sh.scale[0]),
         PropId::ScaleY => Some(&mut sh.scale[1]),
         PropId::Rot => Some(&mut sh.rotation),
+        PropId::PosZ => Some(&mut sh.pos_z),
+        PropId::RotX => Some(&mut sh.rot_x),
+        PropId::RotY => Some(&mut sh.rot_y),
+        PropId::ScaleZ => Some(&mut sh.scale_z),
         _ => None,
     };
     if let Some(s) = slot {
@@ -3294,6 +3306,7 @@ impl Interp {
                     | "tint"
                     | "x"
                     | "y"
+                    | "z"
             )
         };
         let mut names: Vec<String> = vec![];
@@ -3327,8 +3340,9 @@ impl Interp {
             ["rotation"]
                 | ["position"]
                 | ["scale"]
-                | ["position", "x" | "y"]
-                | ["scale", "x" | "y"]
+                | ["position", "x" | "y" | "z"]
+                | ["scale", "x" | "y" | "z"]
+                | ["rotation", "x" | "y" | "z"]
                 | ["fill"]
                 | ["stroke"]
                 | ["stroke_width"]
@@ -3343,7 +3357,7 @@ impl Interp {
             };
             return Err(Diagnostic::new("E-NAM-003", format!("`{shown}` is not an animatable property"))
                 .at(e.span)
-                .help("properties: position, position.x, position.y, scale, scale.x, scale.y, rotation (vertices have position only); colours: fill, stroke, tint; also stroke_width and opacity"));
+                .help("properties: position, position.x, position.y, position.z, scale, scale.x, scale.y, scale.z, rotation, rotation.x, rotation.y (vertices have position only); colours: fill, stroke, tint; also stroke_width and opacity"));
         }
         Ok((target, names))
     }
@@ -3379,8 +3393,20 @@ impl Interp {
                         vec![s(PropId::PosX, p[0]), s(PropId::PosY, p[1])]
                     }
                     ("position", Some(c)) => vec![s(
-                        if c == "x" { PropId::PosX } else { PropId::PosY },
+                        match c {
+                            "x" => PropId::PosX,
+                            "z" => PropId::PosZ,
+                            _ => PropId::PosY,
+                        },
                         self.num(val, "a coordinate")?,
+                    )],
+                    ("rotation", Some(c)) => vec![s(
+                        match c {
+                            "x" => PropId::RotX,
+                            "y" => PropId::RotY,
+                            _ => PropId::Rot,
+                        },
+                        self.angle(val, "`rotation`")?,
                     )],
                     ("scale", None) => match val {
                         Value::Tuple(_) => {
@@ -3393,10 +3419,10 @@ impl Interp {
                         }
                     },
                     ("scale", Some(c)) => vec![s(
-                        if c == "x" {
-                            PropId::ScaleX
-                        } else {
-                            PropId::ScaleY
+                        match c {
+                            "x" => PropId::ScaleX,
+                            "z" => PropId::ScaleZ,
+                            _ => PropId::ScaleY,
                         },
                         self.num(val, "a scale")?,
                     )],

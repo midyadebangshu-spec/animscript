@@ -253,7 +253,7 @@ impl Interp {
 
     /// A dense polyline along an edge, or along the outline of a shape (its first face's boundary, else its edges
     /// chained in order), in world coordinates with the shape's current transform.
-    fn outline_points(&self, v: &Value, whole_shape: bool) -> Res<Vec<P>> {
+    pub(crate) fn outline_points(&self, v: &Value, whole_shape: bool) -> Res<Vec<P>> {
         let (sn, edges): (&String, Vec<(u32, i8)>) = match v {
             Value::Elem(sn, r) if r.kind == Kind::E && !whole_shape => (sn, vec![(r.id, 1)]),
             Value::Shape(sn) if whole_shape => {
