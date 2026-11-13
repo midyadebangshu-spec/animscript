@@ -627,13 +627,13 @@ scene "s" for 3.seconds:
   with `let`. A body sees the top-level `let` values and its own parameters, not the caller's variables.
 - A `fn` cannot wait or animate (`E-DEF-002`); calls nest at most 64 deep (`E-RUN-007`); a `while` that never
   waits is stopped (`E-STM-003`).
-- Optional first lines of a definition: `uses body` and `priority 2` (recorded for documentation) and
+- Optional first lines of a definition: `uses body [on_conflict POLICY]` (channels, see 13k), `priority 2` and
   `requires n > 0` (checked on every call; `E-CAP-002` when false).
 - `import "file.anim"` (relative to the importing file) or `import "std/motion"` (bundled) includes
   definitions. Library files are plain AnimScript: see `crates/lang/lib/motion.anim`, and copy and change them freely.
 - `atan2(y, x)` gives an Angle; `angle_to(a, b)` (from `std/motion`) is the direction from one point to another.
-- A definition cannot yet read a property's current *animated* value, so an action cannot follow a moving target
-  frame by frame. Worked example: `examples/actions.anim`.
+- An action reads current values with `center(s)`, `s.position` and so on (13a), so it can follow a moving target.
+  Worked example: `examples/actions.anim`.
 
 ### 8.1 Defining an action
 
@@ -1814,6 +1814,42 @@ scene "s" for 8.seconds:
   Marker names are unique in a scene (`E-NAM-002`).
 
 Worked example: `examples/control.anim`.
+
+## 13k. Locks, parenting, constraints and channels (round L2)
+
+All of these are statements for a **running scene** (`main:`, a rule or an action; elsewhere they are `E-STM-001`).
+`lock`, `attach` and `constrain` can be given a name (`let h = lock ...`) and ended with `release h`.
+
+```anim
+lock lamp.position.y = 0                  # beats actions, keyframes, modifiers and physics (layer 4)
+lock lamp.position = (10, 20) for 2.seconds     # releases itself
+let h = lock shape.rotation = 90.deg
+release h
+
+attach planet to sun                      # the child follows the parent's translation and rotation
+attach moon to planet                     # chains work, parents are solved first
+attach hat to hero.head offset (0, -30)   # a bone can be the parent; the offset is in the parent's frame
+constrain ball.position inside rect(100, 410, 200, 120)    # or `canvas`; the whole shape stays inside
+constrain tail.position to follow(head, lag: 6.frames) weight 0.8
+```
+
+- **Locks** hold a component to a constant value from the moment of the statement. Two locks on one component at
+  the same time are `E-PRP-002`. A locked physics body keeps simulating underneath; only what you see is held.
+- **`attach`** applies the parent's rigid motion since the moment of attaching (its pivot's translation and its
+  rotation about that pivot); the parent's scale is ignored. Without `offset` the child stays where it is. With it,
+  the child's centre moves to the parent's anchor (a shape's pivot, a bone's head) plus the offset. A cycle is
+  `E-CON-001`. `release` lets the child go back to its own placement.
+- **Constraints** run after the layers and after parenting, in the order they were made. `inside` keeps the whole
+  bounding box in a rectangle (centred if it is bigger). `follow` places the shape where the target was `lag`
+  frames ago plus the offset the two had when the constraint was made. `weight` (0 to 1) blends it in.
+- **Channels.** An action that starts with `uses body, gaze on_conflict interrupt` takes those named channels of
+  its `self` shape for as long as the call runs, all at once. If one is busy: `queue` (the default) waits, in
+  order of priority, `interrupt` cancels the occupant (its values are kept and its `finally:` runs) when its
+  priority is at least the occupant's and otherwise waits, `reject` is `E-RUN-002`, `share` runs alongside.
+  An action's priority is its `priority N` line, else the priority of the rule that started it. If a `uses`
+  line is present, shape motion and colour inside it must be on `body`: otherwise `E-CAP-003`.
+
+Worked example: `examples/links.anim`.
 
 ## 14. Diagnostics, tracing and the command line
 

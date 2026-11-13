@@ -505,6 +505,19 @@ impl Interp {
         })
     }
 
+    /// The head (world px) and direction (turns) of a bone: the last solved pose, or the rest pose.
+    pub fn bone_frame(&self, key: &str) -> Option<([f64; 2], f64)> {
+        let (arm, bi) = self.bone_of(key)?;
+        Some(match self.rig_live.get(key) {
+            Some(v) => (v.0, v.2),
+            None => {
+                let sk = &self.rigs[&arm].sk;
+                let rest = sk.pose(&vec![0.0; self.rigs[&arm].bones.len()], Vec2::ZERO);
+                ([rest[bi].head.x, rest[bi].head.y], rest[bi].angle / TAU)
+            }
+        })
+    }
+
     /// `(armature, bone index)` when `key` names a bone pseudo-shape.
     fn bone_of(&self, key: &str) -> Option<(String, usize)> {
         let (arm, bone) = key.split_once('.')?;

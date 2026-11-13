@@ -1,0 +1,59 @@
+project "Links":
+    anim_version: "0.1"
+    canvas: 800x600
+    fps: 24
+    background: #0f1626
+
+# ---- parenting: sun -> planet -> moon (a chain: parents are solved before children) -------------------
+shape sun = circle(24, radius: 34, at: (200, 200))
+shape planet = circle(20, radius: 16, at: (310, 200))
+shape moon = circle(16, radius: 7, at: (342, 200))
+sun.fill = #f2c94c
+planet.fill = #4f8fe0
+moon.fill = #d0d6e2
+
+# ---- follow with lag: a snake of followers behind a head ---------------------------------------------------
+shape head = circle(24, radius: 14, at: (480, 120))
+shape s1 = circle(24, radius: 12, at: (480, 120))
+shape s2 = circle(24, radius: 10, at: (480, 120))
+shape s3 = circle(24, radius: 8, at: (480, 120))
+shape s4 = circle(24, radius: 6, at: (480, 120))
+head.fill = #e0674f
+s1.fill = #e8805f
+s2.fill = #ee9a78
+s3.fill = #f3b392
+s4.fill = #f8cdb0
+
+# ---- inside + lock: a ball that wants to leave its box, and a lamp held in place ----------------------------
+shape box = rectangle(width: 200, height: 120, at: (200, 470))
+box.fill = none
+box.stroke = #6b7a99
+shape ball = circle(24, radius: 14, at: (200, 470))
+ball.fill = #7bd88f
+shape lamp = circle(24, radius: 12, at: (640, 470))
+lamp.fill = #f2c94c
+
+scene "Links" for 9.seconds:
+    main:
+        # the planet rides the sun, the moon rides the planet
+        attach planet to sun
+        attach moon to planet
+        # the snake follows the head, each a few frames later
+        constrain s1.position to follow(head, lag: 5.frames)
+        constrain s2.position to follow(head, lag: 10.frames)
+        constrain s3.position to follow(head, lag: 15.frames)
+        constrain s4.position to follow(head, lag: 20.frames)
+        # the ball is pushed around by an action but can never leave the box
+        constrain ball.position inside rect(100, 410, 200, 120)
+        # the lamp is held at one height while an action tries to move it
+        lock lamp.position.y = 0
+        start sun.rotate_by(1.turn) over 9.seconds ease linear
+        start planet.rotate_by(3.turns) over 9.seconds ease linear
+        start ball.move_by(220, 0) over 3.seconds ease ease_in_out
+        start lamp.move_by(0, -170) over 3.seconds ease ease_in_out
+        head.move_by(280, 0) over 1.5.seconds ease ease_in_out
+        head.move_by(0, 180) over 1.5.seconds ease ease_in_out
+        head.move_by(-280, 0) over 1.5.seconds ease ease_in_out
+        head.move_by(0, -180) over 1.5.seconds ease ease_in_out
+        head.move_by(140, 100) over 1.5.seconds ease ease_in_out
+        head.move_by(-60, -160) over 1.5.seconds ease ease_in_out

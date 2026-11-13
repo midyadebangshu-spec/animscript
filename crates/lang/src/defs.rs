@@ -256,7 +256,14 @@ impl Interp {
             scopes: vec![self.globals.clone(), scope],
         };
         let mut t = Task::new(0, Rc::clone(&def.body), vars, mode, false);
-        t.frames.insert(0, Frame::Call { saved: None });
+        t.frames.insert(
+            0,
+            Frame::Call {
+                saved: None,
+                id: 0,
+                uses: Rc::new(vec![]),
+            },
+        );
         self.ret = None;
         self.call_depth += 1;
         let result = match self.step(&mut t) {
@@ -312,7 +319,12 @@ impl Interp {
             scopes: vec![self.globals.clone(), c.scope.clone()],
         };
         let saved = std::mem::replace(&mut t.vars, vars);
-        t.frames.push(Frame::Call { saved: Some(saved) });
+        self.next_call += 1;
+        t.frames.push(Frame::Call {
+            saved: Some(saved),
+            id: self.next_call,
+            uses: Rc::new(c.def.uses.iter().map(|u| u.0.clone()).collect()),
+        });
         t.frames.push(Frame::Block {
             stmts: Rc::clone(&c.def.body),
             idx: 0,
@@ -336,7 +348,7 @@ impl Interp {
                     }
                 }
             }
-            if let Frame::Call { saved } = f {
+            if let Frame::Call { saved, .. } = f {
                 if let Some(v) = saved {
                     t.vars = v;
                 }

@@ -104,7 +104,33 @@ fn walk_stmt(it: &Interp, s: &Stmt, out: &mut Vec<Diagnostic>) {
                 walk_expr(it, e, out);
             }
         }
-        StmtKind::Cancel(e) | StmtKind::Await(e) => walk_expr(it, e, out),
+        StmtKind::Cancel(e) | StmtKind::Await(e) | StmtKind::Release(e) => walk_expr(it, e, out),
+        StmtKind::Lock {
+            target,
+            value,
+            duration,
+            ..
+        } => {
+            walk_expr(it, target, out);
+            walk_expr(it, value, out);
+            if let Some(d) = duration {
+                walk_expr(it, d, out);
+            }
+        }
+        StmtKind::Attach {
+            child,
+            parent,
+            offset,
+            ..
+        } => {
+            walk_expr(it, child, out);
+            walk_expr(it, parent, out);
+            if let Some(o) = offset {
+                walk_expr(it, o, out);
+            }
+        }
+        StmtKind::Constrain { target, .. } => walk_expr(it, target, out),
+        StmtKind::Acquire(..) => {}
         StmtKind::Together(b) | StmtKind::Race(b) | StmtKind::Finally(b) => walk_block(it, b, out),
         StmtKind::While { cond, body } => {
             walk_expr(it, cond, out);

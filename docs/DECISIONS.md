@@ -844,4 +844,41 @@ judgement calls I expect you to want to look at.
 180. **Markers.** `marker "name" at TIME` lines inside `timeline:` (time in absolute scene time). The runtime inserts the
     event `marker:name` on that tick before the first delta; `marker("name")` reads it, so it works as a trigger like
     `scene.starts`. Only in `timeline:` for now (shots may declare them later).
+181. **Locks.** `lock TARGET = VALUE [for D]` uses the same target and value machinery as timeline keys (so `position`,
+    `position.x`, `rotation`, `scale`, `opacity`, colours, vertex coordinates and bones work) and registers one
+    layer-4 Override of weight 1 per scalar, constant, from the tick of the statement until `D` later or `release`.
+    Overlap of two locks on one scalar is `E-PRP-002`, raised when the second is made. Locks are folded with
+    everything else, so they also beat physics, rigs and procedural results; `lock`, `attach`, `constrain` and
+    `release` outside a running scene are `E-STM-001`.
+182. **Handles.** `lock`, `attach` and `constrain` return a handle like `start` does (`let h = ...`); `release h` and
+    `cancel h` remove it. Releasing an attachment does not move the child: it simply stops following, so it is drawn
+    at its own placement again.
+183. **`attach`.** Applied after the fold on the resolved transforms. Parent frame = (pivot world position + position,
+    rotation) for a shape, (head, direction) for a bone; the child receives the rigid motion since the frame the parent
+    had when attached: rotation about that earlier anchor point plus the anchor's displacement, which is exact for the
+    transform model (scale about the pivot, rotate, translate). Parent scale is ignored. Depth decides the order
+    (parents before children, then creation order). Cycles, including through several attachments, are `E-CON-001`.
+    `offset (x, y)` moves the child's *rest* position so its centre lands on the anchor plus the offset rotated by
+    the parent's rotation; it is the only part that changes rest state.
+184. **Constraints.** `inside RECT` clamps the transformed bounding box (the resolved vertices, if any) into the
+    rectangle, centring it when it is larger; `canvas` is a built-in rectangle (0, 0, width, height). `follow(target,
+    lag: N)` keeps a history of the target's anchor, one entry per tick starting when the constraint is made (an
+    unknown past is the oldest entry), and puts the shape at that point plus the offset the two had when the
+    constraint was made. `weight` blends toward the unconstrained placement. `constrain X.position ...` and
+    `constrain X ...` are the same. Other forms in the spec (`gaze`) have no meaning for shapes and are not parsed.
+185. **Named channels.** The first statement of an action with a `uses` line is a synthesized `Acquire`. It takes
+    `(self shape, channel)` for each name at once, tagged with the call's id; the holder is alive while its task has
+    that call on its frame stack, so channels are freed when the call ends, is cancelled or returns, without any
+    explicit release. A task never conflicts with itself, so an action may call another that uses the same
+    channel. Conflict policies as in spec 6.4; waiting requests are served highest priority first, then in order,
+    after every step. Interrupt cancels the whole holder task (the spec's default) through the usual cancel path
+    (values kept, `finally:` run), and a victim that is also an ancestor is not special-cased. `share` neither
+    waits nor holds the channel. Native actions keep their per-vertex channels. Priority of an action: its
+    `priority` line if non-zero, else the starting task's.
+186. **`E-CAP-003`.** Checked when a native shape action is issued: if the innermost action call has a non-empty
+    `uses` that lacks `body`, it is `E-CAP-003`. Actions without `uses` are unchecked, so existing code is unaffected.
+    The std libraries only declare `body`.
+187. **Note on `move_to`.** On a shape, `move_to` and `move_by` change the `position` offset, not the centre
+    (DOCUMENT section 8.1's `follow` example is therefore exact only for shapes whose rest centre is the origin;
+    use `p - center(self)` to aim a centre). Found while writing the links example.
 

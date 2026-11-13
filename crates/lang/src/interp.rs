@@ -105,8 +105,44 @@ pub enum Staged {
 }
 
 #[derive(Clone, Debug)]
+/// A lock to register: layer-4 values for some scalars, for a number of frames (or until released).
+pub struct LockSpec {
+    pub comps: Vec<(String, PropId, f64)>,
+    pub frames: Option<i64>,
+    pub span: Span,
+}
+/// An attachment or constraint to register.
+pub enum LinkSpec {
+    Attach {
+        child: String,
+        parent: String,
+        offset: Option<[f64; 2]>,
+        span: Span,
+    },
+    Inside {
+        shape: String,
+        rect: [f64; 4],
+        weight: f64,
+    },
+    Follow {
+        shape: String,
+        target: String,
+        lag: i64,
+        weight: f64,
+    },
+}
+/// An action asks for the channels it `uses` on one shape.
+#[derive(Clone)]
+pub struct AcquireReq {
+    pub shape: String,
+    pub channels: Vec<(String, Policy)>,
+    pub prio: i64,
+    pub call: u64,
+}
+
 pub enum Req {
     Wait(i64),
+    Acquire(AcquireReq),
     /// Suspend until a started action or modifier ends.
     Await(u32),
     Act(ActionReq),
@@ -136,6 +172,10 @@ pub enum Frame {
     /// Marks the start of a user action's body; popping it restores the caller's variables.
     Call {
         saved: Option<Vars>,
+        /// Identifies this call for the channels it holds (0: none).
+        id: u64,
+        /// The channel names its `uses` line declares (empty: not declared).
+        uses: Rc<Vec<String>>,
     },
     For {
         var: String,
@@ -230,6 +270,10 @@ pub struct Interp {
     /// `(handle, request)` pairs waiting for the runtime; handle 0 means "no handle" (a blocking modifier).
     pub pending_starts: Vec<(u32, StartReq)>,
     pub pending_cancels: Vec<u32>,
+    pub pending_locks: Vec<(u32, LockSpec)>,
+    pub pending_links: Vec<(u32, LinkSpec)>,
+    pub pending_releases: Vec<u32>,
+    pub next_call: u64,
     pub next_handle: u32,
     /// The project seed and the running scene's name feed the names of random streams.
     pub seed: i64,
@@ -318,6 +362,10 @@ impl Interp {
             pending_keysets: vec![],
             pending_starts: vec![],
             pending_cancels: vec![],
+            pending_locks: vec![],
+            pending_links: vec![],
+            pending_releases: vec![],
+            next_call: 0,
             next_handle: 0,
             seed: 0,
             scene_name: String::new(),
@@ -391,6 +439,29 @@ impl Interp {
         self.eval_emitters()?;
         self.eval_fluids()?;
         Ok(())
+    }
+
+    fn running_only(&self, mode: Mode, what: &str, span: Span) -> Res<()> {
+        if mode != Mode::Run {
+            return Err(
+                Diagnostic::new("E-STM-001", format!("`{what}` works while a scene runs"))
+                    .at(span)
+                    .help("use it in `main:`, a rule or an action"),
+            );
+        }
+        Ok(())
+    }
+
+    /// True when the innermost action call declared `uses` without `body` (native shape actions use `body`).
+    pub fn undeclared_channel(t: &Task) -> bool {
+        t.frames
+            .iter()
+            .rev()
+            .find_map(|f| match f {
+                Frame::Call { uses, .. } => Some(uses),
+                _ => None,
+            })
+            .is_some_and(|u| !u.is_empty() && !u.iter().any(|c| c == "body"))
     }
 
     /// Run a `finally:` body: zero-time statements only, with a copy of the task's variables.
@@ -497,7 +568,7 @@ impl Interp {
                     }
                 }
                 Frame::Call { .. } => {
-                    if let Some(Frame::Call { saved: Some(v) }) = t.frames.pop() {
+                    if let Some(Frame::Call { saved: Some(v), .. }) = t.frames.pop() {
                         t.vars = v;
                     }
                 }
@@ -812,6 +883,171 @@ impl Interp {
             StmtKind::Together(body) => {
                 let kids: Vec<Block> = body.iter().map(|s| Rc::new(vec![s.clone()])).collect();
                 return Ok(Some(Req::Together(kids)));
+            }
+            StmtKind::Lock {
+                name,
+                target,
+                value,
+                duration,
+            } => {
+                self.running_only(mode, "lock", st.span)?;
+                let (texpr, path) = self.split_prop_path(target)?;
+                let Some(te) = texpr else {
+                    return Err(
+                        type_err("`lock` needs a target such as `bird.position.y`").at(target.span)
+                    );
+                };
+                let tv = self.eval(te, &t.vars, mode)?;
+                let val = self.eval(value, &t.vars, mode)?;
+                let comps = self.key_scalars(&tv, &path, &val, st.span)?;
+                let frames = match duration {
+                    Some(d) => {
+                        let dv = self.eval(d, &t.vars, mode)?;
+                        Some(self.frames_of(&dv, d.span)?)
+                    }
+                    None => None,
+                };
+                self.next_handle += 1;
+                let h = self.next_handle;
+                self.pending_locks.push((
+                    h,
+                    LockSpec {
+                        comps,
+                        frames,
+                        span: st.span,
+                    },
+                ));
+                if let Some(n) = name {
+                    t.vars.define(n, Value::Handle(h));
+                }
+            }
+            StmtKind::Release(e) => {
+                self.running_only(mode, "release", st.span)?;
+                match self.eval(e, &t.vars, mode)? {
+                    Value::Handle(h) => self.pending_releases.push(h),
+                    other => {
+                        return Err(type_err(format!(
+                        "`release` needs a handle from `lock`, `attach` or `constrain`, found {}",
+                        other.type_name()
+                    )))
+                    }
+                }
+            }
+            StmtKind::Attach {
+                name,
+                child,
+                parent,
+                offset,
+            } => {
+                self.running_only(mode, "attach", st.span)?;
+                let shape_of = |me: &mut Interp, e: &Expr, what: &str| -> Res<String> {
+                    match me.eval(e, &t.vars, mode)? {
+                        Value::Shape(n) => Ok(n),
+                        other => Err(type_err(format!(
+                            "{what} must be a shape or a bone, found {}",
+                            other.type_name()
+                        ))
+                        .at(e.span)),
+                    }
+                };
+                let c = shape_of(self, child, "the child of `attach`")?;
+                let p = shape_of(self, parent, "the parent of `attach`")?;
+                let offset = match offset {
+                    Some(o) => {
+                        let v = self.eval(o, &t.vars, mode)?;
+                        Some(self.point(&v, "`offset`")?)
+                    }
+                    None => None,
+                };
+                self.next_handle += 1;
+                let h = self.next_handle;
+                self.pending_links.push((
+                    h,
+                    LinkSpec::Attach {
+                        child: c,
+                        parent: p,
+                        offset,
+                        span: st.span,
+                    },
+                ));
+                if let Some(n) = name {
+                    t.vars.define(n, Value::Handle(h));
+                }
+            }
+            StmtKind::Constrain {
+                name,
+                target,
+                kind,
+                weight,
+            } => {
+                self.running_only(mode, "constrain", st.span)?;
+                // `constrain s.position ...` and `constrain s ...` both name the shape s
+                let te = match &target.kind {
+                    ExprKind::Member(o, n) if n == "position" => o.as_ref(),
+                    _ => target,
+                };
+                let Value::Shape(shape) = self.eval(te, &t.vars, mode)? else {
+                    return Err(type_err(
+                        "`constrain` needs a shape, such as `constrain s.position inside canvas`",
+                    )
+                    .at(target.span));
+                };
+                let weight = match weight {
+                    Some(w) => {
+                        let v = self.eval(w, &t.vars, mode)?;
+                        self.num(&v, "`weight`")?.clamp(0.0, 1.0)
+                    }
+                    None => 1.0,
+                };
+                let spec = match kind {
+                    ConKind::Inside(r) => match self.eval(r, &t.vars, mode)? {
+                        Value::Rect(rect) => LinkSpec::Inside { shape, rect, weight },
+                        other => return Err(type_err(format!("`inside` needs a region such as `canvas` or `rect(x, y, w, h)`, found {}", other.type_name())).at(r.span)),
+                    },
+                    ConKind::Follow { target: tg, lag } => {
+                        let Value::Shape(other) = self.eval(tg, &t.vars, mode)? else {
+                            return Err(type_err("`follow` needs a shape").at(tg.span));
+                        };
+                        let lag = match lag {
+                            Some(l) => {
+                                let v = self.eval(l, &t.vars, mode)?;
+                                self.frames_of(&v, l.span)?
+                            }
+                            None => 0,
+                        };
+                        LinkSpec::Follow { shape, target: other, lag, weight }
+                    }
+                };
+                self.next_handle += 1;
+                let h = self.next_handle;
+                self.pending_links.push((h, spec));
+                if let Some(n) = name {
+                    t.vars.define(n, Value::Handle(h));
+                }
+            }
+            StmtKind::Acquire(chans, prio) => {
+                let shape = match t.vars.get("self") {
+                    Some(Value::Shape(n)) | Some(Value::Armature(n)) => n.clone(),
+                    _ => "_".to_string(),
+                };
+                let call = t
+                    .frames
+                    .iter()
+                    .rev()
+                    .find_map(|f| match f {
+                        Frame::Call { id, .. } => Some(*id),
+                        _ => None,
+                    })
+                    .unwrap_or(0);
+                let prio = if *prio != 0 { *prio } else { t.priority };
+                if mode == Mode::Run {
+                    return Ok(Some(Req::Acquire(AcquireReq {
+                        shape,
+                        channels: chans.clone(),
+                        prio,
+                        call,
+                    })));
+                }
             }
             StmtKind::Race(body) => {
                 let kids: Vec<Block> = body.iter().map(|s| Rc::new(vec![s.clone()])).collect();
@@ -1471,6 +1707,14 @@ impl Interp {
         }
         if self.entities.contains_key(n) {
             return Ok(Value::Entity(n.to_string()));
+        }
+        if n == "canvas" {
+            return Ok(Value::Rect([
+                0.0,
+                0.0,
+                self.canvas.0 as f64,
+                self.canvas.1 as f64,
+            ]));
         }
         if self.emitters.contains_key(n) {
             return Ok(Value::Emitter(n.to_string()));

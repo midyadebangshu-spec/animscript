@@ -44,6 +44,21 @@ pub enum ExprKind {
 }
 
 #[derive(Clone, Debug)]
+pub enum ConKind {
+    Inside(Expr),
+    Follow { target: Expr, lag: Option<Expr> },
+}
+
+/// What an action does when a channel it `uses` is busy (spec 6.4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Policy {
+    Queue,
+    Interrupt,
+    Reject,
+    Share,
+}
+
+#[derive(Clone, Debug)]
 pub struct Stmt {
     pub kind: StmtKind,
     pub span: Span,
@@ -89,6 +104,31 @@ pub enum StmtKind {
     Race(Block),
     /// Runs when the enclosing block ends for any reason; zero-time statements only. Last in its block.
     Finally(Block),
+    /// `[let h =] lock target = value [for D]`: a layer-4 override that beats everything else.
+    Lock {
+        name: Option<String>,
+        target: Expr,
+        value: Expr,
+        duration: Option<Expr>,
+    },
+    /// `release h`: end a lock, an attachment or a constraint.
+    Release(Expr),
+    /// `[let h =] attach child to parent [offset (x, y)]`.
+    Attach {
+        name: Option<String>,
+        child: Expr,
+        parent: Expr,
+        offset: Option<Expr>,
+    },
+    /// `[let h =] constrain target inside RECT` / `constrain target to follow(other, lag: N) [weight W]`.
+    Constrain {
+        name: Option<String>,
+        target: Expr,
+        kind: ConKind,
+        weight: Option<Expr>,
+    },
+    /// First statement of an action that declares `uses`: take its channels (with the action's priority).
+    Acquire(Vec<(String, Policy)>, i64),
     /// `[let name =] start CALL`: begin an action or modifier without waiting for it.
     Start {
         name: Option<String>,
@@ -254,7 +294,7 @@ pub struct Def {
     pub ret: Option<String>,
     pub body: Block,
     /// `uses body, gaze`: the channels the action occupies (recorded, not yet enforced).
-    pub uses: Vec<String>,
+    pub uses: Vec<(String, Policy)>,
     /// `requires EXPR`: checked with the arguments bound, every call.
     pub requires: Vec<Expr>,
     pub priority: i64,

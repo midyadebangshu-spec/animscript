@@ -534,7 +534,26 @@ impl Parser {
                         let k = self.ident("")?;
                         match k.as_str() {
                             "uses" => loop {
-                                uses.push(self.ident("a channel name")?);
+                                let ch = self.ident("a channel name")?;
+                                let mut policy = Policy::Queue;
+                                if self.at_ident("on_conflict") {
+                                    self.next();
+                                    policy = match self.ident("a policy")?.as_str() {
+                                        "queue" => Policy::Queue,
+                                        "interrupt" => Policy::Interrupt,
+                                        "reject" => Policy::Reject,
+                                        "share" => Policy::Share,
+                                        other => {
+                                            return Err(Diagnostic::new(
+                                                "E-SYN-001",
+                                                format!("unknown conflict policy `{other}`"),
+                                            )
+                                            .at(self.prev_span())
+                                            .help("policies: queue, interrupt, reject, share"))
+                                        }
+                                    };
+                                }
+                                uses.push((ch, policy));
                                 if !self.eat_op(",") {
                                     break;
                                 }
@@ -560,6 +579,27 @@ impl Parser {
         })();
         self.callable_depth -= 1;
         parsed?;
+        if let Some(bad) = body
+            .iter()
+            .enumerate()
+            .find(|(i, s)| matches!(s.kind, StmtKind::Finally(_)) && *i + 1 != body.len())
+        {
+            return Err(Diagnostic::new(
+                "E-SYN-001",
+                "`finally:` must be the last statement of its block",
+            )
+            .at(bad.1.span));
+        }
+        if !uses.is_empty() {
+            // taking the channels is the first thing the action does
+            body.insert(
+                0,
+                Stmt {
+                    kind: StmtKind::Acquire(uses.clone(), priority),
+                    span: start,
+                },
+            );
+        }
         Ok(Def {
             name,
             is_action,
@@ -780,6 +820,13 @@ impl Parser {
                     self.next();
                     return self.start_stmt(Some(name), start);
                 }
+                if let Some(k) = ["lock", "attach", "constrain"]
+                    .into_iter()
+                    .find(|k| self.at_ident(k) && matches!(self.peek_at(1).t, T::Ident(_)))
+                {
+                    self.next();
+                    return self.link_stmt(k, Some(name), start);
+                }
                 let e = self.expr()?;
                 self.end_stmt()?;
                 return Ok(mk(StmtKind::Let(name, e), self.prev_span()));
@@ -875,6 +922,20 @@ impl Parser {
             "start" => {
                 self.next();
                 return self.start_stmt(None, start);
+            }
+            "lock" | "attach" | "constrain" if matches!(self.peek_at(1).t, T::Ident(_)) => {
+                self.next();
+                let k = ["lock", "attach", "constrain"]
+                    .into_iter()
+                    .find(|k| *k == kw)
+                    .expect("matched");
+                return self.link_stmt(k, None, start);
+            }
+            "release" if matches!(self.peek_at(1).t, T::Ident(_)) => {
+                self.next();
+                let e = self.expr()?;
+                self.end_stmt()?;
+                return Ok(mk(StmtKind::Release(e), self.prev_span()));
             }
             "cancel" | "await" => {
                 self.next();
@@ -1020,6 +1081,108 @@ impl Parser {
     }
 
     /// After `start`: the call, then the optional `over` / `ease` modifiers.
+    /// The rest of `lock`, `attach` and `constrain` statements (the keyword is already read).
+    fn link_stmt(&mut self, kw: &str, name: Option<String>, start: Span) -> Res<Stmt> {
+        let kind = match kw {
+            "lock" => {
+                let target = self.expr()?;
+                self.expect_op("=")?;
+                let value = self.expr()?;
+                let duration = if self.at_ident("for") {
+                    self.next();
+                    Some(self.expr()?)
+                } else {
+                    None
+                };
+                StmtKind::Lock {
+                    name,
+                    target,
+                    value,
+                    duration,
+                }
+            }
+            "attach" => {
+                let child = self.expr()?;
+                if !self.at_ident("to") {
+                    return self.err("expected `to` and the parent: `attach child to parent`");
+                }
+                self.next();
+                let parent = self.expr()?;
+                let offset = if self.at_ident("offset") {
+                    self.next();
+                    Some(self.expr()?)
+                } else {
+                    None
+                };
+                StmtKind::Attach {
+                    name,
+                    child,
+                    parent,
+                    offset,
+                }
+            }
+            _ => {
+                let target = self.expr()?;
+                let kind = if self.at_ident("inside") {
+                    self.next();
+                    ConKind::Inside(self.expr()?)
+                } else if self.at_ident("to") {
+                    self.next();
+                    let call = self.expr()?;
+                    let ExprKind::Call(f, args) = &call.kind else {
+                        return Err(Diagnostic::new(
+                            "E-SYN-001",
+                            "`constrain ... to` needs `follow(target, lag: N)`",
+                        )
+                        .at(call.span));
+                    };
+                    if !matches!(&f.kind, ExprKind::Name(n) if n == "follow") {
+                        return Err(Diagnostic::new(
+                            "E-SYN-001",
+                            "the only constraint after `to` is `follow(target, lag: N)`",
+                        )
+                        .at(call.span));
+                    }
+                    let target = args
+                        .iter()
+                        .find(|a| a.name.is_none() || a.name.as_deref() == Some("target"))
+                        .map(|a| a.value.clone());
+                    let lag = args
+                        .iter()
+                        .find(|a| a.name.as_deref() == Some("lag"))
+                        .map(|a| a.value.clone());
+                    let Some(target) = target else {
+                        return Err(Diagnostic::new(
+                            "E-SYN-001",
+                            "`follow` needs the shape to follow",
+                        )
+                        .at(call.span));
+                    };
+                    ConKind::Follow { target, lag }
+                } else {
+                    return self.err("expected `inside RECT` or `to follow(target, lag: N)`");
+                };
+                let weight = if self.at_ident("weight") {
+                    self.next();
+                    Some(self.expr()?)
+                } else {
+                    None
+                };
+                StmtKind::Constrain {
+                    name,
+                    target,
+                    kind,
+                    weight,
+                }
+            }
+        };
+        self.end_stmt()?;
+        Ok(Stmt {
+            kind,
+            span: start.to(self.prev_span()),
+        })
+    }
+
     fn start_stmt(&mut self, name: Option<String>, start: Span) -> Res<Stmt> {
         let call = self.expr()?;
         let (mut over, mut ease) = (None, None);

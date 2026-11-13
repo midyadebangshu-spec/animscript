@@ -68,8 +68,59 @@ struct ModSet {
     blend_in: i64,
     blend_out: i64,
 }
+/// A lock: a constant layer-4 value for one scalar from `from` until `to` (exclusive; `None` = released by hand).
+struct LockRt {
+    handle: u32,
+    shape: String,
+    prop: PropId,
+    value: f64,
+    from: i64,
+    to: Option<i64>,
+}
+enum LinkKind {
+    /// The child follows the rigid motion of the parent's frame (anchor point and direction) since `q0`/`rot0`.
+    Attach {
+        child: String,
+        parent: String,
+        q0: [f64; 2],
+        rot0: f64,
+    },
+    Inside {
+        shape: String,
+        rect: [f64; 4],
+        weight: f64,
+    },
+    Follow {
+        shape: String,
+        target: String,
+        lag: usize,
+        weight: f64,
+        offset: [f64; 2],
+        hist: Vec<[f64; 2]>,
+    },
+}
+struct LinkRt {
+    handle: u32,
+    kind: LinkKind,
+}
+/// A named channel held by one call of an action.
+struct Occ {
+    shape: String,
+    ch: String,
+    task: u32,
+    call: u64,
+    prio: i64,
+}
+struct NamedWait {
+    task: u32,
+    req: AcquireReq,
+    seq: u64,
+}
+
 #[derive(Clone, Copy, Debug)]
 enum HandleState {
+    Lock,
+    Link,
     /// Waiting for its channels.
     Queued,
     Act(u32),
@@ -113,6 +164,10 @@ pub struct Runtime {
     deferred_err: Option<Diagnostic>,
     /// The running scene's timeline markers: name and tick.
     markers: Vec<(String, i64)>,
+    locks: Vec<LockRt>,
+    links: Vec<LinkRt>,
+    named: Vec<Occ>,
+    named_wait: Vec<NamedWait>,
     project_tick: i64,
     scene_name: String,
     snapshots: Vec<J>,
@@ -177,6 +232,10 @@ impl Runtime {
             main_done: false,
             deferred_err: None,
             markers: vec![],
+            locks: vec![],
+            links: vec![],
+            named: vec![],
+            named_wait: vec![],
             project_tick: 0,
             scene_name: String::new(),
             snapshots: vec![],
@@ -212,6 +271,10 @@ impl Runtime {
         self.keysets.clear();
         self.modsets.clear();
         self.handles.clear();
+        self.locks.clear();
+        self.links.clear();
+        self.named.clear();
+        self.named_wait.clear();
         self.it.scene_name = sc.name.clone();
         self.it.decls.start_scene();
         self.it.reset_particles();
@@ -559,7 +622,15 @@ impl Runtime {
                         scopes: vec![self.it.globals.clone(), c.scope.clone()],
                     };
                     let mut t = Task::new(id, Rc::clone(&c.def.body), vars, Mode::Run, false);
-                    t.frames.insert(0, Frame::Call { saved: None });
+                    self.it.next_call += 1;
+                    t.frames.insert(
+                        0,
+                        Frame::Call {
+                            saved: None,
+                            id: self.it.next_call,
+                            uses: Rc::new(c.def.uses.iter().map(|u| u.0.clone()).collect()),
+                        },
+                    );
                     self.it
                         .trace_line("TASK+", &format!("T{id} {}", c.def.name));
                     self.tasks.insert(id, t);
@@ -571,6 +642,313 @@ impl Runtime {
         }
         for h in std::mem::take(&mut self.it.pending_cancels) {
             self.cancel_handle(h);
+        }
+        for (h, spec) in std::mem::take(&mut self.it.pending_locks) {
+            self.add_lock(h, spec);
+        }
+        for (h, spec) in std::mem::take(&mut self.it.pending_links) {
+            self.add_link(h, spec);
+        }
+        for h in std::mem::take(&mut self.it.pending_releases) {
+            self.cancel_handle(h);
+        }
+    }
+
+    fn add_lock(&mut self, handle: u32, spec: crate::interp::LockSpec) {
+        let from = self.it.tick;
+        let to = spec.frames.map(|f| from + f);
+        for (shape, prop, value) in spec.comps {
+            let clash = self.locks.iter().any(|l| {
+                l.shape == shape
+                    && l.prop == prop
+                    && l.to.is_none_or(|t| t > from)
+                    && to.is_none_or(|t| l.from < t)
+            });
+            if clash {
+                self.deferred_err.get_or_insert(
+                    Diagnostic::new(
+                        "E-PRP-002",
+                        format!("two locks hold `{shape}` {prop:?} at the same time"),
+                    )
+                    .at(spec.span)
+                    .help("`release` the first lock, or give it `for D`"),
+                );
+                return;
+            }
+            self.locks.push(LockRt {
+                handle,
+                shape,
+                prop,
+                value,
+                from,
+                to,
+            });
+        }
+        self.handles.insert(handle, HandleState::Lock);
+        self.it.trace_line("LOCK+", &format!("h{handle}"));
+    }
+
+    /// Where a shape's rigid frame is: the pivot's place in the world and its direction in turns; a bone's
+    /// head and direction. `resolved` is the transform set of the tick being resolved (else the last tick's).
+    fn frame_of(&self, name: &str, resolved: Option<&Resolved>) -> ([f64; 2], f64) {
+        if let Some(f) = self.it.bone_frame(name) {
+            return f;
+        }
+        let sh = &self.it.shapes[name];
+        let tf = match resolved {
+            // while resolving: what this tick's fold produced, else the rest transform
+            Some(r) => r.tf.get(name).copied(),
+            None => self.it.live_tf.get(name).copied(),
+        }
+        .unwrap_or_else(|| sh.transform());
+        (
+            [tf.pivot[0] + tf.position[0], tf.pivot[1] + tf.position[1]],
+            tf.rotation,
+        )
+    }
+
+    fn add_link(&mut self, handle: u32, spec: crate::interp::LinkSpec) {
+        use crate::interp::LinkSpec;
+        let kind = match spec {
+            LinkSpec::Attach {
+                child,
+                parent,
+                offset,
+                span,
+            } => {
+                // a parent chain that leads back to the child is a cycle
+                let mut cur = parent.clone();
+                let mut hops = 0;
+                loop {
+                    if cur == child {
+                        self.deferred_err.get_or_insert(
+                            Diagnostic::new(
+                                "E-CON-001",
+                                format!("attaching `{child}` to `{parent}` would make a cycle"),
+                            )
+                            .at(span)
+                            .help("a shape cannot be its own ancestor"),
+                        );
+                        return;
+                    }
+                    let next = self.links.iter().find_map(|l| match &l.kind {
+                        LinkKind::Attach {
+                            child: c,
+                            parent: p,
+                            ..
+                        } if *c == cur => Some(p.clone()),
+                        _ => None,
+                    });
+                    match next {
+                        Some(n) if hops < 1000 => {
+                            cur = n;
+                            hops += 1;
+                        }
+                        _ => break,
+                    }
+                }
+                let (q0, rot0) = self.frame_of(&parent, None);
+                if let Some(o) = offset {
+                    // put the child's centre at the parent's anchor plus the offset (in the parent's frame)
+                    let (s, c) = (rot0 * std::f64::consts::TAU).sin_cos();
+                    let want = [q0[0] + o[0] * c - o[1] * s, q0[1] + o[0] * s + o[1] * c];
+                    let sh = &self.it.shapes[&child];
+                    let tf = self
+                        .it
+                        .live_tf
+                        .get(&child)
+                        .copied()
+                        .unwrap_or_else(|| sh.transform());
+                    let have = tf.apply(sh.bbox_center());
+                    let sh = self.it.shapes.get_mut(&child).expect("shape");
+                    sh.position[0] += want[0] - have[0];
+                    sh.position[1] += want[1] - have[1];
+                }
+                LinkKind::Attach {
+                    child,
+                    parent,
+                    q0,
+                    rot0,
+                }
+            }
+            LinkSpec::Inside {
+                shape,
+                rect,
+                weight,
+            } => LinkKind::Inside {
+                shape,
+                rect,
+                weight,
+            },
+            LinkSpec::Follow {
+                shape,
+                target,
+                lag,
+                weight,
+            } => {
+                let (qt, _) = self.frame_of(&target, None);
+                let (qs, _) = self.frame_of(&shape, None);
+                LinkKind::Follow {
+                    shape,
+                    target,
+                    lag: lag.max(0) as usize,
+                    weight,
+                    offset: [qs[0] - qt[0], qs[1] - qt[1]],
+                    hist: vec![],
+                }
+            }
+        };
+        self.links.push(LinkRt { handle, kind });
+        self.handles.insert(handle, HandleState::Link);
+    }
+
+    /// After the layer stack: children follow their parents (parents first), then the constraints, in the
+    /// order they were made.
+    fn apply_links(&mut self, resolved: &mut Resolved) {
+        if self.links.is_empty() {
+            return;
+        }
+        // attachments, shallowest parent first
+        let depth = |links: &Vec<LinkRt>, name: &str| {
+            let (mut cur, mut d) = (name.to_string(), 0);
+            while let Some(p) = links.iter().find_map(|l| match &l.kind {
+                LinkKind::Attach { child, parent, .. } if *child == cur => Some(parent.clone()),
+                _ => None,
+            }) {
+                cur = p;
+                d += 1;
+                if d > 1000 {
+                    break;
+                }
+            }
+            d
+        };
+        let mut order: Vec<(usize, usize)> = self
+            .links
+            .iter()
+            .enumerate()
+            .filter_map(|(i, l)| match &l.kind {
+                LinkKind::Attach { child, .. } => Some((depth(&self.links, child), i)),
+                _ => None,
+            })
+            .collect();
+        order.sort();
+        let tau = std::f64::consts::TAU;
+        for (_, i) in order {
+            let LinkKind::Attach {
+                child,
+                parent,
+                q0,
+                rot0,
+            } = &self.links[i].kind
+            else {
+                continue;
+            };
+            let (q, rot) = self.frame_of(parent, Some(resolved));
+            let theta = (rot - rot0) * tau;
+            let d = [q[0] - q0[0], q[1] - q0[1]];
+            let sh = &self.it.shapes[child];
+            let mut tf = resolved
+                .tf
+                .get(child)
+                .copied()
+                .unwrap_or_else(|| sh.transform());
+            let w = [
+                tf.pivot[0] + tf.position[0] - q0[0],
+                tf.pivot[1] + tf.position[1] - q0[1],
+            ];
+            let (s, c) = theta.sin_cos();
+            let w2 = [
+                q0[0] + w[0] * c - w[1] * s + d[0],
+                q0[1] + w[0] * s + w[1] * c + d[1],
+            ];
+            tf.position = [w2[0] - tf.pivot[0], w2[1] - tf.pivot[1]];
+            tf.rotation += theta / tau;
+            resolved.tf.insert(child.clone(), tf);
+        }
+        // constraints
+        for i in 0..self.links.len() {
+            enum Act {
+                Shift(String, [f64; 2]),
+                None,
+            }
+            let act = match &self.links[i].kind {
+                LinkKind::Attach { .. } => Act::None,
+                LinkKind::Inside {
+                    shape,
+                    rect,
+                    weight,
+                } => {
+                    let sh = &self.it.shapes[shape];
+                    let tf = resolved
+                        .tf
+                        .get(shape)
+                        .copied()
+                        .unwrap_or_else(|| sh.transform());
+                    let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+                    for id in sh.live_ids(Kind::V) {
+                        let p = resolved
+                            .verts
+                            .get(shape)
+                            .and_then(|m| m.get(&id))
+                            .copied()
+                            .unwrap_or_else(|| sh.pos(id));
+                        let p = tf.apply(p);
+                        for k in 0..2 {
+                            lo[k] = lo[k].min(p[k]);
+                            hi[k] = hi[k].max(p[k]);
+                        }
+                    }
+                    let mut shift = [0.0; 2];
+                    for k in 0..2 {
+                        let (min, size) = (rect[k], rect[k + 2]);
+                        shift[k] = if hi[k] - lo[k] > size {
+                            min + size / 2.0 - (lo[k] + hi[k]) / 2.0
+                        } else if lo[k] < min {
+                            min - lo[k]
+                        } else if hi[k] > min + size {
+                            min + size - hi[k]
+                        } else {
+                            0.0
+                        } * weight;
+                    }
+                    Act::Shift(shape.clone(), shift)
+                }
+                LinkKind::Follow {
+                    shape,
+                    target,
+                    lag,
+                    weight,
+                    offset,
+                    ..
+                } => {
+                    let (shape, target, lag, weight, offset) =
+                        (shape.clone(), target.clone(), *lag, *weight, *offset);
+                    let (qt, _) = self.frame_of(&target, Some(resolved));
+                    let LinkKind::Follow { hist, .. } = &mut self.links[i].kind else {
+                        unreachable!()
+                    };
+                    hist.push(qt);
+                    let q = hist[hist.len().saturating_sub(1 + lag)];
+                    let want = [q[0] + offset[0], q[1] + offset[1]];
+                    let (have, _) = self.frame_of(&shape, Some(resolved));
+                    Act::Shift(
+                        shape,
+                        [(want[0] - have[0]) * weight, (want[1] - have[1]) * weight],
+                    )
+                }
+            };
+            if let Act::Shift(shape, d) = act {
+                let sh = &self.it.shapes[&shape];
+                let mut tf = resolved
+                    .tf
+                    .get(&shape)
+                    .copied()
+                    .unwrap_or_else(|| sh.transform());
+                tf.position[0] += d[0];
+                tf.position[1] += d[1];
+                resolved.tf.insert(shape, tf);
+            }
         }
     }
 
@@ -655,6 +1033,8 @@ impl Runtime {
     /// `cancel h`: an action keeps the last value it sampled (spec 7.6), a modifier simply stops.
     fn cancel_handle(&mut self, h: u32) {
         match self.handles.remove(&h) {
+            Some(HandleState::Lock) => self.locks.retain(|l| l.handle != h),
+            Some(HandleState::Link) => self.links.retain(|l| l.handle != h),
             Some(HandleState::Act(id)) => {
                 if let Some(a) = self.acts.remove(&id) {
                     self.commit(&a, true);
@@ -832,16 +1212,43 @@ impl Runtime {
 
     fn step_tasks(&mut self) -> Res<()> {
         let tick = self.it.tick;
-        while let Some(id) = self
-            .tasks
-            .iter()
-            .find(|(_, t)| t.state == TaskState::Ready)
-            .map(|(i, _)| *i)
-        {
+        loop {
+            self.pump_named(None)?;
+            let Some(id) = self
+                .tasks
+                .iter()
+                .find(|(_, t)| t.state == TaskState::Ready)
+                .map(|(i, _)| *i)
+            else {
+                break;
+            };
             let mut t = self.tasks.remove(&id).unwrap();
             let stepped = self.it.step(&mut t)?;
             self.take_keysets();
             match stepped {
+                Step::Blocked(Req::Acquire(req)) => {
+                    match self.try_acquire(id, &req, Some(&t))? {
+                        true => t.state = TaskState::Ready,
+                        false => {
+                            t.state = TaskState::BlockedAct;
+                            self.named_wait.push(NamedWait {
+                                task: id,
+                                req,
+                                seq: self.seq,
+                            });
+                            self.seq += 1;
+                        }
+                    }
+                    self.tasks.insert(id, t);
+                }
+                Step::Blocked(Req::Act(req)) if Interp::undeclared_channel(&t) => {
+                    let _ = req;
+                    return Err(Diagnostic::new(
+                        "E-CAP-003",
+                        "an action touched the `body` channel but its `uses` line does not declare it",
+                    )
+                    .help("add `body` to the action's `uses` line (every shape motion and colour change uses `body`)"));
+                }
                 Step::Done => self.finish_task(t),
                 Step::Blocked(Req::Wait(n)) => {
                     if n == 0 {
@@ -932,6 +1339,111 @@ impl Runtime {
         }
     }
 
+    /// Is the channel holder's call still running (its task alive, with that call on its frame stack)?
+    fn occ_alive(&self, o: &Occ, cur: Option<&Task>) -> bool {
+        let has = |t: &Task| {
+            t.frames
+                .iter()
+                .any(|f| matches!(f, Frame::Call { id, .. } if *id == o.call))
+        };
+        match cur {
+            Some(c) if c.id == o.task => has(c),
+            _ => self.tasks.get(&o.task).is_some_and(has),
+        }
+    }
+
+    /// Try to take every channel of `req` at once for `task`. `Ok(false)`: it has to wait.
+    fn try_acquire(&mut self, task: u32, req: &AcquireReq, cur: Option<&Task>) -> Res<bool> {
+        let alive: Vec<bool> = self.named.iter().map(|o| self.occ_alive(o, cur)).collect();
+        let mut i = 0;
+        self.named.retain(|_| {
+            i += 1;
+            alive[i - 1]
+        });
+        let mut victims: Vec<u32> = vec![];
+        let mut wait = false;
+        for (ch, policy) in &req.channels {
+            let occ = self
+                .named
+                .iter()
+                .find(|o| o.shape == req.shape && o.ch == *ch && o.task != task);
+            let Some(occ) = occ else { continue };
+            match policy {
+                Policy::Share => {}
+                Policy::Queue => wait = true,
+                Policy::Reject => {
+                    return Err(Diagnostic::new(
+                        "E-RUN-002",
+                        format!(
+                        "channel `{ch}` of `{}` is busy and the action rejects instead of waiting",
+                        req.shape
+                    ),
+                    )
+                    .help("use `on_conflict queue` to wait, or `interrupt` to take over"))
+                }
+                Policy::Interrupt => {
+                    if req.prio >= occ.prio {
+                        victims.push(occ.task);
+                    } else {
+                        wait = true;
+                    }
+                }
+            }
+        }
+        if wait {
+            return Ok(false);
+        }
+        victims.sort();
+        victims.dedup();
+        for v in victims {
+            self.it
+                .trace_line("ACT!", &format!("T{v} interrupted by T{task}"));
+            self.cancel_task(v);
+        }
+        for (ch, policy) in &req.channels {
+            if *policy != Policy::Share {
+                self.named.push(Occ {
+                    shape: req.shape.clone(),
+                    ch: ch.clone(),
+                    task,
+                    call: req.call,
+                    prio: req.prio,
+                });
+            }
+        }
+        Ok(true)
+    }
+
+    /// Let waiting actions have their channels when they are free: highest priority first, then in order.
+    fn pump_named(&mut self, cur: Option<&Task>) -> Res<()> {
+        if self.named_wait.is_empty() {
+            return Ok(());
+        }
+        loop {
+            self.named_wait.retain(|w| self.tasks.contains_key(&w.task));
+            let mut order: Vec<usize> = (0..self.named_wait.len()).collect();
+            order.sort_by(|a, b| {
+                let (x, y) = (&self.named_wait[*a], &self.named_wait[*b]);
+                y.req.prio.cmp(&x.req.prio).then(x.seq.cmp(&y.seq))
+            });
+            let mut progressed = false;
+            for i in order {
+                let (task, req) = (self.named_wait[i].task, self.named_wait[i].req.clone());
+                if self.try_acquire(task, &req, cur)? {
+                    self.named_wait.remove(i);
+                    if let Some(t) = self.tasks.get_mut(&task) {
+                        t.state = TaskState::Ready;
+                    }
+                    progressed = true;
+                    break;
+                }
+            }
+            if !progressed {
+                return Ok(());
+            }
+        }
+    }
+
     fn finish_task(&mut self, t: Task) {
         self.it.trace_line("TASK-", &format!("T{}", t.id));
         if let Some(r) = t.rule {
@@ -1003,6 +1515,23 @@ impl Runtime {
                         value,
                     });
             }
+        }
+        for (k, l) in self.locks.iter().enumerate() {
+            if tick < l.from || l.to.is_some_and(|t| tick >= t) {
+                continue;
+            }
+            by_prop
+                .entry((l.shape.clone(), l.prop))
+                .or_default()
+                .push(Contribution {
+                    layer: 4,
+                    mode: BlendMode::Override,
+                    weight: 1.0,
+                    priority: 0,
+                    start: l.from,
+                    id: 0x7800_0000 + k as u32,
+                    value: l.value,
+                });
         }
         for m in &self.modsets {
             if tick < m.from || m.to.is_some_and(|t| tick >= t) {
@@ -1287,6 +1816,7 @@ impl Runtime {
                 }
             }
         }
+        self.apply_links(&mut resolved);
         resolved.particles = self.it.particles_tick(tick, &resolved.tf);
         self.it.live_tf = resolved.tf.clone();
         self.resolved = resolved;
