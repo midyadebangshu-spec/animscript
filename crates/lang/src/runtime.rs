@@ -465,6 +465,10 @@ impl Runtime {
             PropId::RotX => sh.rot_x,
             PropId::RotY => sh.rot_y,
             PropId::ScaleZ => sh.scale_z,
+            PropId::Mv(i, k) => sh
+                .mesh
+                .as_ref()
+                .map_or(0.0, |m| m.verts[i as usize][k as usize]),
             PropId::EdgeWidth(e) => sh.edges[&e].width.unwrap_or(sh.stroke_width),
             PropId::ShapeWidth => sh.stroke_width,
             PropId::Opacity => sh.opacity,
@@ -1788,48 +1792,82 @@ impl Runtime {
             }
             if let Some(d) = &m.drive {
                 let t = secs * d.speed;
-                let (xs, ys, idx, us): (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) =
-                    if d.verts.is_empty() {
-                        // a shape-level drive sees the shape's rest centre (in the scene)
-                        let sh = &self.it.shapes[&m.shape];
-                        let c = sh.transform().apply(sh.bbox_center());
-                        (vec![c[0]], vec![c[1]], vec![0.0], vec![0.0])
-                    } else {
-                        let n = d.verts.len();
+                let (xs, ys, zs, idx, us): DriveCols = if d.verts.is_empty() {
+                    // a shape-level drive sees the shape's rest centre (in the scene)
+                    let sh = &self.it.shapes[&m.shape];
+                    if sh.mesh.is_some() {
+                        let p = sh.pivot3;
                         (
-                            d.verts
-                                .iter()
-                                .map(|v| self.rest_value(&m.shape, PropId::Vx(*v)))
-                                .collect(),
-                            d.verts
-                                .iter()
-                                .map(|v| self.rest_value(&m.shape, PropId::Vy(*v)))
-                                .collect(),
-                            (0..n).map(|i| i as f64).collect(),
-                            (0..n)
-                                .map(|i| {
-                                    if n > 1 {
-                                        i as f64 / (n - 1) as f64
-                                    } else {
-                                        0.0
-                                    }
-                                })
-                                .collect(),
+                            vec![p[0] + sh.position[0]],
+                            vec![p[1] + sh.position[1]],
+                            vec![p[2] + sh.pos_z],
+                            vec![0.0],
+                            vec![0.0],
                         )
+                    } else {
+                        let c = sh.transform().apply(sh.bbox_center());
+                        (vec![c[0]], vec![c[1]], vec![0.0], vec![0.0], vec![0.0])
+                    }
+                } else {
+                    let n = d.verts.len();
+                    let coord = |axis: u8, plain: fn(u32) -> PropId| -> Vec<f64> {
+                        d.verts
+                            .iter()
+                            .map(|v| {
+                                self.rest_value(
+                                    &m.shape,
+                                    if d.mesh {
+                                        PropId::Mv(*v, axis)
+                                    } else {
+                                        plain(*v)
+                                    },
+                                )
+                            })
+                            .collect()
                     };
+                    (
+                        coord(0, PropId::Vx),
+                        coord(1, PropId::Vy),
+                        if d.mesh {
+                            coord(2, PropId::Vy)
+                        } else {
+                            vec![0.0; n]
+                        },
+                        (0..n).map(|i| i as f64).collect(),
+                        (0..n)
+                            .map(|i| {
+                                if n > 1 {
+                                    i as f64 / (n - 1) as f64
+                                } else {
+                                    0.0
+                                }
+                            })
+                            .collect(),
+                    )
+                };
                 let n = xs.len();
                 let nf = if d.verts.is_empty() { 1.0 } else { n as f64 };
+                // a field is read at the vertex's (x, y); for a mesh, which lies on the floor, at its world (x, z)
+                let (off_x, off_z) = match self.it.shapes.get(&m.shape) {
+                    Some(sh) if d.mesh && !d.verts.is_empty() => (sh.position[0], sh.pos_z),
+                    _ => (0.0, 0.0),
+                };
+                let probe_y: Vec<f64> = if d.mesh {
+                    zs.iter().map(|z| z + off_z).collect()
+                } else {
+                    ys.clone()
+                };
                 let extra: Vec<Vec<f64>> = d
                     .fields
                     .iter()
                     .map(|(f, c)| {
                         xs.iter()
-                            .zip(&ys)
-                            .map(|(x, y)| self.it.field_sample(f, *c, *x, *y))
+                            .zip(&probe_y)
+                            .map(|(x, y)| self.it.field_sample(f, *c, *x + off_x, *y))
                             .collect()
                     })
                     .collect();
-                let mut cols: Vec<&[f64]> = vec![&xs, &ys, &idx, &us];
+                let mut cols: Vec<&[f64]> = vec![&xs, &ys, &zs, &idx, &us];
                 cols.extend(extra.iter().map(|c| c.as_slice()));
                 let out = d
                     .prog
@@ -2118,6 +2156,16 @@ impl Runtime {
                         _ => t.rotation = v,
                     }
                 }
+                PropId::Mv(i, k) => {
+                    if let Some(m) = &sh.mesh {
+                        resolved
+                            .mverts
+                            .entry(shape.clone())
+                            .or_default()
+                            .entry(i)
+                            .or_insert(m.verts[i as usize])[k as usize] = v;
+                    }
+                }
                 PropId::PosZ | PropId::RotX | PropId::RotY | PropId::ScaleZ => {
                     let t = resolved
                         .t3
@@ -2217,3 +2265,4 @@ fn key_value(keys: &[(i64, f64, Ease)], t: i64) -> f64 {
     }
     keys[keys.len() - 1].1
 }
+type DriveCols = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);

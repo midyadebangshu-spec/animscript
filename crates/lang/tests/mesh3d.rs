@@ -247,3 +247,154 @@ fn mesh_errors() {
         "E-TYP-001"
     );
 }
+
+// ---- vertex drives: equations move the vertices of a mesh --------------------------------------------------------------
+
+#[test]
+fn a_drive_can_move_the_vertices_of_a_mesh_by_an_equation() {
+    // a 4 x 4 floor: the height of every vertex follows a wave of x and the time
+    let src = format!(
+        "shape floor = plane(width: 300, depth: 300, nx: 3, nz: 3, at: (400, 500, 0))\n{}",
+        scene(
+            11,
+            "        start floor.drive(y: \"-20 * sin(x / 50 + t * 3)\")\n"
+        )
+    );
+    let r = go(&src);
+    let v0 = verts(mesh(&r.snapshots[0], 0));
+    let v10 = verts(mesh(&r.snapshots[10], 0));
+    assert_eq!(v0.len(), 16);
+    // the rest height is 500; x runs from -150 to 150 around 400
+    for v in &v0 {
+        let local_x = v[0] - 400.0;
+        near(v[1], 500.0 - 20.0 * (local_x / 50.0).sin(), 1e-9);
+    }
+    for v in &v10 {
+        let local_x = v[0] - 400.0;
+        near(v[1], 500.0 - 20.0 * (local_x / 50.0 + 3.0).sin(), 1e-9);
+    }
+    // x and z are untouched
+    assert_eq!(
+        v0.iter().map(|v| v[2].to_bits()).collect::<Vec<_>>(),
+        v10.iter().map(|v| v[2].to_bits()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_mesh_drive_has_z_and_the_vertex_index_and_replace_mode() {
+    let src = format!(
+        "shape box = cube(size: 100, at: (400, 300, 0))\n{}",
+        scene(
+            3,
+            "        start box.drive(z: \"z * 2\", mode: \"replace\")\n"
+        )
+    );
+    let r = go(&src);
+    let (lo, hi) = bbox(mesh(&r.snapshots[1], 0));
+    near(hi[2] - lo[2], 200.0, 1e-9); // the depth doubled: z was replaced by 2 z
+    near(hi[0] - lo[0], 100.0, 1e-9);
+    // `z` is for meshes only
+    let d = err(&format!(
+        "shape s = square(size: 50)\n{}",
+        scene(2, "        start s.drive(z: \"1\")\n")
+    ));
+    assert_eq!(d.code, "E-MTH-004");
+}
+
+#[test]
+fn a_mesh_drive_reads_a_field_at_the_vertex_x_z() {
+    // the field covers the floor's world rectangle (x 300..500, z -100..100); its value is x - 400: the height
+    let src = format!(
+        "shape floor = plane(width: 200, depth: 200, nx: 2, nz: 2, at: (400, 500, 0))\nfield pond:\n    grid: (2, 2)\n    rect: (300, -100, 200, 200)\n    state: [\"h\"]\n    init: [(\"h\", \"x - 400\")]\n    step: [(\"h\", \"h\")]\n{}",
+        scene(3, "        start floor.drive(y: \"-pond * 10\", fields: [pond])\n")
+    );
+    let r = go(&src);
+    let v = verts(mesh(&r.snapshots[1], 0));
+    // cell centres are at x = -50 and 50: the field is x there, clamped beyond (so -50 at x = -100, 0 at x = 0, 50 at x = 100)
+    for p in &v {
+        let lx = p[0] - 400.0;
+        let want = lx.clamp(-50.0, 50.0);
+        near(p[1], 500.0 - want * 10.0, 1e-9);
+    }
+}
+
+// ---- std/3d ----------------------------------------------------------------------------------------------------------
+
+#[test]
+fn std_3d_spins_bobs_sways_and_orbits() {
+    let body = "        start box.spin(rate: 0.125, over: 2.seconds)\n        start box.bob(amount: 10, period: 2.seconds, over: 2.seconds)\n        start camera3.orbit(turns: 0.25, over: 2.seconds)\n";
+    let src = format!(
+        "import \"std/3d\"\nshape box = cube(size: 100, at: (640, 360, 0))\n{}",
+        scene(21, body)
+    );
+    let r = go(&src);
+    // after one second: an eighth of a turn (spin), 10 sin(pi) = 0 (bob), an eighth of the orbit
+    let (lo, hi) = bbox(mesh(&r.snapshots[10], 0));
+    near(hi[0] - lo[0], 100.0 * 2f64.sqrt(), 1e-6);
+    let c = &r.snapshots[10]["camera3"];
+    let f0 = 360.0 / 20.0f64.to_radians().tan();
+    let a = std::f64::consts::TAU * 0.125 * 1.0 / 1.0;
+    let a = a / 2.0 * 2.0; // rate = 0.25 turns / 2 s = 0.125 turns per second, so 45 degrees at t = 1
+    near(c["eye"][0].as_f64().unwrap(), 640.0 + f0 * a.sin(), 1e-6);
+    near(
+        c["eye"][2].as_f64().unwrap(),
+        -f0 + f0 * (1.0 - a.cos()),
+        1e-6,
+    );
+    near(c["forward"][0].as_f64().unwrap(), -a.sin(), 1e-9);
+    near(c["forward"][2].as_f64().unwrap(), a.cos(), 1e-9);
+    // the camera keeps looking at the middle of the stage: the point (640, 360, 0) is straight ahead
+    let eye = [
+        c["eye"][0].as_f64().unwrap(),
+        c["eye"][1].as_f64().unwrap(),
+        c["eye"][2].as_f64().unwrap(),
+    ];
+    let d = [640.0 - eye[0], 360.0 - eye[1], 0.0 - eye[2]];
+    let fwd = [
+        c["forward"][0].as_f64().unwrap(),
+        0.0,
+        c["forward"][2].as_f64().unwrap(),
+    ];
+    let len = (d[0] * d[0] + d[2] * d[2]).sqrt();
+    near(d[0] / len, fwd[0], 1e-9);
+    near(d[2] / len, fwd[2], 1e-9);
+}
+
+#[test]
+fn std_3d_sway_and_crane_run() {
+    let body = "        start box.sway(over: 1.second)\n        start camera3.crane(height: 100, pitch: 0.05, over: 2.seconds)\n";
+    let src = format!(
+        "import \"std/3d\"\nshape box = cube(size: 100, at: (640, 360, 0))\n{}",
+        scene(21, body)
+    );
+    let r = go(&src);
+    let c = &r.snapshots[10]["camera3"];
+    assert!(c["eye"][1].as_f64().unwrap() < 360.0, "the camera rose");
+    assert!(
+        c["forward"][1].as_f64().unwrap() > -1.0 && c["forward"][1].as_f64().unwrap() != 0.0,
+        "and looks down or up a little"
+    );
+}
+
+#[test]
+fn pivot_is_the_world_point_a_mesh_turns_about() {
+    // a cube at x = 500 turned a quarter about a pivot at x = 400 (in the xz plane): its centre moves to z = -100 / 100
+    let src = format!(
+        "shape box = cube(size: 40, at: (500, 300, 0), pivot: (400, 300, 0))\n{}",
+        scene(11, "        start box.drive(rot_y: \"t * 0.25\")\n")
+    );
+    let r = go(&src);
+    let c0 = centre(mesh(&r.snapshots[0], 0));
+    near(c0[0], 500.0, 1e-9);
+    let c = centre(mesh(&r.snapshots[10], 0));
+    near(c[0], 400.0, 1e-9);
+    near(c[2].abs(), 100.0, 1e-9);
+    assert_eq!(
+        err(&format!(
+            "shape box = cube(size: 40, pivot: \"middle\")\n{}",
+            scene(2, "")
+        ))
+        .code,
+        "E-MSH-001"
+    );
+}

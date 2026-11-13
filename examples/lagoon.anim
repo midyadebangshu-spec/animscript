@@ -1,0 +1,133 @@
+project "Lagoon":
+    anim_version: "0.1"
+    canvas: 1280x720
+    fps: 24
+    background: #f8d9a0
+
+import "std/3d"
+
+# A 3D scene with the 2D tools mixed in: the water is a mesh whose vertices are lifted every frame by a wave-equation
+# field, the boat rides that surface, the lighthouse is a lathed profile, the boat is extruded outlines; the sky and
+# the foreground fronds are ordinary 2D shapes drawn behind and in front by `z`. The camera3 orbits (std/3d).
+stage3(fov: 40, light: (-0.85, 0.35, 0.45), ambient: 0.34, bands: 4, crease: 38.deg, smooth: 55.deg)
+
+# ---- the water: a field over the world rectangle of the plane (x -20..1300, z -800..780); h is a height in pixels
+field lagoon:
+    grid: (110, 132)
+    rect: (-20, -800, 1320, 1580)
+    state: ["h", "v", "gx", "gz"]
+    edges: "mirror"
+    c2: 2400
+    damp: 0.55
+    init: [("h", "0"), ("v", "0"), ("gx", "0"), ("gz", "0")]
+    step: [[("v", "v + dt * (c2 * (h[-1, 0] + h[1, 0] + h[0, -1] + h[0, 1] - 4 * h) - damp * v)")],
+           [("h", "h + dt * v")],
+           [("gx", "(h[1, 0] - h[-1, 0]) * 0.05"), ("gz", "(h[0, 1] - h[0, -1]) * 0.05")]]
+    substeps: 4
+
+# ---- 2D, behind everything
+shape sky = polygon([(0, 0), (1280, 0), (1280, 470), (0, 470)])
+sky.fill = #f4b87c
+sky.stroke_width = 0
+sky.z = -40
+shape sky_glow = polygon([(0, 260), (1280, 260), (1280, 470), (0, 470)])
+sky_glow.fill = #fbd9a0
+sky_glow.stroke_width = 0
+sky_glow.opacity = 0.8
+sky_glow.z = -39
+shape sun = circle(n: 48, radius: 74, at: (930, 330))
+sun.fill = #fff6d0
+sun.stroke_width = 0
+sun.z = -38
+shape sun_halo = circle(n: 48, radius: 120, at: (930, 330))
+sun_halo.fill = #ffe9a8
+sun_halo.stroke_width = 0
+sun_halo.opacity = 0.35
+sun_halo.z = -39
+shape cloud1 = polygon([(120, 160), (190, 120), (270, 128), (330, 100), (410, 130), (470, 150), (440, 172), (150, 176)])
+cloud1.fill = #fde7c8
+cloud1.stroke_width = 0
+cloud1.opacity = 0.9
+cloud1.z = -37
+shape cloud2 = polygon([(700, 90), (760, 62), (840, 70), (900, 92), (880, 108), (720, 108)])
+cloud2.fill = #fde7c8
+cloud2.stroke_width = 0
+cloud2.opacity = 0.85
+cloud2.z = -37
+shape far_sea = polygon([(0, 440), (1280, 440), (1280, 520), (0, 520)])
+far_sea.fill = #3b8aa0
+far_sea.stroke_width = 0
+far_sea.z = -30
+
+# ---- 3D
+shape water = plane(width: 1320, depth: 1580, nx: 88, nz: 105, at: (640, 520, -10))
+water.fill = #2f95b5
+water.stroke_width = 0
+
+shape rock = cone(radius: 150, height: 110, segments: 28, at: (230, 470, 470))
+rock.fill = #7a6a5a
+rock.stroke = #2a2218
+rock.stroke_width = 3
+shape tower = lathe(profile: [(0, 0), (62, 0), (50, 120), (40, 220), (46, 236), (46, 252), (30, 260), (0, 260)], segments: 36, at: (230, 297, 470))
+tower.fill = #f3efe6
+tower.stroke = #2a2218
+tower.stroke_width = 3
+shape band = lathe(profile: [(0, 0), (58, 0), (53, 52), (0, 52)], segments: 36, at: (230, 399, 470))
+band.fill = #c4452f
+band.stroke = #2a2218
+band.stroke_width = 3
+shape lamp = sphere(radius: 26, segments: 20, rings: 10, at: (230, 160, 470))
+lamp.fill = #ffd35a
+lamp.stroke = #6a4a08
+lamp.stroke_width = 3
+shape roof = cone(radius: 40, height: 40, segments: 24, at: (230, 112, 470))
+roof.fill = #c4452f
+roof.stroke = #2a2218
+roof.stroke_width = 3
+
+# the boat: three extruded or turned parts that share one pivot, so they roll together on the waves
+shape hull = extrude(points: [(-110, -16), (-92, 34), (82, 34), (116, -16), (0, -6)], depth: 70, at: (760, 500, 250), pivot: (760, 506, 250))
+hull.fill = #8a5a32
+hull.stroke = #2a1a0c
+hull.stroke_width = 3
+shape mast = cylinder(radius: 4, height: 150, segments: 12, at: (760, 417, 250), pivot: (760, 506, 250))
+mast.fill = #5a3a1c
+mast.stroke = #2a1a0c
+mast.stroke_width = 2
+shape sail = extrude(points: [(0, 0), (0, -128), (78, -10)], depth: 5, at: (803, 424, 250), pivot: (760, 506, 250))
+sail.fill = #fffaf0
+sail.stroke = #6a5a3a
+sail.stroke_width = 3
+
+# ---- 2D, in front: fronds swaying in the wind (equations again)
+# a leaf blade: a closed curve, the two sides of one tapered shape (u runs up one side and back down the other)
+shape frond1 = curve(x: "-40 + 520 * select(u < 1, u, 2 - u)", y: "-30 + 70 * select(u < 1, u, 2 - u) + 190 * select(u < 1, u, 2 - u) ^ 2 + select(u < 1, 1, -1) * 44 * sin(pi * select(u < 1, u, 2 - u)) * (1 - 0.35 * select(u < 1, u, 2 - u))", from: 0, to: 2, n: 60, closed: true)
+shape frond2 = curve(x: "-40 + 420 * select(u < 1, u, 2 - u)", y: "40 + 190 * select(u < 1, u, 2 - u) + 90 * select(u < 1, u, 2 - u) ^ 2 + select(u < 1, 1, -1) * 36 * sin(pi * select(u < 1, u, 2 - u)) * (1 - 0.35 * select(u < 1, u, 2 - u))", from: 0, to: 2, n: 60, closed: true)
+shape frond3 = curve(x: "1320 - 500 * select(u < 1, u, 2 - u)", y: "-30 + 60 * select(u < 1, u, 2 - u) + 210 * select(u < 1, u, 2 - u) ^ 2 + select(u < 1, 1, -1) * 42 * sin(pi * select(u < 1, u, 2 - u)) * (1 - 0.35 * select(u < 1, u, 2 - u))", from: 0, to: 2, n: 60, closed: true)
+for f in [frond1, frond2, frond3]:
+    f.fill = #1d3b26
+    f.stroke_width = 0
+    f.z = 40
+
+scene "Lagoon" for 14.seconds:
+    main:
+        start camera3.orbit(turns: 0.07, over: 14.seconds)
+        start camera3.crane(height: 90, pitch: 0.018, over: 14.seconds)
+        # the boat bobs and rolls with the height and the slope of the water under it (the field is read at its x, z)
+        for part in [hull, mast, sail]:
+            start part.drive(pos_y: "-lagoon_h", rotation: "atan(lagoon_gx * 3) / tau", rot_x: "atan(lagoon_gz * 3) / tau", fields: [lagoon])
+        # the water surface: every vertex is lifted by the field (an equation, read at its world x, z)
+        start water.drive(y: "-lagoon_h", fields: [lagoon])
+        start sun.drive(scale: "0.04 * sin(tau * t / 4)")
+        start lamp.drive(scale: "0.06 * sin(tau * t / 1.2)")
+        for k in [0, 1, 2]:
+            let fr = [frond1, frond2, frond3][k]
+            # the tip (far from the corner) sways most: the distance from the corner is read from the vertex's own y
+            start fr.drive(y: "(clamp(abs(y + 30) / 300, 0, 1) ^ 2) * 14 * sin(tau * (0.3 * t + 0.002 * x))")
+        # a first drop beside the boat, then the rain
+        wait 0.5.seconds
+        lagoon.poke(700, 330, amount: 70, radius: 80)
+        for i in 0..26:
+            lagoon.poke(80 + (i * 413) % 1120, -500 + (i * 227) % 1100, amount: 36 + (i % 3) * 14, radius: 60)
+            wait 1.second * (0.3 + (i % 4) * 0.11)
+        wait 14.seconds

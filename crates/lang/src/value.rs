@@ -233,6 +233,8 @@ pub enum PropId {
     RotX,
     RotY,
     ScaleZ,
+    /// A mesh vertex coordinate (vertex index, axis 0 x, 1 y, 2 z).
+    Mv(u32, u8),
     /// One component (0 r, 1 g, 2 b, 3 a; linear light) of a face's own fill.
     FillC(u32, u8),
     /// ... of an edge's own stroke colour.
@@ -415,6 +417,8 @@ pub struct Drive {
     pub speed: f64,
     /// Extra point inputs after `x, y, i, u`: a field's channel sampled at each point (field name, channel).
     pub fields: Vec<(String, usize)>,
+    /// A drive of a mesh's vertices: `z` is available and fields are read at the vertex's (x, z).
+    pub mesh: bool,
 }
 
 /// One output of a drive: `props[k]` receives point `k`'s value (vertex drives) or all receive point 0 (shape level).

@@ -2189,6 +2189,29 @@ field pond:
 Worked examples: `examples/pond.anim` (the wave equation, rain, a boat and leaves driven by the surface) and
 `examples/turing.anim` (reaction-diffusion growing mazes).
 
+## 13s. 3D: meshes in the same scenes (round 3D-1/2)
+
+A mesh is an ordinary shape that happens to have volume, so keyframes, `drive`, `opacity`, `z`, `fill`, `stroke` all apply. Axes: x right, y down, z away from the viewer. The default camera shows the z=0 plane at canvas scale, so a mesh placed at `(400, 300, 0)` appears at `(400, 300)`.
+
+```
+import "std/3d"
+stage3(fov: 40, light: (-0.6, 0.65, 0.5), ambient: 0.4, bands: 4)
+shape vase = lathe([(0, 0), (60, 20), (40, 120), (70, 200)], at: (400, 300, 0), fill: #c8553d)
+shape blob = extrude(my_freehand_shape, depth: 60, at: (200, 300, 0))
+vase.spin(0.5)
+camera3.orbit(turns: 0.1, over: 10.seconds)
+```
+
+- **Builtins:** `cube`, `sphere`, `cylinder`, `cone`, `plane(width, depth, nx, nz)`, `lathe(profile)`, `extrude(shape | points, depth)`; each takes `at:` (centre of the bounding box, default the origin), `pivot:` (world point it turns about), `fill`, `outline`, `double_sided`.
+- **Properties:** `position.z`, `rotation.x`, `rotation.y`, `scale.z` (keys use angle units such as `.deg`). Turn order: spin about y, tilt about x, roll about z, then translate. Drive names: `pos_z, rot_x, rot_y, scale_z` (turns); vertex drives `x, y, z` (z only on meshes: `E-MTH-004` on 2D shapes); drive inputs are `x, y, z, i, u` plus frame `t, n`.
+- **Fields:** a mesh vertex reads a field at its world `(x, z)`, so a `plane` can follow a wave field and boats ride its height and slope (see `examples/lagoon.anim`).
+- **`stage3(fov, light, ambient, bands, crease, smooth)`:** `light` is the direction the light travels. Defaults: (-0.4, 0.7, 0.6), 0.35, 3 bands, 40 deg crease, 50 deg smooth, fov 40.
+- **`camera3`:** created with the first mesh. `position.x/y/z` offset from the default eye, `rotation.y` yaw (positive looks toward +x), `rotation.x` pitch (positive looks up), `rotation` roll, `scale.x` zoom. `focal3()` gives the eye distance to the z=0 plane.
+- **std/3d actions:** `spin(rate)`, `bob(amount, period)`, `sway(roll, nod, period)`, `orbit(turns, distance, over)`, `crane(height, pitch, over)`.
+- **Rendering:** a deterministic software rasterizer (z-buffer, 2x supersampling, toon bands, smoothed normals, inked outlines on silhouette, boundary and crease edges). All meshes draw together at the first mesh's z-order position; 2D shapes at other `z` values sit in front of or behind them.
+- **Errors:** `E-MSH-001` bad mesh arguments.
+- **Not yet:** 3D physics, glTF/OBJ import, mesh editing.
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,
@@ -2220,6 +2243,7 @@ help: did you mean `over: 1.second`?
 | Scenes | `E-SCN-001` `for auto` without `main:`, `-002` unknown set, `E-SCR-001` script heading names no known set |
 | Properties | `E-CON-001` constraint cycle, `E-PRP-002` two locks on one component, `-003` overlapping keyframes |
 | Fields | `E-FLD-001` bad field declaration, `-002` size limit, `-003` value became infinite or NaN |
+| 3D meshes | `E-MSH-001` bad mesh or stage3 arguments |
 | Equations | `E-MTH-001` equation syntax, `-002` construct not allowed in an equation, `-003` bad arguments, `-004` unknown or mixed drive property, `-005` non-finite value |
 | Camera / assets | `E-CAM-001` zoom outside [1, 8], `E-AST-001` asset file not found |
 | Runtime | `E-RUN-001` tick did not settle in 64 deltas, `-002` action failed or rejected, `-004` `assert` failed |

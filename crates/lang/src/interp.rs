@@ -2318,7 +2318,7 @@ impl Interp {
                 Ok(Value::Fresh(Box::new(polygon(&pts)?)))
             }
             "plot" | "curve" | "polar" | "implicit" => self.math_shape(name, args),
-            "cube" | "sphere" | "cylinder" | "cone" | "plane" | "lathe" | "extrude" | "stage3" => self.mesh_builtin(name, args),
+            "cube" | "sphere" | "cylinder" | "cone" | "plane" | "lathe" | "extrude" | "stage3" | "focal3" => self.mesh_builtin(name, args),
             "line" => {
                 let m = self.bind(name, args, &["a", "b"], &["a", "b"])?;
                 Ok(Value::Fresh(Box::new(line(self.point(&m["a"], "`a`")?, self.point(&m["b"], "`b`")?))))

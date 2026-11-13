@@ -27,7 +27,7 @@ fn mth(code: &'static str, msg: impl Into<String>) -> Diagnostic {
 const JIT_MIN_POINTS: usize = 128;
 
 /// The equation inputs of a `drive`.
-const DRIVE_POINT: [&str; 4] = ["x", "y", "i", "u"];
+const DRIVE_POINT: [&str; 5] = ["x", "y", "z", "i", "u"];
 const DRIVE_FRAME: [&str; 2] = ["t", "n"];
 
 fn mentions(e: &Expr, scope: &HashMap<String, m::Id>) -> bool {
@@ -451,7 +451,7 @@ impl Interp {
             return Err(mth("E-SHP-005", "`drive` needs a running scene")
                 .help("use it in `main:` or a rule; a drive adds motion over time"));
         }
-        const VERT: [&str; 2] = ["x", "y"];
+        const VERT: [&str; 3] = ["x", "y", "z"];
         const SHAPE: [(&str, &str); 10] = [
             ("opacity", "opacity"),
             ("width", "width"),
@@ -464,9 +464,10 @@ impl Interp {
             ("rot_y", "rot_y"),
             ("scale_z", "scale_z"),
         ];
-        let known: [&'static str; 17] = [
+        let known: [&'static str; 18] = [
             "x",
             "y",
+            "z",
             "opacity",
             "width",
             "rotation",
@@ -547,6 +548,8 @@ impl Interp {
             } else if let Value::Shape(sn) = &obj {
                 let vids = if vert_eqs.is_empty() {
                     vec![]
+                } else if let Some(mesh) = &self.shapes[sn].mesh {
+                    (0..mesh.verts.len() as u32).collect()
                 } else {
                     self.shapes[sn].live_ids(Kind::V)
                 };
@@ -558,6 +561,11 @@ impl Interp {
                 ));
             };
 
+        let is_mesh = self.shapes[&shape].mesh.is_some();
+        if vert_eqs.contains(&"z") && !is_mesh {
+            return Err(mth("E-MTH-004", "`z` can only move the vertices of a mesh")
+                .help("meshes are made with `cube`, `sphere`, `lathe`, `extrude`, ..."));
+        }
         let scene = self.scene_name.clone();
         let seed = self.seed32(&format!("{scene}/{shape}/drive"));
         let (names, props): (Vec<&str>, Vec<Vec<PropId>>) = if shape_eqs.is_empty() {
@@ -568,12 +576,12 @@ impl Interp {
                     .map(|a| {
                         verts
                             .iter()
-                            .map(|v| {
-                                if *a == "x" {
-                                    PropId::Vx(*v)
-                                } else {
-                                    PropId::Vy(*v)
-                                }
+                            .map(|v| match (is_mesh, *a) {
+                                (true, "x") => PropId::Mv(*v, 0),
+                                (true, "y") => PropId::Mv(*v, 1),
+                                (true, _) => PropId::Mv(*v, 2),
+                                (false, "x") => PropId::Vx(*v),
+                                (false, _) => PropId::Vy(*v),
                             })
                             .collect()
                     })
@@ -615,6 +623,7 @@ impl Interp {
             replace,
             speed,
             fields: field_in.iter().map(|f| (f.1.clone(), f.2)).collect(),
+            mesh: is_mesh,
         };
         Ok(Value::Modifier(Box::new(ModReq {
             label: format!("{shape}.drive"),

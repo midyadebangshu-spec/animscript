@@ -93,26 +93,34 @@ impl Interp {
     }
 
     fn at3(&self, m: &HashMap<&'static str, Value>) -> Res<Option<[f64; 3]>> {
-        let Some(v) = m.get("at") else {
+        self.point3(m, "at")
+    }
+
+    fn pivot3(&self, m: &HashMap<&'static str, Value>) -> Res<Option<[f64; 3]>> {
+        self.point3(m, "pivot")
+    }
+
+    fn point3(&self, m: &HashMap<&'static str, Value>, key: &'static str) -> Res<Option<[f64; 3]>> {
+        let Some(v) = m.get(key) else {
             return Ok(None);
         };
         match v {
             Value::Tuple(t) if t.len() == 2 || t.len() == 3 => {
                 let mut p = [0.0; 3];
                 for (k, x) in t.iter().enumerate() {
-                    p[k] = self.num(x, "`at`")?;
+                    p[k] = self.num(x, &format!("`{key}`"))?;
                 }
                 Ok(Some(p))
             }
             o => Err(msh(format!(
-                "`at` must be (x, y) or (x, y, z), found {}",
+                "`{key}` must be (x, y) or (x, y, z), found {}",
                 o.type_name()
             ))),
         }
     }
 
     /// A mesh as a new shape: centred on the middle of its bounding box (its pivot), which goes to `at`.
-    fn mesh_shape(&self, mesh: Mesh, at: Option<[f64; 3]>) -> Value {
+    fn mesh_shape(&self, mesh: Mesh, at: Option<[f64; 3]>, turn_about: Option<[f64; 3]>) -> Value {
         let (lo, hi) = mesh.bbox();
         let pivot = [
             (lo[0] + hi[0]) / 2.0,
@@ -125,6 +133,14 @@ impl Interp {
             sh.position = [a[0] - pivot[0], a[1] - pivot[1]];
             sh.pos_z = a[2] - pivot[2];
         }
+        // `pivot` is a point in the scene: the mesh turns about it
+        if let Some(p) = turn_about {
+            sh.pivot3 = [
+                p[0] - sh.position[0],
+                p[1] - sh.position[1],
+                p[2] - sh.pos_z,
+            ];
+        }
         sh.mesh = Some(mesh);
         Value::Fresh(Box::new(sh))
     }
@@ -132,26 +148,41 @@ impl Interp {
     pub(crate) fn mesh_builtin(&mut self, name: &str, args: Args) -> Res<Value> {
         match name {
             "cube" => {
-                let m = self.bind(name, args, &["size", "width", "height", "depth", "at"], &[])?;
+                let m = self.bind(
+                    name,
+                    args,
+                    &["size", "width", "height", "depth", "at", "pivot"],
+                    &[],
+                )?;
                 let size = self.positive(&m, "size", 100.0)?;
                 let (w, h, d) = (
                     self.positive(&m, "width", size)?,
                     self.positive(&m, "height", size)?,
                     self.positive(&m, "depth", size)?,
                 );
-                Ok(self.mesh_shape(Mesh::cube(w, h, d), self.at3(&m)?))
+                Ok(self.mesh_shape(Mesh::cube(w, h, d), self.at3(&m)?, self.pivot3(&m)?))
             }
             "sphere" => {
-                let m = self.bind(name, args, &["radius", "segments", "rings", "at"], &[])?;
+                let m = self.bind(
+                    name,
+                    args,
+                    &["radius", "segments", "rings", "at", "pivot"],
+                    &[],
+                )?;
                 let r = self.positive(&m, "radius", 50.0)?;
                 let (s, g) = (
                     self.count(&m, "segments", 24, 3)?,
                     self.count(&m, "rings", 12, 2)?,
                 );
-                Ok(self.mesh_shape(Mesh::sphere(r, s, g), self.at3(&m)?))
+                Ok(self.mesh_shape(Mesh::sphere(r, s, g), self.at3(&m)?, self.pivot3(&m)?))
             }
             "cylinder" | "cone" => {
-                let m = self.bind(name, args, &["radius", "height", "segments", "at"], &[])?;
+                let m = self.bind(
+                    name,
+                    args,
+                    &["radius", "height", "segments", "at", "pivot"],
+                    &[],
+                )?;
                 let (r, h) = (
                     self.positive(&m, "radius", 40.0)?,
                     self.positive(&m, "height", 100.0)?,
@@ -162,19 +193,29 @@ impl Interp {
                 } else {
                     Mesh::cone(r, h, s)
                 };
-                Ok(self.mesh_shape(mesh, self.at3(&m)?))
+                Ok(self.mesh_shape(mesh, self.at3(&m)?, self.pivot3(&m)?))
             }
             "plane" => {
-                let m = self.bind(name, args, &["width", "depth", "nx", "nz", "at"], &[])?;
+                let m = self.bind(
+                    name,
+                    args,
+                    &["width", "depth", "nx", "nz", "at", "pivot"],
+                    &[],
+                )?;
                 let (w, d) = (
                     self.positive(&m, "width", 400.0)?,
                     self.positive(&m, "depth", 400.0)?,
                 );
                 let (nx, nz) = (self.count(&m, "nx", 1, 1)?, self.count(&m, "nz", 1, 1)?);
-                Ok(self.mesh_shape(Mesh::plane(w, d, nx, nz), self.at3(&m)?))
+                Ok(self.mesh_shape(Mesh::plane(w, d, nx, nz), self.at3(&m)?, self.pivot3(&m)?))
             }
             "lathe" => {
-                let m = self.bind(name, args, &["profile", "segments", "at"], &["profile"])?;
+                let m = self.bind(
+                    name,
+                    args,
+                    &["profile", "segments", "at", "pivot"],
+                    &["profile"],
+                )?;
                 let Value::List(items) = &m["profile"] else {
                     return Err(msh("`profile` must be a list of (radius, height) points"));
                 };
@@ -184,10 +225,10 @@ impl Interp {
                     .collect::<Res<_>>()?;
                 let s = self.count(&m, "segments", 32, 3)?;
                 let mesh = Mesh::lathe(&pts, s).map_err(msh)?;
-                Ok(self.mesh_shape(mesh, self.at3(&m)?))
+                Ok(self.mesh_shape(mesh, self.at3(&m)?, self.pivot3(&m)?))
             }
             "extrude" => {
-                let m = self.bind(name, args, &["of", "depth", "points", "at"], &[])?;
+                let m = self.bind(name, args, &["of", "depth", "points", "at", "pivot"], &[])?;
                 let poly: Vec<[f64; 2]> = match (m.get("of"), m.get("points")) {
                     (Some(shape), None) => self.outline_points(shape, true)?,
                     (None, Some(Value::List(items))) => items
@@ -221,7 +262,13 @@ impl Interp {
                     _ => poly,
                 };
                 let mesh = Mesh::extrude(&poly, depth).map_err(msh)?;
-                Ok(self.mesh_shape(mesh, self.at3(&m)?))
+                Ok(self.mesh_shape(mesh, self.at3(&m)?, self.pivot3(&m)?))
+            }
+            "focal3" => {
+                self.bind(name, args, &[], &[])?;
+                Ok(Value::Num(
+                    (self.canvas.1 as f64 / 2.0) / (self.stage3.fov.to_radians() / 2.0).tan(),
+                ))
             }
             "stage3" => {
                 let m = self.bind(
@@ -349,6 +396,7 @@ pub fn mesh_json(
     sh: &Shape,
     tf: &Transform,
     t3: Option<[f64; 4]>,
+    over: Option<&std::collections::BTreeMap<u32, [f64; 3]>>,
     fill: J,
     outline: J,
     width: f64,
@@ -361,6 +409,11 @@ pub fn mesh_json(
         scale: [tf.scale[0], tf.scale[1], t3[3]],
         pivot: sh.pivot3,
     };
-    let verts: Vec<J> = mesh.verts.iter().map(|v| json!(t.apply(*v))).collect();
+    let verts: Vec<J> = mesh
+        .verts
+        .iter()
+        .enumerate()
+        .map(|(i, v)| json!(t.apply(over.and_then(|o| o.get(&(i as u32))).copied().unwrap_or(*v))))
+        .collect();
     json!({"verts": verts, "faces": mesh.faces, "double_sided": mesh.double_sided, "fill": fill, "outline": outline, "width": width})
 }

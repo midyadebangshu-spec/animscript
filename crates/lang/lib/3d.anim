@@ -1,0 +1,24 @@
+## std/3d: motion for 3D meshes and for the 3D camera, written in AnimScript on top of `drive`. Import with `import "std/3d"`.
+## Nothing here is built into the language: copy any of it and change it. Angles inside the equations are in turns
+## (as for `rot_y`), times in seconds. `camera3` is a shape too, so the same actions move it.
+
+## Turn about the vertical axis, `rate` turns per second.
+action spin(self: Shape, rate: Number = 0.15, over: Duration = 6.seconds):
+    self.drive(rot_y: "rate * t", rate: rate) over over
+
+## Rock gently up and down.
+action bob(self: Shape, amount: Number = 12, period: Duration = 2.seconds, over: Duration = 6.seconds):
+    self.drive(pos_y: "amount * sin(tau * t / period)", amount: amount, period: period) over over
+
+## Rock side to side (a roll about the depth axis, in turns) and nod forward and back.
+action sway(self: Shape, roll: Number = 0.02, nod: Number = 0.015, period: Duration = 3.seconds, over: Duration = 6.seconds):
+    self.drive(rotation: "roll * sin(tau * t / period)", rot_x: "nod * sin(tau * t / period + 1.2)", roll: roll, nod: nod, period: period) over over
+
+## Swing the 3D camera around the middle of the stage, `turns` of a full circle in all, always looking at the middle
+## (use it on `camera3`). `distance` is how far the camera starts from the middle; the default is the lens distance.
+action orbit(self: Shape, turns: Number = 0.25, distance: Number = focal3(), over: Duration = 6.seconds):
+    self.drive(pos_x: "d * sin(tau * rate * t)", pos_z: "d * (1 - cos(tau * rate * t))", rot_y: "-rate * t", d: distance, rate: turns / (over / 1.second)) over over
+
+## Rise (or sink) while looking down at the middle: `height` pixels up, looking down by `pitch` turns.
+action crane(self: Shape, height: Number = 160, pitch: Number = 0.03, over: Duration = 4.seconds):
+    self.drive(pos_y: "-height * smoothstep(0, 1, t / dur)", rot_x: "-pitch * smoothstep(0, 1, t / dur)", height: height, pitch: pitch, dur: over / 1.second) over over

@@ -19,6 +19,8 @@ pub struct Resolved {
     pub tf: BTreeMap<String, Transform>,
     /// Animated 3D components per shape: position z, turns about x and y, scale z.
     pub t3: BTreeMap<String, [f64; 4]>,
+    /// Animated mesh vertices (local coordinates): shape, vertex index, position.
+    pub mverts: BTreeMap<String, BTreeMap<u32, [f64; 3]>>,
     /// Linear-light colours of faces and edges whose own colour is animated.
     pub fills: BTreeMap<(String, u32), [f64; 4]>,
     pub strokes: BTreeMap<(String, u32), [f64; 4]>,
@@ -120,7 +122,7 @@ pub fn build_snapshot(
             }
             if sh.mesh.is_some() {
                 let fill = finish(shape_fill.or(Some(to_linear([200, 200, 208, 255]))));
-                shape_json["mesh"] = crate::mesh3d::mesh_json(sh, &tf, resolved.t3.get(*n).copied(), fill, finish(shape_stroke), shape_width);
+                shape_json["mesh"] = crate::mesh3d::mesh_json(sh, &tf, resolved.t3.get(*n).copied(), resolved.mverts.get(*n), fill, finish(shape_stroke), shape_width);
             }
             if let Some(img) = &sh.image {
                 let tris = textured_triangles(sh, ov, &tf);
