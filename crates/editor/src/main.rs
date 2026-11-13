@@ -1,4 +1,6 @@
 //! `anim-editor [file.anim]`: the AnimScript editor.
+// a release build on Windows is a window, not a console program with a window
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 use anim_editor::app::EditorApp;
 
 fn main() -> eframe::Result {

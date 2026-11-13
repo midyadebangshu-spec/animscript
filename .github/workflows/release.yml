@@ -1,0 +1,83 @@
+# Builds the editor and the command line for Linux and Windows and attaches them to a GitHub Release.
+#
+#   git tag v0.1.0 && git push origin v0.1.0     -> a release named v0.1.0 with both archives
+#   "Run workflow" on the Actions page           -> the archives as build artifacts only (no release)
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # an older Ubuntu on purpose: the Linux binaries then run on every distribution at least that new
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then v="${GITHUB_REF_NAME#v}"; else v="dev-${GITHUB_SHA::7}"; fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+
+      - name: Toolchain (stable Rust, MinGW for the Windows build)
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add x86_64-pc-windows-gnu
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64 zip
+
+      - name: Build for Linux
+        run: cargo build --release --locked -p anim-editor -p anim
+
+      - name: Build for Windows
+        run: cargo build --release --locked -p anim-editor -p anim --target x86_64-pc-windows-gnu
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          pack() { # pack <name> <folder with the binaries> <suffix of the binaries> <how to start it>
+            dir="dist/$1"
+            mkdir -p "$dir"
+            cp "$2/anim-editor$3" "$2/anim$3" "$dir/"
+            cp -r examples "$dir/examples"
+            find "$dir/examples" -name '*.mp4' -delete
+            cp DOCUMENT.md "$dir/"
+            printf '%s\n' \
+              "AnimScript $VERSION" \
+              "" \
+              "anim-editor$3   the editor: code, preview, hierarchy, inspector, timeline, console" \
+              "anim$3          the command line: check, run, render, frames" \
+              "examples/       programs to open" \
+              "DOCUMENT.md     the language guide (the editor is described in section 14)" \
+              "" \
+              "Start the editor with an example:" \
+              "    $4" > "$dir/README.txt"
+          }
+          linux="animscript-$VERSION-linux-x86_64"
+          windows="animscript-$VERSION-windows-x86_64"
+          pack "$linux" target/release "" "./anim-editor examples/actions.anim"
+          pack "$windows" target/x86_64-pc-windows-gnu/release ".exe" "anim-editor.exe examples\\actions.anim"
+          (cd dist && tar -czf "$linux.tar.gz" "$linux" && zip -qr "$windows.zip" "$windows")
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: animscript-${{ env.VERSION }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+      - name: Publish the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.zip \
+            --title "AnimScript $VERSION" --generate-notes

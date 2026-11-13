@@ -2342,6 +2342,11 @@ help: did you mean `over: 1.second`?
 
 ### The editor
 
+Ready-made programs for Linux and Windows (64-bit) are on the repository's **Releases** page: unpack the
+archive and start `anim-editor` (`anim-editor.exe`) from its folder; the `anim` command line and the
+examples are in the same archive. Windows shows an "unknown publisher" warning the first time, because
+the programs are not signed. Or build from source as below.
+
 `anim-editor [file.anim]` opens a desktop editor with six panels that can be dragged, resized, tabbed and
 closed (`View` brings them back, `View > Reset layout` restores the default):
 
