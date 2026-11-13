@@ -1,0 +1,5 @@
+# ExprTk (test oracle only)
+
+The single header `exprtk.hpp` from https://github.com/ArashPartow/exprtk (commit in `COMMIT`), MIT licence (SPDX in the header).
+It is used only by `crates/math/tests/oracle.rs` (feature `exprtk`) to check our own evaluator against an independent one.
+It is never part of the runtime: it calls the platform maths library and so is not bit-reproducible across machines.

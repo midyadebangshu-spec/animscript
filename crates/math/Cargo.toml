@@ -1,0 +1,18 @@
+[package]
+name = "animscript-math"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The mathematical IR: expressions of x, y, t, ... compiled to a deterministic, batched evaluator"
+build = "build.rs"
+
+[features]
+# compile the vendored ExprTk and run the differential tests against it (slow to build; tests only)
+exprtk = []
+
+[dependencies]
+# the maths library in pure Rust: sin, exp, pow, ... give the same bits on every platform
+libm = "0.2"
+
+[build-dependencies]
+cc = "1"

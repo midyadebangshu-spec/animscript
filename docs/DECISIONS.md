@@ -1021,3 +1021,12 @@ judgement calls I expect you to want to look at.
 214. **Errors.** `E-BRU-002` for bad points and tilt numbers, new `E-BRU-003` for bad tilt style, symmetry or blend arguments,
     unknown symmetry kinds and blend modes, `lines` and `strength` out of range.
 
+
+## Mathematical Animation Engine, M1 (IR, interpreter, derivatives, parser)
+
+215. **ExprTk is a test oracle only.** It is vendored under `third_party/exprtk` and compiled only with the `exprtk` feature of `animscript-math`; it never runs in the product. The differential test (`tests/oracle.rs`) compares the interpreter with it to 1e-9.
+216. **The IR is scalar `f64` SSA**, hash-consed, in `animscript-math`. Vectors are expanded by the frontend. Inputs have a rate: `Point` (varies per sample) or `Frame` (one value per evaluation); nodes depending only on frame inputs, params and constants are computed once per batch.
+217. **Determinism:** every transcendental goes through the `libm` crate (never the platform libm), so results are bit-identical across machines; `noise`/`hash` use an integer lattice hash on float bits and smoothstep interpolation, with no global state.
+218. **Simplification is conservative:** constant folding plus only the exact identities (`x*1`, `x/1`, `x-0`, `pow(x,1)`); `x*0` is NOT folded (x may be infinite or NaN). Commutative operands are ordered by id so `a+b` and `b+a` share a node. Dead code is removed in `finish`.
+219. **Derivatives are symbolic** (`Builder::diff`). Step-like ops (floor, ceil, round, trunc, sign, comparisons) have derivative 0; `min`/`max`/`select` differentiate the branch taken; `noise` is an error. A term whose factor derivative is a zero constant is dropped.
+220. **String syntax:** `^` (and `**`) is right associative and binds tighter than unary minus (`-2^2 = -4`); comparisons and `&&`/`||` yield 0 or 1; `c ? a : b` and `if(c,a,b)` are the same node; constants `pi tau e true false`; `ln` = `log`; `frac` = `fract`; `%` and `mod` are fmod.
