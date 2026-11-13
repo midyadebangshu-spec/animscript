@@ -2108,6 +2108,27 @@ equation, `n`, `res`, bounds, `mode`), `-004` unknown or mixed drive property, `
 
 Worked example: `examples/water.anim`.
 
+## 13q. A worked example: "The Candle" (brushes, a rigged puppet, equation flames)
+
+`examples/candle/candle.anim` (video: `examples/candle/candle.mp4`; how it is made: `examples/candle/tools/README.md`)
+puts the painting, rigging and equation features together:
+
+- **Drawing.** Every part of the character (torso, scarf, head, hair, ear, five eyes, three brows, four mouths, the arm
+  with a match) is a `paint_layer` with its own `pivot`, painted with libmypaint strokes: ragged marker fills,
+  pressure-varying ink lines, a pencil under-drawing, charcoal shading. The head is a trace of a reference drawing.
+- **Performance.** One scene `timeline:` keys `position`, `rotation` and `opacity` of the layers (and `camera.position`,
+  `camera.scale`): the entrance with a settling bounce, the head with spring overshoot, hair and scarf follow-through, a
+  two-bone arm solved with inverse kinematics, expressions swapped by cross-fading layer opacity, blinks, a push-in.
+- **Equations.** The candle flame, the match flame and the smoke are `curve(...)` shapes. A `drive` with
+  `mode: "replace"` moves every vertex each frame from an equation: a travelling sine sway that grows with height,
+  `noise` flicker, an ignition envelope (`smoothstep(0, 1.6, t)`) and a height flicker that shares its sine terms with
+  the glow, which is a paint layer whose `opacity` is driven by `smoothstep(...) * (0.62 + 0.07 * sin(...) + ...)`.
+- **Light.** A multiplied "dusk" wash lifts while an additive glow and a screened light on the face fade in.
+
+The renderer **caches each painted layer** by its content (brushes, strokes with progress, size, resolution): a layer
+that only moves, turns or fades is not painted again, only drawn through its new transform. That brings a 16 second,
+about 1200-stroke scene from roughly fifteen minutes to a couple.
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,

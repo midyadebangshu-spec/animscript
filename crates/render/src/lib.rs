@@ -177,19 +177,14 @@ fn blend_mode(name: &str) -> tiny_skia::BlendMode {
     }
 }
 
-/// Paint a layer: every stroke is replayed with a fresh libmypaint brush (so it comes out the same every frame) onto
-/// a transparent picture, which is then drawn through the shape's transform and the camera.
-fn draw_paint(pm: &mut Pixmap, sh: &Value, view: &View) {
-    let p = &sh["paint"];
-    let size = (
-        p["size"][0].as_u64().unwrap_or(0) as f64,
-        p["size"][1].as_u64().unwrap_or(0) as f64,
-    );
-    let res = p["resolution"].as_f64().unwrap_or(1.0);
-    let (pw, ph) = (
-        (size.0 * res).round().max(1.0) as u32,
-        (size.1 * res).round().max(1.0) as u32,
-    );
+thread_local! {
+    /// Painted layers by content: replaying every stroke of a layer is slow, but a layer that only moves, fades or
+    /// is shown again has the same strokes, so its picture is reused and only blitted through the new transform.
+    static PAINT_CACHE: std::cell::RefCell<std::collections::HashMap<u64, std::rc::Rc<Pixmap>>> = Default::default();
+}
+
+/// Replay every stroke of a paint layer with a fresh libmypaint brush onto a transparent picture.
+fn replay_layer(p: &Value, pw: u32, ph: u32, res: f64) -> Option<Pixmap> {
     let brushes = p["brushes"].as_array().cloned().unwrap_or_default();
     let mut canvas = animscript_brush::Canvas::new(pw, ph);
     for stroke in p["strokes"].as_array().into_iter().flatten() {
@@ -258,11 +253,49 @@ fn draw_paint(pm: &mut Pixmap, sh: &Value, view: &View) {
         };
         canvas.stroke_with(&mut brush, &pts, &opts);
     }
-    let Some(size) = tiny_skia::IntSize::from_wh(pw, ph) else {
-        return;
+    let size = tiny_skia::IntSize::from_wh(pw, ph)?;
+    Pixmap::from_vec(canvas.rgba8(), size)
+}
+
+/// Paint a layer: its strokes are replayed onto a transparent picture, which is then drawn through the shape's
+/// transform and the camera. The picture is cached by the content of the layer (brushes, strokes with their
+/// progress, size, resolution), so a layer that only moves, fades or turns is not painted again.
+fn draw_paint(pm: &mut Pixmap, sh: &Value, view: &View) {
+    let p = &sh["paint"];
+    let size = (
+        p["size"][0].as_u64().unwrap_or(0) as f64,
+        p["size"][1].as_u64().unwrap_or(0) as f64,
+    );
+    let res = p["resolution"].as_f64().unwrap_or(1.0);
+    let (pw, ph) = (
+        (size.0 * res).round().max(1.0) as u32,
+        (size.1 * res).round().max(1.0) as u32,
+    );
+    let key = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (pw, ph, res.to_bits()).hash(&mut h);
+        p["brushes"].to_string().hash(&mut h);
+        p["strokes"].to_string().hash(&mut h);
+        h.finish()
     };
-    let Some(layer) = Pixmap::from_vec(canvas.rgba8(), size) else {
-        return;
+    let cached = PAINT_CACHE.with(|c| c.borrow().get(&key).cloned());
+    let layer = match cached {
+        Some(l) => l,
+        None => {
+            let Some(l) = replay_layer(p, pw, ph, res) else {
+                return;
+            };
+            let l = std::rc::Rc::new(l);
+            PAINT_CACHE.with(|c| {
+                let mut c = c.borrow_mut();
+                if c.len() >= 48 {
+                    c.clear();
+                }
+                c.insert(key, l.clone());
+            });
+            l
+        }
     };
     let t = &sh["transform"];
     let g = |k: &str, i: usize, d: f32| t[k][i].as_f64().map_or(d, |v| v as f32);
@@ -284,7 +317,7 @@ fn draw_paint(pm: &mut Pixmap, sh: &Value, view: &View) {
         blend_mode: blend_mode(p["blend"].as_str().unwrap_or("normal")),
         quality: tiny_skia::FilterQuality::Bilinear,
     };
-    pm.draw_pixmap(0, 0, layer.as_ref(), &paint, tf, None);
+    pm.draw_pixmap(0, 0, (*layer).as_ref(), &paint, tf, None);
 }
 
 /// Foam and spray: small white specks that fade with age.

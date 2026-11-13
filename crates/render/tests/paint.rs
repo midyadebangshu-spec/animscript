@@ -213,3 +213,45 @@ fn tilt_reaches_the_brush() {
     let (a, b) = (one(0.9, 0.0), one(0.0, 0.9));
     assert_ne!(a, b, "{a:?} vs {b:?}");
 }
+
+// ---- the paint cache: same pictures, only faster -----------------------------------------------------------------
+
+fn bytes(pm: &tiny_skia::Pixmap) -> Vec<u8> {
+    pm.data().to_vec()
+}
+
+#[test]
+fn a_cached_layer_renders_the_same_pixels() {
+    let s = snap(layer(line(1.0), json!({})));
+    let first = render_with(&s, 1.0, false, false).unwrap();
+    let second = render_with(&s, 1.0, false, false).unwrap(); // served from the cache
+    assert_eq!(bytes(&first), bytes(&second));
+}
+
+#[test]
+fn a_moved_layer_reuses_the_picture_and_lands_in_the_new_place() {
+    let base = render_with(&snap(layer(line(1.0), json!({}))), 1.0, false, false).unwrap();
+    let moved = {
+        let mut sh = layer(line(1.0), json!({}));
+        sh["transform"]["position"] = json!([0.0, 30.0]);
+        render_with(&snap(sh), 1.0, false, false).unwrap()
+    };
+    assert!(painted(&base, 100, 50) && !painted(&base, 100, 80));
+    assert!(
+        painted(&moved, 100, 80) && !painted(&moved, 100, 50),
+        "the same stroke, 30 px lower"
+    );
+}
+
+#[test]
+fn changed_strokes_are_not_served_from_a_stale_cache() {
+    let full = render_with(&snap(layer(line(1.0), json!({}))), 1.0, false, false).unwrap();
+    let half = render_with(&snap(layer(line(0.5), json!({}))), 1.0, false, false).unwrap();
+    assert!(painted(&full, 170, 50));
+    assert!(
+        !painted(&half, 170, 50),
+        "progress 0.5 has not reached x = 170"
+    );
+    let again = render_with(&snap(layer(line(1.0), json!({}))), 1.0, false, false).unwrap();
+    assert_eq!(bytes(&full), bytes(&again));
+}
