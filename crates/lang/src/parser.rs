@@ -927,6 +927,164 @@ impl Parser {
         })
     }
 
+    /// `when TRIGGER [if GUARD] [priority N] [retrigger ignore]:` and its body (the keyword is already read).
+    fn rule(&mut self, kw: &str, sp: Span) -> Res<Rule> {
+        let kind = if kw == "when" {
+            RuleKind::When
+        } else {
+            RuleKind::Whenever
+        };
+        let trigger = self.expr()?;
+        let mut guard = None;
+        let mut priority = 0;
+        loop {
+            if self.at_ident("if") {
+                self.next();
+                guard = Some(self.expr()?);
+            } else if self.at_ident("priority") {
+                self.next();
+                let neg = self.eat_op("-");
+                if let T::Num(s) = self.next().t {
+                    priority = s.parse::<i64>().unwrap_or(0) * if neg { -1 } else { 1 };
+                }
+            } else if self.at_ident("retrigger") {
+                self.next();
+                let m = self.ident("`ignore`")?;
+                if m != "ignore" {
+                    return Err(Diagnostic::new(
+                        "E-SYN-001",
+                        "only `retrigger ignore` is supported in this slice",
+                    )
+                    .at(self.prev_span()));
+                }
+            } else {
+                break;
+            }
+        }
+        let body = self.block()?;
+        Ok(Rule {
+            kind,
+            trigger,
+            guard,
+            priority,
+            body,
+            span: sp,
+        })
+    }
+
+    /// The `shots:` block of a scene: `shot "name" for D | until TRIGGER | auto:` bodies (which may hold rules),
+    /// `cut`, `dissolve D` and `fade_through COLOR D`.
+    fn shots(&mut self) -> Res<Vec<ShotItem>> {
+        self.expect_op(":")?;
+        if !matches!(self.peek().t, T::Newline) {
+            return self.err("expected an indented block of `shot` lines");
+        }
+        self.next();
+        if !matches!(self.peek().t, T::Indent) {
+            return self.err("expected an indented block of `shot` lines");
+        }
+        self.next();
+        let mut items = vec![];
+        loop {
+            self.skip_newlines();
+            if matches!(self.peek().t, T::Dedent | T::Eof) {
+                break;
+            }
+            let span = self.peek().span;
+            let kw = self.ident("`shot`, `cut`, `dissolve` or `fade_through`")?;
+            match kw.as_str() {
+                "cut" => {
+                    self.end_stmt()?;
+                    items.push(ShotItem::Cut);
+                }
+                "dissolve" => {
+                    let d = self.expr()?;
+                    self.end_stmt()?;
+                    items.push(ShotItem::Dissolve(d));
+                }
+                "fade_through" => {
+                    let c = self.expr()?;
+                    let d = self.expr()?;
+                    self.end_stmt()?;
+                    items.push(ShotItem::FadeThrough(c, d));
+                }
+                "shot" => {
+                    let name = match self.next().t {
+                        T::Str(s) => s,
+                        _ => {
+                            return Err(Diagnostic::new(
+                                "E-SYN-001",
+                                "a shot needs a quoted name: `shot \"Opening\" for 3.seconds:`",
+                            )
+                            .at(span))
+                        }
+                    };
+                    let end = if self.at_ident("for") {
+                        self.next();
+                        ShotEnd::For(self.expr()?)
+                    } else if self.at_ident("until") {
+                        self.next();
+                        ShotEnd::Until(self.expr()?)
+                    } else if self.at_ident("auto") {
+                        self.next();
+                        ShotEnd::Auto
+                    } else {
+                        return self
+                            .err("a shot ends with `for DURATION`, `until TRIGGER` or `auto`");
+                    };
+                    // the body: statements, plus rules that belong to this shot
+                    self.expect_op(":")?;
+                    let mut stmts: Vec<Stmt> = vec![];
+                    let mut rules: Vec<Rule> = vec![];
+                    if matches!(self.peek().t, T::Newline) {
+                        self.next();
+                        if !matches!(self.peek().t, T::Indent) {
+                            return self.err("expected an indented block");
+                        }
+                        self.next();
+                        loop {
+                            self.skip_newlines();
+                            if matches!(self.peek().t, T::Dedent | T::Eof) {
+                                break;
+                            }
+                            let sp = self.peek().span;
+                            if self.at_ident("when") || self.at_ident("whenever") {
+                                let k = self.ident("")?;
+                                rules.push(self.rule(&k, sp)?);
+                            } else {
+                                stmts.push(self.stmt()?);
+                            }
+                        }
+                        if matches!(self.peek().t, T::Dedent) {
+                            self.next();
+                        }
+                    } else {
+                        stmts.push(self.stmt()?);
+                    }
+                    items.push(ShotItem::Shot(Shot {
+                        name,
+                        end,
+                        body: Rc::new(stmts),
+                        rules,
+                        span,
+                    }));
+                }
+                other => return Err(Diagnostic::new(
+                    "E-SYN-001",
+                    format!("`{other}` is not a shots item"),
+                )
+                .at(span)
+                .help(
+                    "a `shots:` block has `shot`, `cut`, `dissolve D` and `fade_through COLOR D`",
+                )),
+            }
+        }
+        if matches!(self.peek().t, T::Dedent) {
+            self.next();
+        }
+        Ok(items)
+    }
+
     fn scene(&mut self) -> Res<Scene> {
         let start = self.next().span;
         let name = match self.next().t {
@@ -967,6 +1125,7 @@ impl Parser {
             main: None,
             timeline: vec![],
             markers: vec![],
+            shots: vec![],
             rules: vec![],
             span: start,
         };
@@ -995,48 +1154,10 @@ impl Parser {
                     sc.markers.append(&mut self.markers);
                 }
                 "when" | "whenever" => {
-                    let kind = if kw == "when" {
-                        RuleKind::When
-                    } else {
-                        RuleKind::Whenever
-                    };
-                    let trigger = self.expr()?;
-                    let mut guard = None;
-                    let mut priority = 0;
-                    loop {
-                        if self.at_ident("if") {
-                            self.next();
-                            guard = Some(self.expr()?);
-                        } else if self.at_ident("priority") {
-                            self.next();
-                            let neg = self.eat_op("-");
-                            if let T::Num(s) = self.next().t {
-                                priority = s.parse::<i64>().unwrap_or(0) * if neg { -1 } else { 1 };
-                            }
-                        } else if self.at_ident("retrigger") {
-                            self.next();
-                            let m = self.ident("`ignore`")?;
-                            if m != "ignore" {
-                                return Err(Diagnostic::new(
-                                    "E-SYN-001",
-                                    "only `retrigger ignore` is supported in this slice",
-                                )
-                                .at(self.prev_span()));
-                            }
-                        } else {
-                            break;
-                        }
-                    }
-                    let body = self.block()?;
-                    sc.rules.push(Rule {
-                        kind,
-                        trigger,
-                        guard,
-                        priority,
-                        body,
-                        span: sp,
-                    });
+                    let r = self.rule(&kw, sp)?;
+                    sc.rules.push(r);
                 }
+                "shots" => sc.shots = self.shots()?,
                 other => {
                     return Err(Diagnostic::new(
                         "E-SYN-001",

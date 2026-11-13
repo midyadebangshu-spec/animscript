@@ -80,3 +80,66 @@ action fade_in(self: Shape, over: Duration = 1.second):
 action fade_out(self: Shape, over: Duration = 1.second):
     uses body
     self.fade_to(0) over over
+
+## ---- the camera (`camera` is built in: position = centre of the view, zoom 1 to 8, rotation) ----------------------
+## `target` can be a shape (its centre) or a point. All of these take the camera's `frame` channel.
+
+action pan_to(self: Camera, target: Any, over: Duration = 1.second, ease: Easing = ease_in_out):
+    uses frame
+    if frames(over) > 0:
+        self.move_to(anchor(target)) over over ease ease
+    else:
+        self.move_to(anchor(target))
+
+action zoom_to(self: Camera, factor: Number, over: Duration = 1.second, ease: Easing = ease_in_out):
+    uses frame
+    if frames(over) > 0:
+        self.scale_to(factor) over over ease ease
+    else:
+        self.scale_to(factor)
+
+## Occupy the frame channel for a while without moving.
+action hold(self: Camera, over: Duration):
+    uses frame
+    wait over
+
+## Trail a target until cancelled: every frame close the gap by 1 / lag.
+action follow(self: Camera, target: Any, lag: Duration = 8.frames):
+    uses frame
+    let k = 1 / max(1, frames(lag))
+    let x = self.position.x
+    let y = self.position.y
+    while true:
+        let t = anchor(target)
+        x += (t.x - x) * k
+        y += (t.y - y) * k
+        self.position = (x, y)
+        wait 1.frame
+
+## Additive seeded shake: it shares the channel, so it can run during a pan.
+action shake(self: Camera, amount: Number = 2, over: Duration = 0.5.seconds):
+    uses frame on_conflict share
+    self.noise(amount: amount, speed: 20, property: position, over: over)
+
+## Frame a target at a shot size (`extreme_close`, `close`, `medium`, `wide`, `establishing`): the fraction of the
+## frame height its bounds fill. `thirds` (`left`, `right`, `up`, `down`) puts it on that third of the frame.
+action frame(self: Camera, size: Number, on: Any = none, thirds: Point = (0, 0), over: Duration = 0.seconds):
+    uses frame
+    let z = 1
+    let cx = canvas.w / 2
+    let cy = canvas.h / 2
+    if size > 0:
+        let b = bounds(on)
+        z = self.zoom
+        if b.h > 1:
+            z = clamp(size * canvas.h / b.h, 1, 8)
+        let a = anchor(on)
+        cx = a.x - thirds.x * (canvas.w / z) / 6
+        cy = a.y - thirds.y * (canvas.h / z) / 6
+    if frames(over) > 0:
+        together:
+            self.move_to((cx, cy)) over over ease ease_in_out
+            self.scale_to(z) over over ease ease_in_out
+    else:
+        self.move_to((cx, cy))
+        self.scale_to(z)

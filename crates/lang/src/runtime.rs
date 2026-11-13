@@ -164,6 +164,16 @@ pub struct Runtime {
     deferred_err: Option<Diagnostic>,
     /// The running scene's timeline markers: name and tick.
     markers: Vec<(String, i64)>,
+    /// The scene's rules followed by the rules written inside shots, and the shot each belongs to.
+    rules_all: Rc<Vec<Rule>>,
+    rule_shot: Vec<Option<usize>>,
+    shots: Rc<Vec<ShotItem>>,
+    cur_shot: Option<usize>,
+    shots_started: bool,
+    shot_start: i64,
+    shot_len: Option<i64>,
+    shot_task: Option<u32>,
+    shot_until_prev: bool,
     locks: Vec<LockRt>,
     links: Vec<LinkRt>,
     named: Vec<Occ>,
@@ -232,6 +242,15 @@ impl Runtime {
             main_done: false,
             deferred_err: None,
             markers: vec![],
+            rules_all: Rc::new(vec![]),
+            rule_shot: vec![],
+            shots: Rc::new(vec![]),
+            cur_shot: None,
+            shots_started: false,
+            shot_start: 0,
+            shot_len: None,
+            shot_task: None,
+            shot_until_prev: false,
             locks: vec![],
             links: vec![],
             named: vec![],
@@ -282,7 +301,32 @@ impl Runtime {
         self.it.mod_counts.clear();
         self.pending.clear();
         self.channels.clear();
-        self.rules = vec![RuleSt::default(); sc.rules.len()];
+        let mut all: Vec<Rule> = sc.rules.clone();
+        let mut owner: Vec<Option<usize>> = vec![None; all.len()];
+        for (i, item) in sc.shots.iter().enumerate() {
+            if let ShotItem::Shot(sh) = item {
+                for r in &sh.rules {
+                    all.push(r.clone());
+                    owner.push(Some(i));
+                }
+            }
+        }
+        self.rules = vec![RuleSt::default(); all.len()];
+        self.rules_all = Rc::new(all);
+        self.rule_shot = owner;
+        self.shots = Rc::new(sc.shots.clone());
+        self.cur_shot = None;
+        self.shots_started = false;
+        self.shot_task = None;
+        self.it.shot_name = None;
+        self.it.transition = None;
+        self.it.scene_frames = frames;
+        // every scene starts from the establishing shot: the whole canvas, no rotation
+        if let Some(cam) = self.it.shapes.get_mut("camera") {
+            cam.position = [0.0, 0.0];
+            cam.scale = [1.0, 1.0];
+            cam.rotation = 0.0;
+        }
         self.it.flag_hist.clear();
         self.main_task = None;
         self.main_done = false;
@@ -328,6 +372,7 @@ impl Runtime {
             loop {
                 self.it.delta = d;
                 self.it.update_flags()?;
+                self.update_shots()?;
                 self.dispatch_rules(sc)?;
                 self.step_tasks()?;
                 if self.it.apply_staged()? == 0 {
@@ -1134,10 +1179,175 @@ impl Runtime {
 
     // ---- phases 3-5 --------------------------------------------------------------------
 
+    fn shot_frames(&mut self, e: &Expr) -> Res<i64> {
+        let v = self.it.eval(e, &self.base_vars(), Mode::Run)?;
+        self.it.frames_of(&v, e.span)
+    }
+
+    fn begin_shot(&mut self, i: usize) -> Res<()> {
+        let shots = Rc::clone(&self.shots);
+        let ShotItem::Shot(sh) = &shots[i] else {
+            return Ok(());
+        };
+        self.cur_shot = Some(i);
+        self.shot_start = self.it.tick;
+        self.shot_until_prev = false;
+        self.shot_len = match &sh.end {
+            ShotEnd::For(d) => Some(self.shot_frames(d)?),
+            _ => None,
+        };
+        self.it.shot_name = Some(sh.name.clone());
+        self.it.trace_line("SHOT+", &sh.name);
+        let id = self.new_task_id();
+        let t = Task::new(id, Rc::clone(&sh.body), self.base_vars(), Mode::Run, true);
+        self.tasks.insert(id, t);
+        self.shot_task = Some(id);
+        Ok(())
+    }
+
+    fn end_shot(&mut self, i: usize) {
+        if let Some(t) = self.shot_task.take() {
+            if self.tasks.contains_key(&t) {
+                self.cancel_task(t);
+            }
+        }
+        // the shot's rules stop listening, and what they were running stops with them
+        let owned: Vec<usize> = (0..self.rule_shot.len())
+            .filter(|r| self.rule_shot[*r] == Some(i))
+            .collect();
+        for r in owned {
+            if let Some(t) = self.rules[r].running {
+                self.cancel_task(t);
+            }
+            self.rules[r] = RuleSt::default();
+        }
+        if let ShotItem::Shot(sh) = &self.shots[i] {
+            self.it.trace_line("SHOT-", &sh.name);
+        }
+    }
+
+    fn shot_over(&mut self, i: usize) -> Res<bool> {
+        let shots = Rc::clone(&self.shots);
+        let ShotItem::Shot(sh) = &shots[i] else {
+            return Ok(true);
+        };
+        Ok(match &sh.end {
+            ShotEnd::For(_) => self.it.tick - self.shot_start >= self.shot_len.unwrap_or(0),
+            ShotEnd::Auto => self.shot_task.is_none_or(|t| !self.tasks.contains_key(&t)),
+            ShotEnd::Until(c) => {
+                let now = match self.it.eval(c, &self.base_vars(), Mode::Run)? {
+                    Value::Bool(b) => b,
+                    other => {
+                        return Err(Diagnostic::new(
+                            "E-TRG-001",
+                            format!(
+                                "a shot's `until` must be a flag, predicate or event, found {}",
+                                other.type_name()
+                            ),
+                        )
+                        .at(c.span))
+                    }
+                };
+                let rose = now && !self.shot_until_prev;
+                self.shot_until_prev = now;
+                rose
+            }
+        })
+    }
+
+    /// Run the shot list: end the current shot when its time is up (or its condition rises), then follow the
+    /// `cut`, `dissolve` or `fade_through` after it into the next shot.
+    fn update_shots(&mut self) -> Res<()> {
+        if let Some(tr) = &self.it.transition {
+            if self.it.tick - tr.start >= tr.dur {
+                self.it.transition = None;
+            }
+        }
+        let shots = Rc::clone(&self.shots);
+        if shots.is_empty() {
+            return Ok(());
+        }
+        for _ in 0..shots.len() + 1 {
+            let cur = self.cur_shot;
+            match cur {
+                None if !self.shots_started => {
+                    self.shots_started = true;
+                    match shots.iter().position(|s| matches!(s, ShotItem::Shot(_))) {
+                        Some(i) => self.begin_shot(i)?,
+                        None => return Ok(()),
+                    }
+                }
+                Some(i) if self.shot_over(i)? => {
+                    self.end_shot(i);
+                    let mut j = i + 1;
+                    let mut transition: Option<(String, Option<String>, i64)> = None;
+                    while j < shots.len() && !matches!(shots[j], ShotItem::Shot(_)) {
+                        match &shots[j] {
+                            ShotItem::Cut => transition = None,
+                            ShotItem::Dissolve(d) => {
+                                transition = Some(("dissolve".into(), None, self.shot_frames(d)?))
+                            }
+                            ShotItem::FadeThrough(c, d) => {
+                                let col = match self.it.eval(c, &self.base_vars(), Mode::Run)? {
+                                    Value::Color(c) => {
+                                        format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
+                                    }
+                                    other => {
+                                        return Err(Diagnostic::new(
+                                            "E-TYP-001",
+                                            format!(
+                                                "`fade_through` needs a colour, found {}",
+                                                other.type_name()
+                                            ),
+                                        )
+                                        .at(c.span))
+                                    }
+                                };
+                                transition =
+                                    Some(("fade_through".into(), Some(col), self.shot_frames(d)?));
+                            }
+                            ShotItem::Shot(_) => {}
+                        }
+                        j += 1;
+                    }
+                    if j < shots.len() {
+                        if let Some((kind, color, dur)) = transition {
+                            let from = crate::snapshot::camera_view(&self.it, &self.resolved);
+                            self.it.transition = Some(crate::snapshot::Transition {
+                                kind,
+                                color,
+                                start: self.it.tick,
+                                dur,
+                                from,
+                            });
+                        }
+                        self.begin_shot(j)?;
+                    } else {
+                        self.cur_shot = None; // the last shot is over: the camera stays as it is
+                        self.it.shot_name = None;
+                    }
+                }
+                _ => break,
+            }
+        }
+        Ok(())
+    }
+
     fn dispatch_rules(&mut self, sc: &Rc<Scene>) -> Res<()> {
         let vars = self.base_vars();
         let mut fired: Vec<(i64, usize)> = vec![];
-        for (i, rule) in sc.rules.iter().enumerate() {
+        let rules = Rc::clone(&self.rules_all);
+        let _ = sc;
+        for (i, rule) in rules.iter().enumerate() {
+            if let Some(owner) = self.rule_shot[i] {
+                if self.cur_shot != Some(owner) {
+                    self.rules[i] = RuleSt {
+                        running: self.rules[i].running,
+                        ..RuleSt::default()
+                    };
+                    continue; // a shot's rules only listen while it is current
+                }
+            }
             let now = match self.it.eval(&rule.trigger, &vars, Mode::Run)? {
                 Value::Bool(b) => b,
                 other => {
@@ -1189,7 +1399,7 @@ impl Runtime {
             let id = self.new_task_id();
             let mut t = Task::new(
                 id,
-                Rc::clone(&sc.rules[i].body),
+                Rc::clone(&rules[i].body),
                 self.base_vars(),
                 Mode::Run,
                 true,
@@ -1197,8 +1407,8 @@ impl Runtime {
             t.priority = prio;
             t.rule = Some(i);
             self.rules[i].running = Some(id);
-            let label = self.it.span_text(sc.rules[i].trigger.span);
-            let kind = if sc.rules[i].kind == RuleKind::When {
+            let label = self.it.span_text(rules[i].trigger.span);
+            let kind = if rules[i].kind == RuleKind::When {
                 "when"
             } else {
                 "whenever"
@@ -1241,8 +1451,7 @@ impl Runtime {
                     }
                     self.tasks.insert(id, t);
                 }
-                Step::Blocked(Req::Act(req)) if Interp::undeclared_channel(&t) => {
-                    let _ = req;
+                Step::Blocked(Req::Act(req)) if Interp::undeclared_channel(&t, &req.shape) => {
                     return Err(Diagnostic::new(
                         "E-CAP-003",
                         "an action touched the `body` channel but its `uses` line does not declare it",
@@ -1823,6 +2032,8 @@ impl Runtime {
     }
 
     fn end_scene(&mut self) -> Res<()> {
+        self.it.shot_name = None;
+        self.it.transition = None;
         // tasks still running when the scene ends are cancelled: they run their `finally:` blocks
         let left: Vec<u32> = self.tasks.keys().copied().collect();
         for id in left {

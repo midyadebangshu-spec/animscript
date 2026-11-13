@@ -261,6 +261,33 @@ pub enum SceneLen {
     Expr(Expr),
 }
 
+/// How a shot ends (spec 9).
+#[derive(Clone, Debug)]
+pub enum ShotEnd {
+    For(Expr),
+    Until(Expr),
+    Auto,
+}
+
+#[derive(Clone, Debug)]
+pub struct Shot {
+    pub name: String,
+    pub end: ShotEnd,
+    pub body: Block,
+    /// `when`/`whenever` rules written inside the shot: active only while it is current.
+    pub rules: Vec<Rule>,
+    pub span: Span,
+}
+
+/// An item of a scene's `shots:` block.
+#[derive(Clone, Debug)]
+pub enum ShotItem {
+    Shot(Shot),
+    Cut,
+    Dissolve(Expr),
+    FadeThrough(Expr, Expr),
+}
+
 #[derive(Clone, Debug)]
 pub struct Scene {
     pub name: String,
@@ -270,6 +297,7 @@ pub struct Scene {
     pub timeline: Vec<KeyBlock>,
     /// `marker "name" at TIME` lines of the timeline.
     pub markers: Vec<(String, Expr, Span)>,
+    pub shots: Vec<ShotItem>,
     pub rules: Vec<Rule>,
     pub span: Span,
 }

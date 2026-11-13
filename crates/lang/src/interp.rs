@@ -293,6 +293,11 @@ pub struct Interp {
     pub rig_sim: Option<crate::rig::RigSim>,
     /// The transforms the layer stack resolved on the last tick; what expressions read as "now".
     pub live_tf: BTreeMap<String, Transform>,
+    /// The running scene's length in frames (`None` for `for auto`).
+    pub scene_frames: Option<i64>,
+    /// The current shot and any transition in progress, for the snapshot.
+    pub shot_name: Option<String>,
+    pub transition: Option<crate::snapshot::Transition>,
     /// Last solved bone poses `(head, tip, angle)` keyed `armature.bone`.
     pub rig_live: BTreeMap<String, (P, P, f64)>,
     pub derived: Vec<crate::derive::DerivedFlag>,
@@ -384,6 +389,9 @@ impl Interp {
             rigs: BTreeMap::new(),
             rig_sim: None,
             live_tf: BTreeMap::new(),
+            scene_frames: None,
+            shot_name: None,
+            transition: None,
             rig_live: BTreeMap::new(),
             derived: vec![],
             flag_hist: BTreeMap::new(),
@@ -405,6 +413,12 @@ impl Interp {
             it.seed = p.seed;
             it.background = p.background;
         }
+        // the camera: a hidden pseudo-shape whose position (offset from the canvas centre), scale (zoom) and
+        // rotation are animated like any shape's
+        let mut cam = line([0.0, 0.0], [1.0, 0.0]);
+        cam.name = "camera".to_string();
+        cam.visible = false;
+        it.shapes.insert("camera".to_string(), cam);
         for e in &program.entities {
             if it.entities.contains_key(&e.name) {
                 return Err(Diagnostic::new(
@@ -455,8 +469,10 @@ impl Interp {
         Ok(())
     }
 
-    /// True when the innermost action call declared `uses` without `body` (native shape actions use `body`).
-    pub fn undeclared_channel(t: &Task) -> bool {
+    /// True when the innermost action call declared `uses` without the channel a native action needs.
+    pub fn undeclared_channel(t: &Task, shape: &str) -> bool {
+        // the camera's motion is on its `frame` channel, everything else's on `body`
+        let want = if shape == "camera" { "frame" } else { "body" };
         t.frames
             .iter()
             .rev()
@@ -464,7 +480,7 @@ impl Interp {
                 Frame::Call { uses, .. } => Some(uses),
                 _ => None,
             })
-            .is_some_and(|u| !u.is_empty() && !u.iter().any(|c| c == "body"))
+            .is_some_and(|u| !u.is_empty() && !u.iter().any(|c| c == want))
     }
 
     /// Run a `finally:` body: zero-time statements only, with a copy of the task's variables.
@@ -1180,6 +1196,7 @@ impl Interp {
     }
 
     fn set_style(&mut self, shape: &str, prop: &str, value: Value) -> Res<()> {
+        let canvas = self.canvas;
         let sh = self.shapes.get_mut(shape).unwrap();
         match (prop, &value) {
             ("fill", Value::Color(c)) => sh.fill = Some(*c),
@@ -1197,7 +1214,8 @@ impl Interp {
             ("opacity", v) if v.as_f64().is_some() => sh.opacity = v.as_f64().unwrap().clamp(0.0, 1.0),
             ("tint", Value::Color(c)) => sh.tint = *c,
             ("position", Value::Tuple(t)) if t.len() == 2 && t.iter().all(|x| x.as_f64().is_some()) => {
-                sh.position = [t[0].as_f64().unwrap(), t[1].as_f64().unwrap()]
+                let off = if shape == "camera" { [canvas.0 as f64 / 2.0, canvas.1 as f64 / 2.0] } else { [0.0, 0.0] };
+                sh.position = [t[0].as_f64().unwrap() - off[0], t[1].as_f64().unwrap() - off[1]]
             }
             ("scale", v) if v.as_f64().is_some() => sh.scale = [v.as_f64().unwrap(); 2],
             ("scale", Value::Tuple(t)) if t.len() == 2 && t.iter().all(|x| x.as_f64().is_some()) => {
@@ -1740,6 +1758,16 @@ impl Interp {
         if let Some(d) = dirs.iter().find(|d| d.0 == n) {
             return Ok(Value::Tuple(vec![Value::Num(d.1), Value::Num(d.2)]));
         }
+        let sizes = [
+            ("extreme_close", 0.90),
+            ("close", 0.60),
+            ("medium", 0.35),
+            ("wide", 0.15),
+            ("establishing", 0.0),
+        ];
+        if let Some(z) = sizes.iter().find(|z| z.0 == n) {
+            return Ok(Value::Num(z.1));
+        }
         if n == "canvas" {
             return Ok(Value::Rect([
                 0.0,
@@ -1806,6 +1834,20 @@ impl Interp {
                     return Ok(v);
                 }
                 let live = self.live_tf.get(&sn).copied();
+                if sn == "camera" {
+                    let t = live.unwrap_or_else(|| self.shapes[&sn].transform());
+                    match name {
+                        "position" => {
+                            return Ok(Value::Tuple(vec![
+                                Value::Num(self.canvas.0 as f64 / 2.0 + t.position[0]),
+                                Value::Num(self.canvas.1 as f64 / 2.0 + t.position[1]),
+                            ]))
+                        }
+                        "zoom" => return Ok(Value::Num(t.scale[0])),
+                        "rotation" => return Ok(Value::Angle(t.rotation)),
+                        _ => {}
+                    }
+                }
                 let sh = &self.shapes[&sn];
                 if let Some((k, id)) = parse_elem_name(name) {
                     return Ok(Value::Elem(sn.clone(), sh.get_ref(k, id)?));
@@ -1926,6 +1968,16 @@ impl Interp {
                 _ => Err(
                     Diagnostic::new("E-NAM-003", format!("`scene` has no event `{name}`"))
                         .help("this build supports `scene.starts`"),
+                ),
+            },
+            Value::Rect(r) => match name {
+                "x" => Ok(Value::Num(r[0])),
+                "y" => Ok(Value::Num(r[1])),
+                "w" | "width" => Ok(Value::Num(r[2])),
+                "h" | "height" => Ok(Value::Num(r[3])),
+                _ => Err(
+                    Diagnostic::new("E-NAM-003", format!("a region has no member `{name}`"))
+                        .help("members: x, y, w, h"),
                 ),
             },
             Value::Armature(arm) => self.armature_member(&arm, name),
@@ -2335,6 +2387,34 @@ impl Interp {
                 };
                 Ok(Value::Bool(self.events.contains(&format!("marker:{n}"))))
             }
+            "bounds" | "anchor" => {
+                let m = self.bind(name, args, &["of"], &["of"])?;
+                match (&m["of"], name) {
+                    (Value::Shape(sn), "bounds") => {
+                        let sh = &self.shapes[sn];
+                        let t = self.live_tf.get(sn).copied().unwrap_or_else(|| sh.transform());
+                        let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+                        for id in sh.live_ids(Kind::V) {
+                            let p = t.apply(sh.pos(id));
+                            for k in 0..2 {
+                                lo[k] = lo[k].min(p[k]);
+                                hi[k] = hi[k].max(p[k]);
+                            }
+                        }
+                        if lo[0] > hi[0] {
+                            return Ok(Value::Rect([0.0, 0.0, 0.0, 0.0]));
+                        }
+                        Ok(Value::Rect([lo[0], lo[1], hi[0] - lo[0], hi[1] - lo[1]]))
+                    }
+                    (Value::Shape(_), _) => self.call_function("center", vec![(None, m["of"].clone())], _mode),
+                    (Value::Tuple(_), "anchor") => Ok(m["of"].clone()),
+                    (Value::Tuple(_), "bounds") => {
+                        let p = self.point(&m["of"], "a point")?;
+                        Ok(Value::Rect([p[0], p[1], 0.0, 0.0]))
+                    }
+                    (other, _) => Err(type_err(format!("`{name}` needs a shape{}, found {}", if name == "anchor" { " or a point" } else { "" }, other.type_name()))),
+                }
+            }
             "cubic_bezier" => {
                 let m = self.bind(name, args, &["x1", "y1", "x2", "y2"], &["x1", "y1", "x2", "y2"])?;
                 let n = |k: &str| self.num(&m[k], "a `cubic_bezier` value");
@@ -2425,6 +2505,13 @@ impl Interp {
                 self.pick_overload(name, &cands, &obj)?
             };
             return self.call_def(&def, args, Some(obj), mode);
+        }
+        if let (Value::SceneObj, "ends_in") = (&obj, name) {
+            let m = self.bind(name, args, &["d"], &["d"])?;
+            let n = self.frames_of(&m["d"], span)?;
+            return Ok(Value::Bool(
+                self.scene_frames.is_some_and(|f| self.tick >= f - n),
+            ));
         }
         if name == "play_clip" {
             return self.play_clip(obj, args, mode);
@@ -3060,6 +3147,34 @@ fn root_name_of(e: &Expr) -> Option<&str> {
 }
 
 impl Interp {
+    /// A camera `position` is the centre of the view in canvas coordinates, stored as an offset from the canvas
+    /// centre. Converts an absolute target to the stored offset (other shapes: unchanged).
+    pub(crate) fn cam_off(&self, sn: &str, prop: PropId, v: f64) -> f64 {
+        if sn != "camera" {
+            return v;
+        }
+        match prop {
+            PropId::PosX => v - self.canvas.0 as f64 / 2.0,
+            PropId::PosY => v - self.canvas.1 as f64 / 2.0,
+            _ => v,
+        }
+    }
+
+    /// The zoom of the camera stays in [1, 8] (`E-CAM-001`).
+    pub(crate) fn check_zoom(&self, sn: &str, prop: PropId, v: f64) -> Res<()> {
+        if sn == "camera"
+            && matches!(prop, PropId::ScaleX | PropId::ScaleY)
+            && !(1.0..=8.0).contains(&v)
+        {
+            return Err(Diagnostic::new(
+                "E-CAM-001",
+                format!("a camera zoom of {v} is outside 1 to 8"),
+            )
+            .help("1 shows the whole canvas; 8 shows an eighth of its width and height"));
+        }
+        Ok(())
+    }
+
     /// Pivots default to the bounding-box centre when the build phase ends.
     pub fn freeze_pivots(&mut self) {
         for sh in self.shapes.values_mut() {
@@ -3076,13 +3191,30 @@ impl Interp {
         mode: Mode,
         span: Span,
     ) -> Res<Value> {
+        let mut conv = Vec::with_capacity(comps.len());
+        for (prop, t) in comps {
+            conv.push(match t {
+                Tgt::To(v) => {
+                    self.check_zoom(sn, prop, v)?;
+                    (prop, Tgt::To(self.cam_off(sn, prop, v)))
+                }
+                by => (prop, by),
+            });
+        }
+        let comps = conv;
         match self.over_frames(m, mode, span)? {
             Some((frames, ease)) => Ok(Value::Pending(Box::new(ActionReq {
                 shape: sn.to_string(),
                 label: format!("{sn}.{label}"),
                 frames,
                 ease,
-                channels: vec![BODY],
+                // the camera's position, zoom and rotation are separate channels, so a pan and a zoom run together
+                channels: vec![match (sn, comps.first().map(|c| c.0)) {
+                    ("camera", Some(PropId::PosX | PropId::PosY)) => u32::MAX - 1,
+                    ("camera", Some(PropId::ScaleX | PropId::ScaleY)) => u32::MAX - 2,
+                    ("camera", Some(PropId::Rot)) => u32::MAX - 3,
+                    _ => BODY,
+                }],
                 comps,
                 motions: vec![],
             }))),
@@ -3201,7 +3333,7 @@ impl Interp {
         };
         match target {
             Value::Shape(sn) => {
-                let s = |p: PropId, x: f64| (sn.clone(), p, x);
+                let s = |p: PropId, x: f64| (sn.clone(), p, self.cam_off(sn, p, x));
                 Ok(match (p0, comp) {
                     ("position", None) => {
                         let p = pair(val)?;

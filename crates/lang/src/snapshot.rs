@@ -134,9 +134,17 @@ pub fn build_snapshot(
         "tick": tick, "project_tick": project_tick, "scene": scene,
         "canvas": [it.canvas.0, it.canvas.1],
         "background": it.background.map(hex),
-        "camera": {"position": [it.canvas.0 as f64 / 2.0, it.canvas.1 as f64 / 2.0], "zoom": 1.0, "rotation": 0.0},
+        "camera": camera_view(it, resolved).to_json(),
         "entities": entities, "shapes": shapes,
     });
+    if let Some(name) = &it.shot_name {
+        snap["shot"] = json!(name);
+    }
+    if let Some(tr) = &it.transition {
+        let t = ((tick - tr.start) as f64 / tr.dur.max(1) as f64).clamp(0.0, 1.0);
+        snap["transition"] =
+            json!({"kind": tr.kind, "t": t, "color": tr.color, "from": tr.from.to_json()});
+    }
     if let Some(p) = &resolved.physics {
         snap["physics"] = p.clone();
     }
@@ -266,4 +274,46 @@ fn textured_triangles(sh: &Shape, ov: Option<&BTreeMap<u32, P>>, tf: &Transform)
         }
     }
     out
+}
+
+/// Where the camera looks: the centre of the view in canvas coordinates, the zoom (1 to 8) and the rotation (turns).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CamView {
+    pub position: [f64; 2],
+    pub zoom: f64,
+    pub rotation: f64,
+}
+
+impl CamView {
+    pub fn to_json(&self) -> J {
+        json!({"position": self.position, "zoom": self.zoom, "rotation": self.rotation})
+    }
+}
+
+/// A `dissolve` or `fade_through` between shots: the camera view it started from is kept while it runs.
+#[derive(Clone, Debug)]
+pub struct Transition {
+    pub kind: String,
+    pub color: Option<String>,
+    pub start: i64,
+    pub dur: i64,
+    pub from: CamView,
+}
+
+/// The camera as the layers resolved it this tick.
+pub fn camera_view(it: &Interp, resolved: &Resolved) -> CamView {
+    let sh = &it.shapes["camera"];
+    let t = resolved
+        .tf
+        .get("camera")
+        .copied()
+        .unwrap_or_else(|| sh.transform());
+    CamView {
+        position: [
+            it.canvas.0 as f64 / 2.0 + t.position[0],
+            it.canvas.1 as f64 / 2.0 + t.position[1],
+        ],
+        zoom: t.scale[0].clamp(1.0, 8.0),
+        rotation: t.rotation,
+    }
 }

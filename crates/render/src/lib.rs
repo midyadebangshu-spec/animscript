@@ -63,8 +63,42 @@ pub fn render(snapshot: &Value, scale: f32, debug: bool) -> Result<Pixmap, Strin
     render_with(snapshot, scale, debug, false)
 }
 
+/// How canvas points land on the picture: the camera (centre, zoom, rotation) and the output scale. `tf` maps
+/// points; `k` multiplies lengths (radii) for the drawing that works in pixels.
+#[derive(Clone, Copy)]
+struct View {
+    tf: Transform,
+    k: f32,
+}
+
+impl View {
+    fn pt(&self, x: f32, y: f32) -> (f32, f32) {
+        let t = &self.tf;
+        (t.sx * x + t.kx * y + t.tx, t.ky * x + t.sy * y + t.ty)
+    }
+}
+
+/// The view of a camera object `{position, zoom, rotation}` (turns) on a canvas of `cw` x `ch`, at output `scale`.
+fn camera_view(cam: &Value, cw: f32, ch: f32, scale: f32) -> View {
+    let pos = (
+        cam["position"][0].as_f64().unwrap_or(cw as f64 / 2.0) as f32,
+        cam["position"][1].as_f64().unwrap_or(ch as f64 / 2.0) as f32,
+    );
+    let zoom = cam["zoom"].as_f64().unwrap_or(1.0).clamp(1.0, 8.0) as f32;
+    let rot = cam["rotation"].as_f64().unwrap_or(0.0) as f32 * 360.0;
+    let tf = Transform::from_translate(-pos.0, -pos.1)
+        .post_scale(zoom, zoom)
+        .post_rotate(-rot)
+        .post_translate(cw / 2.0, ch / 2.0)
+        .post_scale(scale, scale);
+    View {
+        tf,
+        k: scale * zoom,
+    }
+}
+
 /// Foam and spray: small white specks that fade with age.
-fn draw_foam(pm: &mut Pixmap, fl: &Value, scale: f32) {
+fn draw_foam(pm: &mut Pixmap, fl: &Value, view: &View) {
     let spacing = fl["spacing"].as_f64().unwrap_or(8.0);
     let mut paint = Paint {
         anti_alias: true,
@@ -77,8 +111,9 @@ fn draw_foam(pm: &mut Pixmap, fl: &Value, scale: f32) {
             f[2].as_f64().unwrap_or(0.0).clamp(0.0, 1.0) as f32,
         );
         paint.set_color(Color::from_rgba(1.0, 1.0, 1.0, (1.0 - t) * 0.95).unwrap_or(Color::WHITE));
-        let radius = ((0.3 * spacing) as f32 * (1.0 - 0.5 * t)).max(1.0) * scale;
-        if let Some(c) = PathBuilder::from_circle(x * scale, y * scale, radius) {
+        let radius = ((0.3 * spacing) as f32 * (1.0 - 0.5 * t)).max(1.0) * view.k;
+        let (x, y) = view.pt(x, y);
+        if let Some(c) = PathBuilder::from_circle(x, y, radius) {
             pm.fill_path(&c, &paint, FillRule::Winding, Transform::identity(), None);
         }
     }
@@ -194,10 +229,10 @@ fn draw_image(
 }
 
 /// The foam of the fluids on one side (`behind` or in front), drawn after their surfaces.
-fn draw_fluid_foam(pm: &mut Pixmap, fluids: &Value, scale: f32, behind: bool) {
+fn draw_fluid_foam(pm: &mut Pixmap, fluids: &Value, view: &View, behind: bool) {
     for fl in fluids.as_array().into_iter().flatten() {
         if fl["behind"].as_bool().unwrap_or(false) == behind {
-            draw_foam(pm, fl, scale);
+            draw_foam(pm, fl, view);
         }
     }
 }
@@ -205,7 +240,7 @@ fn draw_fluid_foam(pm: &mut Pixmap, fluids: &Value, scale: f32, behind: bool) {
 /// Draw the fluids of a snapshot: `blob` rasterises a smooth density field of the particles
 /// (shaded from the surface colour to the deep colour by depth under the surface), `dots` draws
 /// overlapping circles. Only `behind` or only front fluids are drawn, as asked.
-fn draw_fluids(pm: &mut Pixmap, fluids: &Value, scale: f32, behind: bool) {
+fn draw_fluids(pm: &mut Pixmap, fluids: &Value, view: &View, behind: bool) {
     for fl in fluids.as_array().into_iter().flatten() {
         if fl["behind"].as_bool().unwrap_or(false) != behind {
             continue;
@@ -266,11 +301,10 @@ fn draw_fluids(pm: &mut Pixmap, fluids: &Value, scale: f32, behind: bool) {
             for (p, d) in pts.iter().zip(&depth) {
                 let c = mix(*d);
                 paint.set_color(Color::from_rgba(c[0], c[1], c[2], c0.alpha()).unwrap_or(c0));
-                if let Some(circle) = PathBuilder::from_circle(
-                    p.0 as f32 * scale,
-                    p.1 as f32 * scale,
-                    (0.75 * spacing) as f32 * scale,
-                ) {
+                let (cx, cy) = view.pt(p.0 as f32, p.1 as f32);
+                if let Some(circle) =
+                    PathBuilder::from_circle(cx, cy, (0.75 * spacing) as f32 * view.k)
+                {
                     pm.fill_path(
                         &circle,
                         &paint,
@@ -284,7 +318,7 @@ fn draw_fluids(pm: &mut Pixmap, fluids: &Value, scale: f32, behind: bool) {
         }
         let (w, h) = (pm.width() as i32, pm.height() as i32);
         let smooth = fl["smoothness"].as_f64().unwrap_or(1.4).clamp(0.8, 4.0);
-        let r = (smooth * spacing) as f32 * scale;
+        let r = (smooth * spacing) as f32 * view.k;
         // the field value of a particle in the middle of a perfect lattice: thresholds are relative to
         // it, so the surface sits at the same fraction of a full density whatever the radius
         let lattice: f32 = (-4i32..=4)
@@ -301,7 +335,7 @@ fn draw_fluids(pm: &mut Pixmap, fluids: &Value, scale: f32, behind: bool) {
         let r2 = r * r;
         let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
         for p in &pts {
-            let (x, y) = (p.0 as f32 * scale, p.1 as f32 * scale);
+            let (x, y) = view.pt(p.0 as f32, p.1 as f32);
             x0 = x0.min((x - r).floor() as i32);
             y0 = y0.min((y - r).floor() as i32);
             x1 = x1.max((x + r).ceil() as i32);
@@ -315,7 +349,7 @@ fn draw_fluids(pm: &mut Pixmap, fluids: &Value, scale: f32, behind: bool) {
         let mut field = vec![0f32; bw * (y1 - y0 + 1) as usize];
         let mut dsum = vec![0f32; field.len()];
         for (p, d) in pts.iter().zip(&depth) {
-            let (cx, cy) = (p.0 as f32 * scale, p.1 as f32 * scale);
+            let (cx, cy) = view.pt(p.0 as f32, p.1 as f32);
             let (ax, bx) = (
                 ((cx - r).floor() as i32).max(x0),
                 ((cx + r).ceil() as i32).min(x1),
@@ -486,9 +520,71 @@ pub fn render_with(
     )
 }
 
-/// Like `render_with`, loading pictures (PNG files named by the snapshot) relative to `base`.
+/// Like `render_with`, loading pictures (PNG files named by the snapshot) relative to `base`. The camera of the
+/// snapshot is applied; during a `dissolve` or `fade_through` both camera views are drawn and blended.
 pub fn render_assets(
     snapshot: &Value,
+    scale: f32,
+    debug: bool,
+    debug_physics: bool,
+    base: &std::path::Path,
+) -> Result<Pixmap, String> {
+    let tr = &snapshot["transition"];
+    if !tr.is_object() {
+        return render_view(
+            snapshot,
+            &snapshot["camera"],
+            scale,
+            debug,
+            debug_physics,
+            base,
+        );
+    }
+    let t = tr["t"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0) as f32;
+    let mut from = render_view(snapshot, &tr["from"], scale, debug, debug_physics, base)?;
+    let mut to = render_view(
+        snapshot,
+        &snapshot["camera"],
+        scale,
+        debug,
+        debug_physics,
+        base,
+    )?;
+    if tr["kind"].as_str() == Some("fade_through") {
+        let c = tr["color"]
+            .as_str()
+            .and_then(parse_hex)
+            .unwrap_or(Color::BLACK);
+        let col = [c.red(), c.green(), c.blue()];
+        // the old view fades to the colour in the first half, the new one comes out of it in the second
+        if t < 0.5 {
+            blend_towards(&mut from, col, t * 2.0);
+            Ok(from)
+        } else {
+            blend_towards(&mut to, col, 2.0 - t * 2.0);
+            Ok(to)
+        }
+    } else {
+        for (a, b) in from.data_mut().iter_mut().zip(to.data()) {
+            *a = (*a as f32 * (1.0 - t) + *b as f32 * t + 0.5) as u8;
+        }
+        Ok(from)
+    }
+}
+
+/// Mix every pixel towards an opaque colour by `u` (0 leaves the picture, 1 is the colour).
+fn blend_towards(pm: &mut Pixmap, col: [f32; 3], u: f32) {
+    for px in pm.data_mut().chunks_mut(4) {
+        for k in 0..3 {
+            px[k] = (px[k] as f32 * (1.0 - u) + col[k] * 255.0 * u + 0.5) as u8;
+        }
+        px[3] = (px[3] as f32 * (1.0 - u) + 255.0 * u + 0.5) as u8;
+    }
+}
+
+fn render_view(
+    snapshot: &Value,
+    cam: &Value,
     scale: f32,
     debug: bool,
     debug_physics: bool,
@@ -508,10 +604,11 @@ pub fn render_assets(
             .and_then(parse_hex)
             .unwrap_or(Color::WHITE),
     );
-    let tf = Transform::from_scale(scale, scale);
+    let view = camera_view(cam, cw, ch, scale);
+    let tf = view.tf;
     let mut textures: std::collections::HashMap<String, Option<Pixmap>> = Default::default();
-    draw_fluids(&mut pm, &snapshot["fluids"], scale, true);
-    draw_fluid_foam(&mut pm, &snapshot["fluids"], scale, true);
+    draw_fluids(&mut pm, &snapshot["fluids"], &view, true);
+    draw_fluid_foam(&mut pm, &snapshot["fluids"], &view, true);
     for sh in snapshot["shapes"]
         .as_array()
         .map(|v| v.as_slice())
@@ -568,8 +665,8 @@ pub fn render_assets(
             }
         }
     }
-    draw_fluids(&mut pm, &snapshot["fluids"], scale, false);
-    draw_fluid_foam(&mut pm, &snapshot["fluids"], scale, false);
+    draw_fluids(&mut pm, &snapshot["fluids"], &view, false);
+    draw_fluid_foam(&mut pm, &snapshot["fluids"], &view, false);
     for em in snapshot["particles"].as_array().into_iter().flatten() {
         for it in em["items"].as_array().into_iter().flatten() {
             let Some(color) = it[3].as_str().and_then(parse_hex) else {

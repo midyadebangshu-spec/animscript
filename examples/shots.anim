@@ -1,0 +1,56 @@
+project "Camera and shots":
+    anim_version: "0.1"
+    canvas: 800x600
+    fps: 24
+    background: #bfe3f5
+
+import "std/2d"
+
+# ---- a small garden ---------------------------------------------------------------------------------------------------
+shape hill = rectangle(width: 1000, height: 220, at: (400, 520))
+hill.fill = #7bb661
+shape stem = rectangle(width: 8, height: 90, at: (600, 450))
+stem.fill = #3d7a3a
+shape rose = circle(24, radius: 30, at: (600, 390))
+rose.fill = #d6336c
+shape heart = circle(24, radius: 10, at: (600, 390))
+heart.fill = #f783ac
+shape sun = circle(32, radius: 46, at: (130, 110))
+sun.fill = #ffe066
+shape cloud = rectangle(width: 150, height: 40, at: (380, 120))
+cloud.fill = #ffffff
+shape bird = circle(24, radius: 16, at: (140, 300))
+bird.fill = #f08c00
+shape beak = triangle(size: 12, at: (160, 300))
+beak.fill = #e8590c
+
+scene "Garden" for 15.seconds:
+    timeline:
+        marker "landed" at 8.seconds
+
+    shots:
+        # the whole set
+        shot "Establishing" for 2.seconds:
+            camera.frame(establishing)
+        cut
+        # the rose, on the left third of the frame, so the bird has room to arrive
+        shot "Rose" for 3.seconds:
+            camera.frame(medium, on: rose, thirds: right, over: 1.second)
+        dissolve 0.8.seconds
+        # follow the bird as it flies in
+        shot "Follow the bird" until marker("landed"):
+            camera.zoom_to(1.6, over: 1.second)
+            camera.follow(bird, lag: 6.frames)
+        fade_through #000000 1.second
+        shot "Close" auto:
+            camera.frame(close, on: rose)
+            camera.hold(2.seconds)
+            when scene.ends_in(1.second):
+                camera.shake(3, over: 0.5.seconds)
+
+    main:
+        attach beak to bird
+        # the world does not wait for the camera: the bird flies the whole time
+        bird.fly_to((560, 410), over: 6.seconds, irregularity: 0.25)
+        bird.fly_to((600, 440), over: 1.5.seconds)
+        wait 20.seconds

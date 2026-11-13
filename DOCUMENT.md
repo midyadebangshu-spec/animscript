@@ -1889,6 +1889,59 @@ points (`center(thing)` to aim at a shape). The directions `up`, `down`, `left`,
 
 Worked example: `examples/clips.anim`.
 
+## 13m. Camera and shots (round L4)
+
+There is one camera, `camera` (built in). Its `position` is the centre of the view in canvas coordinates (an 800x600
+canvas starts at `(400, 300)`), `zoom` is 1 to 8 (`1` shows the whole canvas; outside the range is `E-CAM-001`,
+except through keyframes and modifiers, which are clamped) and `rotation` is an angle (a positive turn is clockwise,
+so the world turns the other way). It is animated like a shape (`camera.move_to`, `scale_to`, keyframes, `noise`),
+and every scene starts with the camera reset. A shape cannot be named `camera`.
+
+With `import "std/2d"` the camera gets its actions, all on the `frame` channel (so they take turns):
+
+```anim
+camera.frame(medium, on: rose, thirds: left)      # instant set-up; add `over: 1.second` to animate it
+camera.pan_to(rose, over: 1.second, ease: ease_in_out)      # a shape (its centre) or a point
+camera.zoom_to(2.0, over: 1.second)
+camera.hold(2.seconds)                           # occupies the channel without moving
+camera.follow(bird, lag: 8.frames)               # trails the target until cancelled
+camera.shake(2, over: 0.5.seconds)               # seeded and additive; shares the channel
+```
+
+Shot sizes are numbers: `extreme_close` 0.90, `close` 0.60, `medium` 0.35, `wide` 0.15 (the fraction of the frame
+height the target's bounds fill) and `establishing` (the whole canvas). `thirds` takes `left`, `right`, `up` or `down`.
+`bounds(shape)` is the current rectangle of a shape (members `x y w h`), `anchor(shape or point)` its centre.
+
+```anim
+scene "Garden" for 15.seconds:
+    shots:
+        shot "Establishing" for 2.seconds:
+            camera.frame(establishing)
+        cut
+        shot "Rose" for 3.seconds:
+            camera.frame(medium, on: rose, thirds: right, over: 1.second)
+        dissolve 0.8.seconds
+        shot "Follow" until marker("landed"):          # any trigger: a flag, a derived flag, a marker, ...
+            camera.follow(bird, lag: 6.frames)
+        fade_through #000000 1.second
+        shot "End" auto:                               # ends when its body finishes
+            camera.hold(2.seconds)
+            when scene.ends_in(1.second):               # rules are active only while their shot is current
+                camera.shake(3, over: 0.5.seconds)
+```
+
+- A shot is a camera set-up that lasts a while; **it is not a cut in time**, the world keeps running. Its body runs
+  as a task; when the shot ends the task is stopped (its camera actions keep their last value) and so are the
+  rules written inside it. `cut` (also the default between shots) is instant; `dissolve D` and `fade_through
+  COLOR D` blend the old and the new view for `D` while the new shot is already running.
+- `scene.ends_in(D)` is true for the last `D` of a scene that has a set length.
+- The snapshot has `camera`, the name of the current `shot` and, during a transition, `transition {kind, t, color,
+  from}`; the renderer draws the world with both cameras and cross-fades (or fades through the colour).
+- A scene without `shots:` stays on the establishing view. Errors: `E-CAM-001`; a shot needs `for`, `until` or `auto`
+  (`E-SYN-001`).
+
+Worked example: `examples/shots.anim`.
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,

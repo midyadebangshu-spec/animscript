@@ -903,4 +903,39 @@ judgement calls I expect you to want to look at.
     `fly_to` move frame by frame with a seeded sway from `noise(self.name, ...)`, so they are deterministic and differ
     between shapes. Directions are built-in names (like `canvas`), resolved after user names. The camera actions
     (`hold`, `pan_to`, `zoom_to`, `follow`, `shake`) are for the camera round, and `std/motion` is unchanged.
+192. **The camera is a pseudo-shape.** A hidden shape named `camera` (made with the other shapes, so the name is taken)
+    whose transform is the camera: `position` is stored as an offset from the canvas centre, `scale` is the zoom and
+    `rotation` the roll, so actions, keyframes, modifiers, locks and the layer fold all work. At the edges the
+    absolute convention is kept: `move_to`, assignments and keys convert a position to the offset (`cam_off`),
+    `camera.position` reads the centre, `camera.zoom` and `camera.rotation` read the others. Zoom set by a timed or
+    instant action outside [1, 8] is `E-CAM-001`; the value written to the snapshot is always clamped, so keys and
+    modifiers cannot break the picture. Position, zoom and rotation actions use three separate native channels, so a
+    single user action can run them together; the user-visible `frame` channel makes separate actions take turns.
+193. **Camera actions are library code.** `std/2d` defines `pan_to`, `zoom_to`, `hold`, `follow`, `shake`, `frame` for
+    `self: Camera` (a new type that only the camera satisfies). `follow` smooths: every frame it closes the gap to the
+    target by `1 / lag` (lag 8.frames is a time constant, not a delayed copy), so it never overshoots. `shake` is the
+    seeded `noise` modifier on position and shares the channel. `frame(size, on:, thirds:, over:)`: zoom is `size *
+    canvas height / bounds height` clamped to 1..8 (unchanged for a point), the centre is the target's anchor moved
+    by a sixth of the view per third, `establishing` (size 0) is the whole canvas, and `over` zero is instant.
+    New built-ins: `bounds` (a rectangle with members x y w h), `anchor`, the five size names, and the camera
+    properties above. A zero `over` is instant in `pan_to` and `zoom_to` too.
+194. **Shots.** `shots:` holds `shot "name" for D | until TRIGGER | auto:` items with `cut`, `dissolve D` and
+    `fade_through COLOR D` between them (no item between two shots is a cut). The runtime starts the first shot in the
+    first delta of the scene, and the shot's body as its own task; the shot's end is checked at the start of every
+    delta (`for`: the frames since it began; `until`: the trigger's rising edge; `auto`: the body task is gone).
+    Ending cancels the body task and the rule tasks of that shot, then the next shot starts in the same delta (so
+    several zero-length shots chain), with any transition recorded first. After the last shot the camera stays as it
+    was and the shot name is cleared. `when`/`whenever` inside a shot belong to it: their memory is reset each time
+    the shot is current, they do not fire otherwise, and a trigger that is already true when the shot begins fires.
+195. **Transitions.** The runtime keeps the camera view at the moment the shots changed (`from`), the kind, colour and
+    length in frames; the snapshot reports `t` as progress in 0..1 and drops the object when it is over. The new
+    shot runs from the first frame of the transition (spec: the dissolve is blocking and blends both views). The
+    renderer draws the same world twice, once per camera, and mixes the pictures pixel by pixel: a dissolve linearly,
+    a `fade_through` as old view to colour in the first half and colour to new view in the second.
+196. **Rendering with a camera.** All drawing goes through one `View` (output scale after zoom, rotation and
+    centring): shapes, pictures, particles, the physics overlay and the fluid and foam drawing (which works in
+    pixels and maps centres and radii with it), so vector art stays sharp when zoomed; stroke widths scale with the
+    zoom. A positive rotation turns the world anticlockwise on the picture (the camera rolls clockwise).
+197. **`scene.ends_in(d)`** is true when the tick is at or past `length - frames(d)` of a scene with a set length; it is
+    always false for `for auto`.
 
