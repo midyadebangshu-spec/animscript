@@ -51,5 +51,7 @@ Trivial single-step edits (e.g. fixing a typo) do not need a plan.
 - Lint/format: `cargo clippy --all-targets` and `cargo fmt`
 - Editor: `cargo run -p anim-editor -- file.anim`; its tests: `cargo test -p anim-editor` (plain
   `cargo build` / `cargo test` skip the editor; add `--workspace` to include it)
+- Release: `.github/workflows/release.yml` builds `anim-editor` and `anim` for Linux and Windows
+  (cross-compiled with MinGW) when a `v*` tag is pushed and attaches the archives to a GitHub Release
 - Editor on a machine without a display: `xvfb-run -a target/debug/anim-editor file.anim` (needs
   `libxkbcommon-x11-0`); `import -window root shot.png` takes a picture of it
