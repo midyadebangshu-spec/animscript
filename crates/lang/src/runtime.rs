@@ -303,6 +303,7 @@ impl Runtime {
         self.named_wait.clear();
         self.it.scene_name = sc.name.clone();
         self.it.decls.start_scene();
+        self.it.decls3.start_scene();
         self.it.reset_particles();
         self.it.reset_fluids();
         self.it.reset_fields()?;
@@ -355,6 +356,7 @@ impl Runtime {
                 }
                 self.it.freeze_pivots(); // pivots default to the bounding-box centre once building is over
                 self.it.build_physics()?; // the world starts from the shapes' poses after setup
+                self.it.build_physics3()?;
                 self.it.build_soft()?;
                 self.it.fill_fluids()?;
                 self.it.build_rigs()?;
@@ -2093,6 +2095,53 @@ impl Runtime {
             soft_snap = self.it.soft_snapshot();
             fluid_snap = self.it.fluid_snapshot();
         }
+        let mut physics3 = None;
+        let mut q3_out = BTreeMap::new();
+        if self.it.phys3.is_some() {
+            let mut kin = BTreeMap::new();
+            for n in self.it.kinematic_bodies3() {
+                let mut get = |p: PropId| {
+                    let rest = self.rest_value(&n, p);
+                    by_prop
+                        .get_mut(&(n.clone(), p))
+                        .map_or(rest, |c| fold(rest, c))
+                };
+                let pose = [
+                    get(PropId::PosX),
+                    get(PropId::PosY),
+                    get(PropId::PosZ),
+                    get(PropId::RotX),
+                    get(PropId::RotY),
+                    get(PropId::Rot),
+                ];
+                kin.insert(n.clone(), pose);
+            }
+            self.it.physics3_prepare(tick, &kin);
+            self.it.physics3_advance(tick);
+            let poses = self.it.physics3_collect();
+            for (i, (n, pos, q)) in poses.dynamic.into_iter().enumerate() {
+                for (prop, value) in [
+                    (PropId::PosX, pos[0]),
+                    (PropId::PosY, pos[1]),
+                    (PropId::PosZ, pos[2]),
+                ] {
+                    by_prop
+                        .entry((n.clone(), prop))
+                        .or_default()
+                        .push(Contribution {
+                            layer: 2,
+                            mode: BlendMode::Override,
+                            weight: 1.0,
+                            priority: 0,
+                            start: 0,
+                            id: 0x4800_0000 + i as u32,
+                            value,
+                        });
+                }
+                q3_out.insert(n, q);
+            }
+            physics3 = self.it.physics3_snapshot();
+        }
         let mut rigs_snap = None;
         if self.it.has_rigs() {
             self.it.ragdoll_poses(&mut anim_poses);
@@ -2115,6 +2164,8 @@ impl Runtime {
         }
         let mut resolved = Resolved {
             physics,
+            physics3,
+            q3: q3_out,
             rigs: rigs_snap,
             soft: soft_snap,
             fluids: fluid_snap,
@@ -2233,6 +2284,7 @@ impl Runtime {
         self.it.end_soft();
         self.it.end_fluids();
         self.it.end_physics();
+        self.it.end_physics3();
         self.it.parts.clear();
         let acts = std::mem::take(&mut self.acts);
         for a in acts.values() {

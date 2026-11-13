@@ -2212,6 +2212,30 @@ camera3.orbit(turns: 0.1, over: 10.seconds)
 - **Errors:** `E-MSH-001` bad mesh arguments.
 - **Not yet:** 3D physics, glTF/OBJ import, mesh editing.
 
+## 13t. 3D physics (round P3D)
+
+A mesh shape becomes a rigid body with the same `.body()` call 2D uses. Gravity, collisions, friction, bounce, sleeping and joints are simulated deterministically by `crates/physics3`; the body drives the mesh's `position` (x, y, z) and its orientation.
+
+```anim
+world:
+    gravity: (0, 9.8, 0)     # a 3-vector makes a 3D world (the default); scale: and substeps: work as in 2D
+shape ground = cube(width: 2600, height: 60, depth: 1800, at: (640, 630, 300))
+ground.body(kind: static)
+shape vase = lathe(profile: [(0, 0), (34, 0), (50, 62), (20, 120), (28, 152), (0, 152)], segments: 28, at: (480, 454, 120))
+vase.body(collider: "hull", density: 0.6)
+let gate_joint = hinge(post, gate, anchor: (1140, 350, 120), axis: (0, 0, 1), limits: (-80.deg, 80.deg))
+```
+
+- **`.body(...)`** takes `kind` (`static`, `dynamic`, `kinematic`), `density` (kg per cubic metre; a 100 px cube of density 1 weighs 1 kg), `friction`, `restitution`, `linear_damping`, `angular_damping`, `gravity_scale`, `fixed_rotation`, `sensor` and `collider`.
+- **Colliders:** `auto` (the default) uses a sphere for a round mesh, the convex hull for a convex one (boxes, cones, extruded convex outlines) and, for a static body that is not convex, the exact triangles. A moving body that is not convex is `E-PHY-007`; `collider: "hull"` collides as the convex hull of the mesh (it fills dents), `"sphere"` and `"capsule"` (along the mesh's y axis) are explicit. A body's `scale` must be uniform and is fixed when the scene starts.
+- **Pose:** a dynamic body writes `position.x/y/z` and a quaternion orientation; actions, keys and `rotation` on it lose to physics, and at the end of the scene the final pose is written back as ordinary rest values. A kinematic body follows `position`, `position.z` and the turns you animate and pushes dynamic bodies. Make bodies at the top level or in `setup:`.
+- **Methods:** `set_velocity((x, y, z))`, `apply_impulse((x, y, z))` (pixels per second), `set_spin((x, y, z))` (turns per second), `touches(other)`, `leaves(other)`; `whenever a.touches(b):` works as in 2D.
+- **Joints** (functions, between two mesh bodies, anchors are world points `(x, y, z)`): `ball(a, b, anchor)`, `hinge(a, b, anchor, axis, limits, motor)` (limits are angles, motor is `(speed, torque)` such as `(90.deg, 50)`), `fixed(a, b, anchor)`, `strut(a, b, length, spring: (hz, damping), anchor_a, anchor_b)` (rigid or a spring) and `tether(a, b, max, anchor_a, anchor_b)` (a rope). All take `collide: true` to let the pair collide.
+- **Floating:** `body.float(field: sea, channel: "h", level: 500, density: 2, drag: 1)` (in `setup:`) lifts the body with buoyancy from a field: the water surface at a point is `level - field value` at the point's world (x, z) (the same convention as `water.drive(y: "-sea_h", fields: [sea])`). A body lighter than `density` floats; `drag` damps what is under the water.
+- **Debug:** `anim render scene.anim -o f.png --debug-physics` draws contact points with their normals (red) and joints (blue) over the 3D view. Snapshots carry a `physics3` section (bodies, contacts, joints) only when a mesh world exists.
+- **Errors:** `E-PHY-007` bad mesh body (not convex, non-uniform scale, unknown kind or collider, a second body, `float` arguments), `E-PHY-008` bad 3D joint (a shape that is not a mesh body, a zero axis, limits the wrong way round); `W-PHY-001` bodies overlap at the start. A scene has 2D bodies or mesh bodies, not both.
+- **Limits:** no continuous collision (a very fast small body can pass through a thin one), no 3D soft bodies or particle fluids yet, no ragdolls. Worked example: `examples/crates.anim`.
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,
@@ -2244,6 +2268,7 @@ help: did you mean `over: 1.second`?
 | Properties | `E-CON-001` constraint cycle, `E-PRP-002` two locks on one component, `-003` overlapping keyframes |
 | Fields | `E-FLD-001` bad field declaration, `-002` size limit, `-003` value became infinite or NaN |
 | 3D meshes | `E-MSH-001` bad mesh or stage3 arguments |
+| 3D physics | `E-PHY-007` bad mesh body or `float`, `-008` bad 3D joint |
 | Equations | `E-MTH-001` equation syntax, `-002` construct not allowed in an equation, `-003` bad arguments, `-004` unknown or mixed drive property, `-005` non-finite value |
 | Camera / assets | `E-CAM-001` zoom outside [1, 8], `E-AST-001` asset file not found |
 | Runtime | `E-RUN-001` tick did not settle in 64 deltas, `-002` action failed or rejected, `-004` `assert` failed |

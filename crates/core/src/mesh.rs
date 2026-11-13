@@ -21,6 +21,8 @@ pub struct Transform3 {
     pub rot: [f64; 3],
     pub scale: [f64; 3],
     pub pivot: [f64; 3],
+    /// A rotation as a quaternion `[w, x, y, z]` that replaces `rot` (physics bodies keep one).
+    pub orient: Option<[f64; 4]>,
 }
 
 impl Transform3 {
@@ -30,6 +32,7 @@ impl Transform3 {
             rot: [0.0; 3],
             scale: [1.0; 3],
             pivot: [0.0; 3],
+            orient: None,
         }
     }
     pub fn apply(&self, p: [f64; 3]) -> [f64; 3] {
@@ -38,13 +41,26 @@ impl Transform3 {
             (p[1] - self.pivot[1]) * self.scale[1],
             (p[2] - self.pivot[2]) * self.scale[2],
         ];
-        let tau = std::f64::consts::TAU;
-        let (s, c) = (self.rot[1] * tau).sin_cos();
-        v = [v[0] * c + v[2] * s, v[1], -v[0] * s + v[2] * c];
-        let (s, c) = (self.rot[0] * tau).sin_cos();
-        v = [v[0], v[1] * c - v[2] * s, v[1] * s + v[2] * c];
-        let (s, c) = (self.rot[2] * tau).sin_cos();
-        v = [v[0] * c - v[1] * s, v[0] * s + v[1] * c, v[2]];
+        if let Some([w, x, y, z]) = self.orient {
+            let t = [
+                2.0 * (y * v[2] - z * v[1]),
+                2.0 * (z * v[0] - x * v[2]),
+                2.0 * (x * v[1] - y * v[0]),
+            ];
+            v = [
+                v[0] + w * t[0] + (y * t[2] - z * t[1]),
+                v[1] + w * t[1] + (z * t[0] - x * t[2]),
+                v[2] + w * t[2] + (x * t[1] - y * t[0]),
+            ];
+        } else {
+            let tau = std::f64::consts::TAU;
+            let (s, c) = (self.rot[1] * tau).sin_cos();
+            v = [v[0] * c + v[2] * s, v[1], -v[0] * s + v[2] * c];
+            let (s, c) = (self.rot[0] * tau).sin_cos();
+            v = [v[0], v[1] * c - v[2] * s, v[1] * s + v[2] * c];
+            let (s, c) = (self.rot[2] * tau).sin_cos();
+            v = [v[0] * c - v[1] * s, v[0] * s + v[1] * c, v[2]];
+        }
         [
             v[0] + self.pivot[0] + self.position[0],
             v[1] + self.pivot[1] + self.position[1],

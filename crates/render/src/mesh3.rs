@@ -528,3 +528,72 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View) {
         None,
     );
 }
+
+/// `--debug-physics` for 3D worlds: contacts are red dots with a normal line, joints blue lines
+/// between their anchors. Drawn over the finished picture, without hiding.
+pub fn draw_physics3(pm: &mut Pixmap, snapshot: &Value, tf: Transform) {
+    let (c, phys) = (&snapshot["camera3"], &snapshot["physics3"]);
+    if !c.is_object() || !phys.is_object() {
+        return;
+    }
+    let s = Screen {
+        cam: Camera {
+            eye: v3(&c["eye"]),
+            right: v3(&c["right"]),
+            down: v3(&c["down"]),
+            forward: v3(&c["forward"]),
+            focal: c["focal"].as_f64().unwrap_or(1000.0),
+            cx: c["cx"].as_f64().unwrap_or(0.0),
+            cy: c["cy"].as_f64().unwrap_or(0.0),
+        },
+        tf,
+    };
+    // the picture itself is not supersampled: undo the factor `project` applies
+    let at = |p: V3| -> Option<(f32, f32)> {
+        let cp = s.to_camera(p);
+        if cp[2] < NEAR {
+            return None;
+        }
+        let q = s.project(cp);
+        Some((q[0] as f32 / SS as f32, q[1] as f32 / SS as f32))
+    };
+    let mut red = Paint::default();
+    red.set_color(Color::from_rgba8(0xe0, 0x30, 0x30, 255));
+    red.anti_alias = true;
+    let mut blue = Paint::default();
+    blue.set_color(Color::from_rgba8(0x20, 0x60, 0xd0, 255));
+    blue.anti_alias = true;
+    let line = Stroke {
+        width: 2.0,
+        ..Stroke::default()
+    };
+    let ident = Transform::identity();
+    for ct in phys["contacts"].as_array().into_iter().flatten() {
+        let (p, n) = (v3(&ct["point"]), v3(&ct["normal"]));
+        let tip = [p[0] + n[0] * 30.0, p[1] + n[1] * 30.0, p[2] + n[2] * 30.0];
+        if let (Some((x0, y0)), Some((x1, y1))) = (at(p), at(tip)) {
+            let mut pb = PathBuilder::new();
+            pb.move_to(x0, y0);
+            pb.line_to(x1, y1);
+            if let Some(path) = pb.finish() {
+                pm.stroke_path(&path, &red, &line, ident, None);
+            }
+            if let Some(dot) = PathBuilder::from_circle(x0, y0, 3.0) {
+                pm.fill_path(&dot, &red, tiny_skia::FillRule::Winding, ident, None);
+            }
+        }
+    }
+    for j in phys["joints"].as_array().into_iter().flatten() {
+        if let (Some((ax, ay)), Some((bx, by))) = (at(v3(&j["a"])), at(v3(&j["b"]))) {
+            let mut pb = PathBuilder::new();
+            pb.move_to(ax, ay);
+            pb.line_to(bx, by);
+            if let Some(path) = pb.finish() {
+                pm.stroke_path(&path, &blue, &line, ident, None);
+            }
+            if let Some(dot) = PathBuilder::from_circle(ax, ay, 4.0) {
+                pm.stroke_path(&dot, &blue, &line, ident, None);
+            }
+        }
+    }
+}

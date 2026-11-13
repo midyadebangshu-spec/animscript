@@ -199,6 +199,8 @@ pub struct Shape {
     pub rot_y: f64,
     pub scale_z: f64,
     pub pivot3: [f64; 3],
+    /// A physics body's orientation as a quaternion `[w, x, y, z]`; replaces the three turns when set.
+    pub orient: Option<[f64; 4]>,
     /// Texture coordinates `[u, v]` (0 to 1) fixed when the image was assigned.
     pub uv: BTreeMap<u32, [f64; 2]>,
 }
@@ -435,6 +437,7 @@ impl Shape {
             rot_y: 0.0,
             scale_z: 1.0,
             pivot3: [0.0; 3],
+            orient: None,
             uv: BTreeMap::new(),
         }
     }

@@ -219,6 +219,7 @@ fn transforms_scale_rotate_and_move_vertices() {
         rot: [0.0, 0.25, 0.0],
         scale: [2.0, 1.0, 1.0],
         pivot: [0.0; 3],
+        orient: None,
     });
     // scaled in x, then a quarter turn about y (x -> -z or +z), then moved
     let b = t.bbox();
@@ -237,6 +238,7 @@ fn rotation_spins_about_y_first_then_tilts_about_x() {
         rot: [0.25, 0.25, 0.0],
         scale: [1.0; 3],
         pivot: [0.0; 3],
+        orient: None,
     };
     let p = t.apply([10.0, 0.0, 0.0]);
     assert!(

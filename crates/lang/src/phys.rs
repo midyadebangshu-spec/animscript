@@ -18,6 +18,8 @@ type Args = Vec<(Option<String>, Value)>;
 #[derive(Clone, Debug)]
 pub struct WorldCfg {
     pub gravity: [f64; 2],
+    /// Gravity of a world with mesh bodies (x, y, z); `world: gravity: (x, y, z)` sets it.
+    pub gravity3: [f64; 3],
     pub scale: f64,
     pub substeps: usize,
     pub soft_substeps: usize,
@@ -30,6 +32,7 @@ impl Default for WorldCfg {
     fn default() -> WorldCfg {
         WorldCfg {
             gravity: [0.0, 9.8],
+            gravity3: [0.0, 9.8, 0.0],
             scale: 100.0,
             substeps: 4,
             soft_substeps: 16,
@@ -251,7 +254,21 @@ impl Interp {
         let mut cfg = WorldCfg::default();
         if let Some(e) = &w.gravity {
             let v = self.eval(e, &vars, Mode::Build)?;
-            cfg.gravity = self.point(&v, "`gravity`")?;
+            if let Value::Tuple(t) = &v {
+                if t.len() == 3 {
+                    cfg.gravity3 = [
+                        self.num(&t[0], "`gravity`")?,
+                        self.num(&t[1], "`gravity`")?,
+                        self.num(&t[2], "`gravity`")?,
+                    ];
+                } else {
+                    cfg.gravity = self.point(&v, "`gravity`")?;
+                    cfg.gravity3 = [cfg.gravity[0], cfg.gravity[1], 0.0];
+                }
+            } else {
+                cfg.gravity = self.point(&v, "`gravity`")?;
+                cfg.gravity3 = [cfg.gravity[0], cfg.gravity[1], 0.0];
+            }
         }
         if let Some(e) = &w.scale {
             let v = self.eval(e, &vars, Mode::Build)?;
@@ -325,6 +342,9 @@ impl Interp {
     // ---- shape methods ------------------------------------------------------------------
 
     pub fn body_method(&mut self, sn: &str, name: &str, args: Args, mode: Mode) -> Res<Value> {
+        if self.is_mesh_shape(sn) {
+            return self.body3_method(sn, name, args, mode);
+        }
         match name {
             "body" => {
                 self.guard_build(mode, "body")?;
@@ -556,6 +576,8 @@ impl Interp {
                 | "controller"
                 | "move"
                 | "jump"
+                | "set_spin"
+                | "float"
         )
     }
 
@@ -620,7 +642,7 @@ impl Interp {
         }
     }
 
-    fn angle_pair(&self, v: &Value, what: &str) -> Res<(f64, f64)> {
+    pub(crate) fn angle_pair(&self, v: &Value, what: &str) -> Res<(f64, f64)> {
         match v {
             Value::Tuple(t) if t.len() == 2 => {
                 let mut out = [0.0; 2];
@@ -1332,7 +1354,7 @@ fn kind_name(k: BodyKind) -> &'static str {
     }
 }
 
-fn leave_key(a: &str, b: &str) -> String {
+pub(crate) fn leave_key(a: &str, b: &str) -> String {
     let (x, y) = if a <= b { (a, b) } else { (b, a) };
     format!("leaves:{x}:{y}")
 }

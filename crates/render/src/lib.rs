@@ -1017,6 +1017,7 @@ fn render_view(
             &snapshot["rigs"],
             tf,
         );
+        mesh3::draw_physics3(&mut pm, snapshot, tf);
     }
     Ok(pm)
 }

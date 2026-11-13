@@ -1,0 +1,165 @@
+project "Crates":
+    anim_version: "0.1"
+    canvas: 1280x720
+    fps: 24
+    background: #cfe6ee
+
+import "std/3d"
+
+# 3D physics: every mesh with a `.body()` is a rigid body. A thrown ball knocks a vase off its pedestal, the vase (a
+# lathe, so its collider is the convex hull of the mesh) tumbles into a pyramid of crates, a cone and a hexagonal block
+# (an extrusion) drop onto the wreckage and a hinged gate swings. The sky is plain 2D drawn behind by `z`.
+world:
+    gravity: (0, 9.8, 0)
+    scale: 100
+    substeps: 6
+
+stage3(fov: 40, light: (-0.7, 0.8, 0.45), ambient: 0.36, bands: 4, crease: 38.deg, smooth: 55.deg)
+
+# ---- 2D backdrop
+shape sky_top = rectangle(width: 1400, height: 340, at: (640, 130))
+sky_top.fill = #8fc7e6
+sky_top.stroke_width = 0
+sky_top.z = -60
+shape sky_low = rectangle(width: 1400, height: 260, at: (640, 400))
+sky_low.fill = #d9ecee
+sky_low.stroke_width = 0
+sky_low.z = -60
+shape sun = circle(n: 48, radius: 60, at: (1010, 150))
+sun.fill = #fff3c4
+sun.stroke_width = 0
+sun.z = -55
+shape hills = polygon([(0, 420), (160, 380), (340, 410), (560, 360), (780, 405), (980, 370), (1280, 415), (1280, 560), (0, 560)])
+hills.fill = #84ab72
+hills.stroke_width = 0
+hills.z = -50
+
+# ---- the ground (static) and the set
+shape ground = cube(width: 2600, height: 60, depth: 1800, at: (640, 630, 300))
+ground.fill = #cdb97c
+ground.stroke = #3a3020
+ground.stroke_width = 3
+ground.body(kind: static, friction: 0.8)
+
+# a pyramid of crates (5, 4, 3, 2)
+shape c0 = cube(size: 80, at: (692, 560, 120))
+c0.fill = #c9944f
+c0.stroke = #4a3018
+c0.stroke_width = 3
+c0.body(density: 0.8, friction: 0.7)
+shape c1 = cube(size: 80, at: (776, 560, 120))
+c1.fill = #b97f3e
+c1.stroke = #4a3018
+c1.stroke_width = 3
+c1.body(density: 0.8, friction: 0.7)
+shape c2 = cube(size: 80, at: (860, 560, 120))
+c2.fill = #c9944f
+c2.stroke = #4a3018
+c2.stroke_width = 3
+c2.body(density: 0.8, friction: 0.7)
+shape c3 = cube(size: 80, at: (944, 560, 120))
+c3.fill = #b97f3e
+c3.stroke = #4a3018
+c3.stroke_width = 3
+c3.body(density: 0.8, friction: 0.7)
+shape c4 = cube(size: 80, at: (1028, 560, 120))
+c4.fill = #c9944f
+c4.stroke = #4a3018
+c4.stroke_width = 3
+c4.body(density: 0.8, friction: 0.7)
+shape c5 = cube(size: 80, at: (734, 476, 120))
+c5.fill = #b97f3e
+c5.stroke = #4a3018
+c5.stroke_width = 3
+c5.body(density: 0.8, friction: 0.7)
+shape c6 = cube(size: 80, at: (818, 476, 120))
+c6.fill = #c9944f
+c6.stroke = #4a3018
+c6.stroke_width = 3
+c6.body(density: 0.8, friction: 0.7)
+shape c7 = cube(size: 80, at: (902, 476, 120))
+c7.fill = #b97f3e
+c7.stroke = #4a3018
+c7.stroke_width = 3
+c7.body(density: 0.8, friction: 0.7)
+shape c8 = cube(size: 80, at: (986, 476, 120))
+c8.fill = #c9944f
+c8.stroke = #4a3018
+c8.stroke_width = 3
+c8.body(density: 0.8, friction: 0.7)
+shape c9 = cube(size: 80, at: (776, 392, 120))
+c9.fill = #c9944f
+c9.stroke = #4a3018
+c9.stroke_width = 3
+c9.body(density: 0.8, friction: 0.7)
+shape c10 = cube(size: 80, at: (860, 392, 120))
+c10.fill = #b97f3e
+c10.stroke = #4a3018
+c10.stroke_width = 3
+c10.body(density: 0.8, friction: 0.7)
+shape c11 = cube(size: 80, at: (944, 392, 120))
+c11.fill = #c9944f
+c11.stroke = #4a3018
+c11.stroke_width = 3
+c11.body(density: 0.8, friction: 0.7)
+shape c12 = cube(size: 80, at: (818, 308, 120))
+c12.fill = #b97f3e
+c12.stroke = #4a3018
+c12.stroke_width = 3
+c12.body(density: 0.8, friction: 0.7)
+shape c13 = cube(size: 80, at: (902, 308, 120))
+c13.fill = #c9944f
+c13.stroke = #4a3018
+c13.stroke_width = 3
+c13.body(density: 0.8, friction: 0.7)
+
+shape pedestal = cube(width: 80, height: 70, depth: 80, at: (480, 565, 120))
+pedestal.fill = #d9d3c4
+pedestal.stroke = #3a3020
+pedestal.stroke_width = 3
+pedestal.body(density: 1.2)
+shape vase = lathe(profile: [(0, 0), (34, 0), (46, 30), (50, 62), (40, 96), (20, 120), (18, 140), (28, 152), (0, 152)], segments: 28, at: (480, 454, 120))
+vase.fill = #3d7fa3
+vase.stroke = #17313f
+vase.stroke_width = 3
+vase.body(collider: "hull", density: 0.6, restitution: 0.15)
+
+shape ball = sphere(radius: 46, segments: 28, rings: 14, at: (70, 440, 120))
+ball.fill = #d8503a
+ball.stroke = #4a1a12
+ball.stroke_width = 3
+ball.body(density: 3, restitution: 0.25)
+
+shape cone_block = cone(radius: 42, height: 104, segments: 20, at: (840, -260, 120))
+cone_block.fill = #f08c2e
+cone_block.stroke = #5a2c08
+cone_block.stroke_width = 3
+cone_block.body(density: 1)
+let hex_pts = [(60, 0), (30, 52), (-30, 52), (-60, 0), (-30, -52), (30, -52)]
+shape hex_outline = polygon(hex_pts)
+shape hex_block = extrude(hex_outline, depth: 70, at: (930, -620, 120))
+hex_block.fill = #7b6bb3
+hex_block.stroke = #251d42
+hex_block.stroke_width = 3
+hex_block.body(density: 1)
+hex_outline.visible = false
+
+shape post = cube(width: 36, height: 36, depth: 70, at: (1140, 340, 120))
+post.fill = #6b5a45
+post.stroke = #2a2218
+post.stroke_width = 3
+post.body(kind: static)
+shape gate = cube(width: 26, height: 200, depth: 70, at: (1140, 458, 120))
+gate.fill = #9b6b3a
+gate.stroke = #3a2410
+gate.stroke_width = 3
+gate.body(density: 0.8, angular_damping: 0.6)
+let hinge_joint = hinge(post, gate, anchor: (1140, 350, 120), axis: (0, 0, 1), limits: (-80.deg, 80.deg))
+
+scene "Crates" for 10.seconds:
+    setup:
+        ball.set_velocity((1500, -90, 0))
+    main:
+        start camera3.orbit(turns: 0.035, over: 10.seconds)
+        start camera3.crane(height: 110, pitch: 0.03, over: 10.seconds)
+        wait 10.seconds

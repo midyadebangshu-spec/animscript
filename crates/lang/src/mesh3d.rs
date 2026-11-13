@@ -374,6 +374,7 @@ impl Interp {
             rot: [t3[1], t3[2], roll],
             scale: [1.0; 3],
             pivot: [0.0; 3],
+            orient: None,
         };
         let (right, down, forward) = (
             rot.apply([1.0, 0.0, 0.0]),
@@ -392,10 +393,12 @@ impl Interp {
 }
 
 /// A mesh in world space for the snapshot.
+#[allow(clippy::too_many_arguments)]
 pub fn mesh_json(
     sh: &Shape,
     tf: &Transform,
     t3: Option<[f64; 4]>,
+    orient: Option<[f64; 4]>,
     over: Option<&std::collections::BTreeMap<u32, [f64; 3]>>,
     fill: J,
     outline: J,
@@ -408,6 +411,7 @@ pub fn mesh_json(
         rot: [t3[1], t3[2], tf.rotation],
         scale: [tf.scale[0], tf.scale[1], t3[3]],
         pivot: sh.pivot3,
+        orient: orient.or(sh.orient),
     };
     let verts: Vec<J> = mesh
         .verts

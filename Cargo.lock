@@ -45,6 +45,7 @@ dependencies = [
  "animscript-core",
  "animscript-math",
  "animscript-physics",
+ "animscript-physics3",
  "serde_json",
 ]
 
@@ -64,6 +65,10 @@ dependencies = [
 
 [[package]]
 name = "animscript-physics"
+version = "0.1.0"
+
+[[package]]
+name = "animscript-physics3"
 version = "0.1.0"
 
 [[package]]

@@ -19,6 +19,7 @@ pub mod paint;
 pub mod parser;
 pub mod particles;
 pub mod phys;
+pub mod phys3;
 pub mod procedural;
 pub mod ragdoll;
 pub mod rig;

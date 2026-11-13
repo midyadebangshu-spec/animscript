@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/lang", "crates/render", "crates/anim", "crates/physics", "crates/brush", "crates/math"]
+members = ["crates/core", "crates/lang", "crates/render", "crates/anim", "crates/physics", "crates/physics3", "crates/brush", "crates/math"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,6 +12,7 @@ animscript-core = { path = "crates/core" }
 animscript-lang = { path = "crates/lang" }
 animscript-render = { path = "crates/render" }
 animscript-physics = { path = "crates/physics" }
+animscript-physics3 = { path = "crates/physics3" }
 animscript-brush = { path = "crates/brush" }
 animscript-math = { path = "crates/math" }
 serde_json = "1"

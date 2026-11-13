@@ -283,6 +283,8 @@ pub struct Interp {
     pub world_cfg: crate::phys::WorldCfg,
     pub decls: crate::phys::Decls,
     pub phys: Option<crate::phys::Physics>,
+    pub decls3: crate::phys3::Decls3,
+    pub phys3: Option<crate::phys3::Physics3>,
     pub emitters: BTreeMap<String, crate::particles::EmitterCfg>,
     pub fields: BTreeMap<String, crate::field::FieldCfg>,
     /// The lens and the light for 3D meshes (`stage3(...)`).
@@ -391,6 +393,8 @@ impl Interp {
             world_cfg: Default::default(),
             decls: Default::default(),
             phys: None,
+            decls3: Default::default(),
+            phys3: None,
             emitters: BTreeMap::new(),
             fields: BTreeMap::new(),
             stage3: Default::default(),
@@ -2269,6 +2273,9 @@ impl Interp {
         };
         if Interp::is_joint_function(name, &args) {
             return self.joint_function(name, args, _mode);
+        }
+        if Interp::is_joint3_function(name) {
+            return self.joint3_function(name, args, _mode);
         }
         match name {
             "image" => {

@@ -19,6 +19,8 @@ pub struct Resolved {
     pub tf: BTreeMap<String, Transform>,
     /// Animated 3D components per shape: position z, turns about x and y, scale z.
     pub t3: BTreeMap<String, [f64; 4]>,
+    /// Physics orientation quaternions `[w, x, y, z]` of mesh bodies.
+    pub q3: BTreeMap<String, [f64; 4]>,
     /// Animated mesh vertices (local coordinates): shape, vertex index, position.
     pub mverts: BTreeMap<String, BTreeMap<u32, [f64; 3]>>,
     /// Linear-light colours of faces and edges whose own colour is animated.
@@ -34,6 +36,8 @@ pub struct Resolved {
     pub stroke_progress: BTreeMap<(String, u32), f64>,
     /// The physics section of the snapshot (contacts, joints, sleep flags), when a world exists.
     pub physics: Option<J>,
+    /// The 3D physics section (contacts, joints, sleep flags), when a mesh world exists.
+    pub physics3: Option<J>,
     /// Live particles per emitter, when the program declares emitters.
     pub particles: Option<J>,
     /// Soft bodies: volume, stretch and pinned points, when any exist.
@@ -122,7 +126,7 @@ pub fn build_snapshot(
             }
             if sh.mesh.is_some() {
                 let fill = finish(shape_fill.or(Some(to_linear([200, 200, 208, 255]))));
-                shape_json["mesh"] = crate::mesh3d::mesh_json(sh, &tf, resolved.t3.get(*n).copied(), resolved.mverts.get(*n), fill, finish(shape_stroke), shape_width);
+                shape_json["mesh"] = crate::mesh3d::mesh_json(sh, &tf, resolved.t3.get(*n).copied(), resolved.q3.get(*n).copied(), resolved.mverts.get(*n), fill, finish(shape_stroke), shape_width);
             }
             if let Some(img) = &sh.image {
                 let tris = textured_triangles(sh, ov, &tf);
@@ -160,6 +164,9 @@ pub fn build_snapshot(
     }
     if let Some(p) = &resolved.physics {
         snap["physics"] = p.clone();
+    }
+    if let Some(p) = &resolved.physics3 {
+        snap["physics3"] = p.clone();
     }
     if let Some(p) = &resolved.soft {
         snap["soft"] = p.clone();
