@@ -253,3 +253,28 @@ fn rotation_spins_about_y_first_then_tilts_about_x() {
     let p = t.apply([10.0, 0.0, 0.0]);
     assert!(p[0].abs() < 1e-9 && (p[1] - 10.0).abs() < 1e-9);
 }
+
+#[test]
+fn subdividing_a_cube_keeps_its_faces_outward_and_its_volume() {
+    let m = Mesh::cube(100.0, 60.0, 80.0).subdivided(3);
+    assert_eq!(m.faces.len(), 6 * 9);
+    assert_eq!(m.verts.len(), 6 * 16);
+    assert!(m.faces.iter().all(|f| f.len() == 4));
+    // every face normal points away from the centre
+    for f in 0..m.faces.len() {
+        let n = m.face_normal(f);
+        let c: [f64; 3] = {
+            let mut c = [0.0; 3];
+            for &i in &m.faces[f] {
+                for (k, ck) in c.iter_mut().enumerate() {
+                    *ck += m.verts[i as usize][k] / 4.0;
+                }
+            }
+            c
+        };
+        assert!(
+            n[0] * c[0] + n[1] * c[1] + n[2] * c[2] > 0.0,
+            "face {f} points inward"
+        );
+    }
+}

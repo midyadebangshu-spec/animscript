@@ -101,6 +101,9 @@ pub struct Decls3 {
     pub joints: Vec<(bool, Joint3Decl)>,
     pub ops: Vec<(bool, InitOp3)>,
     pub floats: Vec<(bool, FloatDecl)>,
+    pub soft: Vec<(bool, crate::soft3::Soft3Decl)>,
+    pub pins: Vec<(bool, crate::soft3::Pin3Decl)>,
+    pub soft_ops: Vec<(bool, (String, [f64; 3]))>,
 }
 
 impl Decls3 {
@@ -109,9 +112,12 @@ impl Decls3 {
         self.joints.retain(|b| !b.0);
         self.ops.retain(|b| !b.0);
         self.floats.retain(|b| !b.0);
+        self.soft.retain(|b| !b.0);
+        self.pins.retain(|b| !b.0);
+        self.soft_ops.retain(|b| !b.0);
     }
     pub fn is_empty(&self) -> bool {
-        self.bodies.is_empty()
+        self.bodies.is_empty() && self.soft.is_empty()
     }
     pub fn body(&self, shape: &str) -> Option<&Body3Decl> {
         self.bodies.iter().map(|b| &b.1).find(|b| b.shape == shape)
@@ -135,7 +141,7 @@ pub struct Physics3 {
     pub(crate) names: Vec<String>,
     pub(crate) ids: BTreeMap<String, usize>,
     /// The centre of mass in the mesh's own vertex coordinates (pixels).
-    com: BTreeMap<String, [f64; 3]>,
+    pub(crate) com: BTreeMap<String, [f64; 3]>,
     kinds: BTreeMap<String, BodyKind>,
     touching: BTreeSet<(usize, usize)>,
     began: BTreeSet<(usize, usize)>,
@@ -148,7 +154,7 @@ pub struct Poses3 {
     pub dynamic: Vec<(String, [f64; 3], [f64; 4])>,
 }
 
-fn mesh_volume(pts: &[[f64; 3]], faces: &[Vec<u32>]) -> f64 {
+pub(crate) fn mesh_volume(pts: &[[f64; 3]], faces: &[Vec<u32>]) -> f64 {
     let mut vol = 0.0;
     for f in faces {
         for k in 1..f.len().saturating_sub(1) {
@@ -176,6 +182,24 @@ fn quat_to_turns(q: Quat) -> [f64; 3] {
     let beta = (-m[2][0]).atan2(m[2][2]);
     let gamma = (-m[0][1]).atan2(m[1][1]);
     [alpha / tau, beta / tau, gamma / tau]
+}
+
+impl Physics3 {
+    /// A world with no rigid bodies (soft bodies still need one to step with).
+    pub fn empty(world: p3::World, ppm: f64, steps: usize) -> Physics3 {
+        Physics3 {
+            world,
+            ppm,
+            steps,
+            names: vec![],
+            ids: BTreeMap::new(),
+            com: BTreeMap::new(),
+            kinds: BTreeMap::new(),
+            touching: BTreeSet::new(),
+            began: BTreeSet::new(),
+            floats: vec![],
+        }
+    }
 }
 
 impl Interp {
@@ -649,7 +673,7 @@ impl Interp {
     // ---- scene start and end ------------------------------------------------------------
 
     /// The mesh's vertices in pixels with the shape's current transform applied.
-    fn mesh_transform(&self, sn: &str) -> Transform3 {
+    pub(crate) fn mesh_transform(&self, sn: &str) -> Transform3 {
         let sh = &self.shapes[sn];
         let tf = sh.transform();
         Transform3 {
@@ -1030,9 +1054,15 @@ impl Interp {
             return;
         };
         if tick > 0 {
-            for _ in 0..ph.steps {
-                self.apply_floats(&mut ph);
-                ph.world.step(1.0 / fps / ph.steps as f64);
+            if let Some(mut sim) = self.soft3.take() {
+                let (n, it) = (sim.substeps_n(), sim.iterations_n());
+                p3::soft_step(&mut ph.world, &mut sim.bodies, 1.0 / fps, n, it);
+                self.soft3 = Some(sim);
+            } else {
+                for _ in 0..ph.steps {
+                    self.apply_floats(&mut ph);
+                    ph.world.step(1.0 / fps / ph.steps as f64);
+                }
             }
         }
         self.phys3 = Some(ph);

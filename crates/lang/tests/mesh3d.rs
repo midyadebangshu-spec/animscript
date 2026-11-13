@@ -398,3 +398,14 @@ fn pivot_is_the_world_point_a_mesh_turns_about() {
         "E-MSH-001"
     );
 }
+
+#[test]
+fn a_cube_can_be_subdivided() {
+    let r = go(&format!(
+        "shape c = cube(size: 100, subdivide: 4, at: (400, 300, 0))\n{}",
+        scene(1, "")
+    ));
+    let m = mesh(&r.snapshots[0], 0);
+    assert_eq!(m["faces"].as_array().unwrap().len(), 6 * 16);
+    assert_eq!(err("shape c = cube(subdivide: 100)\n").code, "E-MSH-001");
+}

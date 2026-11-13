@@ -357,6 +357,7 @@ impl Runtime {
                 self.it.freeze_pivots(); // pivots default to the bounding-box centre once building is over
                 self.it.build_physics()?; // the world starts from the shapes' poses after setup
                 self.it.build_physics3()?;
+                self.it.build_soft3()?;
                 self.it.build_soft()?;
                 self.it.fill_fluids()?;
                 self.it.build_rigs()?;
@@ -2096,6 +2097,8 @@ impl Runtime {
             fluid_snap = self.it.fluid_snapshot();
         }
         let mut physics3 = None;
+        let mut soft3_snap = None;
+        let mut soft3_out = vec![];
         let mut q3_out = BTreeMap::new();
         if self.it.phys3.is_some() {
             let mut kin = BTreeMap::new();
@@ -2117,7 +2120,34 @@ impl Runtime {
                 kin.insert(n.clone(), pose);
             }
             self.it.physics3_prepare(tick, &kin);
+            // soft pins follow the pose of the mesh they are pinned to
+            let mut poses = BTreeMap::new();
+            for n in self.it.soft3_pin_targets() {
+                let mut get = |p: PropId| {
+                    let rest = self.rest_value(&n, p);
+                    by_prop
+                        .get_mut(&(n.clone(), p))
+                        .map_or(rest, |c| fold(rest, c))
+                };
+                let sh = &self.it.shapes[&n];
+                let pivot3 = sh.pivot3;
+                let t = animscript_core::mesh::Transform3 {
+                    position: [get(PropId::PosX), get(PropId::PosY), get(PropId::PosZ)],
+                    rot: [get(PropId::RotX), get(PropId::RotY), get(PropId::Rot)],
+                    scale: [
+                        get(PropId::ScaleX),
+                        get(PropId::ScaleY),
+                        get(PropId::ScaleZ),
+                    ],
+                    pivot: pivot3,
+                    orient: None,
+                };
+                poses.insert(n.clone(), t);
+            }
+            self.it.soft3_prepare(tick, &poses);
             self.it.physics3_advance(tick);
+            soft3_out = self.it.soft3_collect();
+            soft3_snap = self.it.soft3_snapshot();
             let poses = self.it.physics3_collect();
             for (i, (n, pos, q)) in poses.dynamic.into_iter().enumerate() {
                 for (prop, value) in [
@@ -2165,6 +2195,7 @@ impl Runtime {
         let mut resolved = Resolved {
             physics,
             physics3,
+            soft3: soft3_snap,
             q3: q3_out,
             rigs: rigs_snap,
             soft: soft_snap,
@@ -2258,6 +2289,9 @@ impl Runtime {
                 }
             }
         }
+        for (n, m) in soft3_out {
+            resolved.mverts.insert(n, m);
+        }
         self.apply_links(&mut resolved);
         resolved.particles = self.it.particles_tick(tick, &resolved.tf);
         self.it.live_tf = resolved.tf.clone();
@@ -2284,6 +2318,7 @@ impl Runtime {
         self.it.end_soft();
         self.it.end_fluids();
         self.it.end_physics();
+        self.it.end_soft3();
         self.it.end_physics3();
         self.it.parts.clear();
         let acts = std::mem::take(&mut self.acts);

@@ -922,6 +922,11 @@ impl Interp {
     // ---- member reads -------------------------------------------------------------------
 
     pub fn phys_attr(&self, sn: &str, name: &str) -> Option<Res<Value>> {
+        if self.is_mesh_shape(sn) {
+            if let Some(r) = self.soft3_attr(sn, name) {
+                return Some(r);
+            }
+        }
         if let Some(r) = self.soft_attr(sn, name) {
             return Some(r);
         }

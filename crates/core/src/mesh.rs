@@ -183,6 +183,49 @@ impl Mesh {
         m
     }
 
+    /// Every quad face cut into `n` x `n` quads (other faces are kept). Each face gets its own
+    /// vertices, so the creases of a cube stay sharp; soft bodies weld them again.
+    pub fn subdivided(&self, n: usize) -> Mesh {
+        let n = n.max(1);
+        let mut verts: Vec<[f64; 3]> = vec![];
+        let mut faces: Vec<Vec<u32>> = vec![];
+        for f in &self.faces {
+            if f.len() != 4 || n == 1 {
+                let base = verts.len() as u32;
+                for i in f {
+                    verts.push(self.verts[*i as usize]);
+                }
+                faces.push((0..f.len() as u32).map(|k| base + k).collect());
+                continue;
+            }
+            let p: Vec<[f64; 3]> = f.iter().map(|i| self.verts[*i as usize]).collect();
+            let base = verts.len() as u32;
+            for j in 0..=n {
+                for i in 0..=n {
+                    let (u, v) = (i as f64 / n as f64, j as f64 / n as f64);
+                    let mut q = [0.0; 3];
+                    for (k, qk) in q.iter_mut().enumerate() {
+                        let a = p[0][k] + (p[1][k] - p[0][k]) * u;
+                        let b = p[3][k] + (p[2][k] - p[3][k]) * u;
+                        *qk = a + (b - a) * v;
+                    }
+                    verts.push(q);
+                }
+            }
+            let at = |i: usize, j: usize| base + (j * (n + 1) + i) as u32;
+            for j in 0..n {
+                for i in 0..n {
+                    faces.push(vec![at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)]);
+                }
+            }
+        }
+        Mesh {
+            verts,
+            faces,
+            double_sided: self.double_sided,
+        }
+    }
+
     /// A surface of revolution about the y axis from a profile of `(radius, height)` points (height up the screen).
     pub fn lathe(profile: &[P], segments: usize) -> Result<Mesh, String> {
         if profile.len() < 2 {

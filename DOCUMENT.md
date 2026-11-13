@@ -2202,7 +2202,7 @@ vase.spin(0.5)
 camera3.orbit(turns: 0.1, over: 10.seconds)
 ```
 
-- **Builtins:** `cube`, `sphere`, `cylinder`, `cone`, `plane(width, depth, nx, nz)`, `lathe(profile)`, `extrude(shape | points, depth)`; each takes `at:` (centre of the bounding box, default the origin), `pivot:` (world point it turns about), `fill`, `outline`, `double_sided`.
+- **Builtins:** `cube` (with `subdivide: n` to cut each face into n x n quads), `sphere`, `cylinder`, `cone`, `plane(width, depth, nx, nz)`, `lathe(profile)`, `extrude(shape | points, depth)`; each takes `at:` (centre of the bounding box, default the origin), `pivot:` (world point it turns about), `fill`, `outline`, `double_sided`.
 - **Properties:** `position.z`, `rotation.x`, `rotation.y`, `scale.z` (keys use angle units such as `.deg`). Turn order: spin about y, tilt about x, roll about z, then translate. Drive names: `pos_z, rot_x, rot_y, scale_z` (turns); vertex drives `x, y, z` (z only on meshes: `E-MTH-004` on 2D shapes); drive inputs are `x, y, z, i, u` plus frame `t, n`.
 - **Fields:** a mesh vertex reads a field at its world `(x, z)`, so a `plane` can follow a wave field and boats ride its height and slope (see `examples/lagoon.anim`).
 - **`stage3(fov, light, ambient, bands, crease, smooth)`:** `light` is the direction the light travels. Defaults: (-0.4, 0.7, 0.6), 0.35, 3 bands, 40 deg crease, 50 deg smooth, fov 40.
@@ -2236,6 +2236,43 @@ let gate_joint = hinge(post, gate, anchor: (1140, 350, 120), axis: (0, 0, 1), li
 - **Errors:** `E-PHY-007` bad mesh body (not convex, non-uniform scale, unknown kind or collider, a second body, `float` arguments), `E-PHY-008` bad 3D joint (a shape that is not a mesh body, a zero axis, limits the wrong way round); `W-PHY-001` bodies overlap at the start. A scene has 2D bodies or mesh bodies, not both.
 - **Limits:** no continuous collision (a very fast small body can pass through a thin one), no 3D soft bodies or particle fluids yet, no ragdolls. Worked example: `examples/crates.anim`.
 
+## 13u. 3D soft bodies (round S3D)
+
+`mesh.soft(...)` makes a mesh squash, stretch, bounce, swing and drape. It steps together with the 3D rigid bodies of §13t: soft meshes collide with rigid bodies (and push dynamic ones back), with the ground and with each other.
+
+```anim
+shape ball = sphere(radius: 52, at: (90, 330, 150))
+ball.soft(pressure: 1.0, stiffness: 0.85, restitution: 0.5)       # a balloon: a closed surface that keeps its volume
+
+shape jelly = cube(size: 92, subdivide: 6, at: (500, 100, 60))
+jelly.soft(solid: true, stiffness: 0.55, resolution: 7)            # solid jelly, filled with tetrahedra
+
+shape flag = plane(width: 210, depth: 130, nx: 14, nz: 9, at: (950, 294, 250))
+flag.soft(stiffness: 0.9, bend: 0.12, density: 0.3)                # cloth
+flag.pin_where(p -> p.z < 190)                                      # hold the vertices that pass the test
+```
+
+| Argument | Meaning | Default |
+|---|---|---|
+| `stiffness` | above 0, at most 1: resistance to stretching (1 = rigid) | `0.8` |
+| `bend` | 0 to 1: resistance to folding sharply (cloth) | `0.3` |
+| `pressure` | closed surfaces: 1 keeps the volume, above 1 inflates, 0 ignores volume; solid bodies scale their rest volume by it | `1` |
+| `density` | kg per square metre of surface (a solid body: per cubic metre) | `1` |
+| `friction`, `restitution` | against bodies, like rigid bodies | `0.5`, `0.1` |
+| `damping` | slows motion down | `0.1` |
+| `thickness` | collision size of a vertex, px | `3` |
+| `self_collide` | let the mesh's own triangles stop its own vertices (cloth on cloth) | `false` |
+| `solid` | fill a closed mesh with tetrahedra (jelly) instead of keeping only its skin | `false` |
+| `resolution` | solid bodies: lattice cells along the longest side, 3 to 24 | `8` |
+
+- **Surface or solid:** a surface body is its skin: edges keep their length, shared edges resist folding, and a closed one keeps its volume (balloons, rubber balls, cloth, flags). A solid body is a lattice of tetrahedra that keeps its volume everywhere (jelly, a soft pad). The mesh's vertices ride on the lattice, so give a solid cube enough vertices to show a dent: `cube(size: 100, subdivide: 6)` (every face cut into 6 x 6 quads).
+- **Pins:** `pin_where(test)` holds the vertices for which the test is true (the test gets each vertex's position in pixels, `p -> p.y < 120`); `pin_where(test, to: other)` makes them follow another mesh (a rigid body, a kinematic or an animated one) so it can carry a cloth. `unpin_where(test)` lets go, also while running.
+- **`cut(from: (x, y, z), to: (x, y, z), width: 8)`** (while a scene runs, surface bodies only): every face with an edge within `width` pixels of the line segment is removed and the links it held are dropped. A cut balloon loses its pressure; a cut cloth parts. It returns the number of faces removed.
+- **`soft_impulse(by: (x, y, z))`** gives the whole body a push (kg px/s): a puff of wind. **Reading:** `shape.volume` (px^3, from the faces) and `shape.stretch` (largest edge strain).
+- **Moving it:** the mesh's own position, turns and scale are baked into its vertices when the scene starts (a soft mesh is then in world coordinates); move it by pinning vertices to something that moves. The final vertices are kept when the scene ends.
+- **Rules:** a shape is rigid or soft (`E-PHY-003` otherwise). `E-PHY-009`: bad `soft` arguments, `solid` or `pressure` on an open mesh, a solid mesh that cannot be filled or needs too many nodes, `pin_where`/`cut` on a shape that is not soft, `cut` on a solid body or outside a scene. `--debug-physics` draws pins (blue squares).
+- **Limits:** soft meshes that are very fast and thin can pass through each other's triangles; a large static triangle mesh is slow to collide with (use cubes and planes for the set); no cutting of solid bodies; no soft bodies in a 2D scene. Worked example: `examples/jelly.anim`. `world:` takes `soft_substeps` (16) and `soft_iterations` (4), as for 2D.
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,
@@ -2268,7 +2305,7 @@ help: did you mean `over: 1.second`?
 | Properties | `E-CON-001` constraint cycle, `E-PRP-002` two locks on one component, `-003` overlapping keyframes |
 | Fields | `E-FLD-001` bad field declaration, `-002` size limit, `-003` value became infinite or NaN |
 | 3D meshes | `E-MSH-001` bad mesh or stage3 arguments |
-| 3D physics | `E-PHY-007` bad mesh body or `float`, `-008` bad 3D joint |
+| 3D physics | `E-PHY-007` bad mesh body or `float`, `-008` bad 3D joint, `-009` bad soft mesh, pin or cut |
 | Equations | `E-MTH-001` equation syntax, `-002` construct not allowed in an equation, `-003` bad arguments, `-004` unknown or mixed drive property, `-005` non-finite value |
 | Camera / assets | `E-CAM-001` zoom outside [1, 8], `E-AST-001` asset file not found |
 | Runtime | `E-RUN-001` tick did not settle in 64 deltas, `-002` action failed or rejected, `-004` `assert` failed |

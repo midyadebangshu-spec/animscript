@@ -26,6 +26,7 @@ pub mod rig;
 pub mod runtime;
 pub mod snapshot;
 pub mod soft;
+pub mod soft3;
 pub mod value;
 
 pub use animscript_core::{Diagnostic, Res, Severity, Span};

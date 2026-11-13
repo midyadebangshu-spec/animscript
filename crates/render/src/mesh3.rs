@@ -583,6 +583,21 @@ pub fn draw_physics3(pm: &mut Pixmap, snapshot: &Value, tf: Transform) {
             }
         }
     }
+    // soft body pins
+    for b in snapshot["soft3"]["bodies"].as_array().into_iter().flatten() {
+        for p in b["pins"].as_array().into_iter().flatten() {
+            if let Some((x, y)) = at(v3(p)) {
+                let mut pb = PathBuilder::new();
+                pb.push_rect(
+                    tiny_skia::Rect::from_xywh(x - 3.0, y - 3.0, 6.0, 6.0)
+                        .unwrap_or(tiny_skia::Rect::from_xywh(0.0, 0.0, 1.0, 1.0).unwrap()),
+                );
+                if let Some(path) = pb.finish() {
+                    pm.stroke_path(&path, &blue, &line, ident, None);
+                }
+            }
+        }
+    }
     for j in phys["joints"].as_array().into_iter().flatten() {
         if let (Some((ax, ay)), Some((bx, by))) = (at(v3(&j["a"])), at(v3(&j["b"]))) {
             let mut pb = PathBuilder::new();

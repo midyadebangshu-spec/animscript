@@ -151,7 +151,15 @@ impl Interp {
                 let m = self.bind(
                     name,
                     args,
-                    &["size", "width", "height", "depth", "at", "pivot"],
+                    &[
+                        "size",
+                        "width",
+                        "height",
+                        "depth",
+                        "at",
+                        "pivot",
+                        "subdivide",
+                    ],
                     &[],
                 )?;
                 let size = self.positive(&m, "size", 100.0)?;
@@ -160,7 +168,15 @@ impl Interp {
                     self.positive(&m, "height", size)?,
                     self.positive(&m, "depth", size)?,
                 );
-                Ok(self.mesh_shape(Mesh::cube(w, h, d), self.at3(&m)?, self.pivot3(&m)?))
+                let cells = self.count(&m, "subdivide", 1, 1)?;
+                if cells > 48 {
+                    return Err(Diagnostic::new(
+                        "E-MSH-001",
+                        "`subdivide` can be at most 48",
+                    ));
+                }
+                let mesh = Mesh::cube(w, h, d).subdivided(cells);
+                Ok(self.mesh_shape(mesh, self.at3(&m)?, self.pivot3(&m)?))
             }
             "sphere" => {
                 let m = self.bind(

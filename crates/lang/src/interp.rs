@@ -285,6 +285,7 @@ pub struct Interp {
     pub phys: Option<crate::phys::Physics>,
     pub decls3: crate::phys3::Decls3,
     pub phys3: Option<crate::phys3::Physics3>,
+    pub soft3: Option<crate::soft3::Soft3Sim>,
     pub emitters: BTreeMap<String, crate::particles::EmitterCfg>,
     pub fields: BTreeMap<String, crate::field::FieldCfg>,
     /// The lens and the light for 3D meshes (`stage3(...)`).
@@ -395,6 +396,7 @@ impl Interp {
             phys: None,
             decls3: Default::default(),
             phys3: None,
+            soft3: None,
             emitters: BTreeMap::new(),
             fields: BTreeMap::new(),
             stage3: Default::default(),
@@ -2021,6 +2023,9 @@ impl Interp {
             Value::Tuple(t) if t.len() == 2 && (name == "x" || name == "y") => {
                 Ok(t[usize::from(name == "y")].clone())
             }
+            Value::Tuple(t) if t.len() == 3 && matches!(name, "x" | "y" | "z") => {
+                Ok(t[["x", "y", "z"].iter().position(|n| *n == name).unwrap_or(0)].clone())
+            }
             Value::List(items) => match name {
                 "count" => Ok(Value::Int(items.len() as i64)),
                 _ => Err(
@@ -2925,7 +2930,12 @@ const BROADCAST: &[&str] = &[
 ];
 
 impl Interp {
-    fn call_lambda(&mut self, l: &LambdaData, args: Vec<Value>, mode: Mode) -> Res<Value> {
+    pub(crate) fn call_lambda(
+        &mut self,
+        l: &LambdaData,
+        args: Vec<Value>,
+        mode: Mode,
+    ) -> Res<Value> {
         let mut vars = l.vars.clone();
         vars.push();
         for (p, a) in l.params.iter().zip(args) {

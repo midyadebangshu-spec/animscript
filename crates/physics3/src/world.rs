@@ -146,6 +146,18 @@ pub struct World {
     events: Vec<ContactEvent>,
     disabled: BTreeSet<(usize, usize)>,
     pub iterations: usize,
+    aabbs: Vec<Option<(V3, V3)>>,
+}
+
+/// A soft particle touching a rigid body.
+#[derive(Clone, Copy, Debug)]
+pub struct SoftHit {
+    pub body: BodyId,
+    /// A point on the rigid surface.
+    pub point: V3,
+    /// Out of the rigid body, towards the particle.
+    pub normal: V3,
+    pub depth: f64,
 }
 
 const SLOP: f64 = 0.004;
@@ -169,6 +181,7 @@ impl World {
             events: vec![],
             disabled: BTreeSet::new(),
             iterations: 10,
+            aabbs: vec![],
         }
     }
 
@@ -357,6 +370,52 @@ impl World {
             }
             _ => true,
         }
+    }
+
+    /// Rebuild the world-space shapes (soft bodies query them between rigid steps).
+    pub fn refresh_shapes(&mut self) {
+        for i in 0..self.bodies.len() {
+            let b = &self.bodies[i];
+            if b.kind == BodyKind::Static && self.wshapes[i].is_some() {
+                continue;
+            }
+            self.wshapes[i] = Some(b.shape.world(b.p, b.q));
+        }
+        self.aabbs = self
+            .wshapes
+            .iter()
+            .map(|w| w.as_ref().and_then(|w| w.aabb()))
+            .collect();
+    }
+
+    /// Rigid bodies a sphere of radius `r` at `c` overlaps (call `refresh_shapes` first).
+    pub fn query_sphere(&self, c: V3, r: f64) -> Vec<SoftHit> {
+        let probe = Some((c - v3(r, r, r), c + v3(r, r, r)));
+        let sphere = WShape::Sphere { c, r };
+        let mut out = vec![];
+        for (i, w) in self.wshapes.iter().enumerate() {
+            let (Some(w), Some(bb)) = (w, self.aabbs.get(i)) else {
+                continue;
+            };
+            if self.bodies[i].sensor || !Self::aabb_overlap(bb, &probe, 0.0) {
+                continue;
+            }
+            for m in collide(&sphere, w) {
+                if let Some(&(pt, depth)) = m
+                    .points
+                    .iter()
+                    .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                {
+                    out.push(SoftHit {
+                        body: i,
+                        point: pt,
+                        normal: -m.normal,
+                        depth,
+                    });
+                }
+            }
+        }
+        out
     }
 
     pub fn step(&mut self, dt: f64) {

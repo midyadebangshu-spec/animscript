@@ -78,7 +78,10 @@ fn shoelace(p: &[P]) -> f64 {
 
 impl Interp {
     pub fn is_soft_method(name: &str) -> bool {
-        matches!(name, "soft" | "pin" | "unpin" | "soft_impulse")
+        matches!(
+            name,
+            "soft" | "pin" | "unpin" | "soft_impulse" | "pin_where" | "unpin_where" | "cut"
+        )
     }
 
     fn vertex_ids(&self, sn: &str, v: &Value) -> Res<Vec<u32>> {
@@ -96,6 +99,9 @@ impl Interp {
     }
 
     pub fn soft_method(&mut self, sn: &str, name: &str, args: Args, mode: Mode) -> Res<Value> {
+        if self.is_mesh_shape(sn) {
+            return self.soft3_method(sn, name, args, mode);
+        }
         match name {
             "soft" => {
                 if mode == Mode::Run {
