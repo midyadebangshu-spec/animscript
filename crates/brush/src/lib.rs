@@ -61,6 +61,19 @@ mod ffi {
         ) -> *mut MyPaintSurface;
         pub fn mypaint_fixed_tiled_surface_clear(s: *mut MyPaintFixedTiledSurface);
         pub fn mypaint_fixed_tiled_surface_read(s: *mut MyPaintFixedTiledSurface, out: *mut u16);
+        pub fn mypaint_fixed_tiled_surface_write(
+            s: *mut MyPaintFixedTiledSurface,
+            input: *const u16,
+        );
+        pub fn mypaint_tiled_surface_set_symmetry_state(
+            s: *mut MyPaintFixedTiledSurface,
+            active: c_int,
+            cx: c_float,
+            cy: c_float,
+            angle: c_float,
+            kind: c_int,
+            lines: c_int,
+        );
         pub fn mypaint_surface_begin_atomic(s: *mut MyPaintSurface);
         pub fn mypaint_surface_end_atomic(s: *mut MyPaintSurface, roi: *mut c_void);
         pub fn mypaint_surface_unref(s: *mut MyPaintSurface);
@@ -88,6 +101,155 @@ impl Point {
             xtilt: 0.0,
             ytilt: 0.0,
             dt: 0.01,
+        }
+    }
+}
+
+/// How a stroke is repeated around a centre (libmypaint's symmetry): every dab is also painted at the mirrored or
+/// rotated places.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SymmetryKind {
+    /// Reflection across the vertical line through the centre.
+    Vertical,
+    /// Reflection across the horizontal line through the centre.
+    Horizontal,
+    /// Both reflections: four copies.
+    Both,
+    /// `lines` copies turned around the centre.
+    Radial,
+    /// `lines` rotated copies, each also reflected.
+    Snowflake,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Symmetry {
+    pub kind: SymmetryKind,
+    pub center: [f32; 2],
+    /// The turn of the symmetry lines, in degrees.
+    pub angle_deg: f32,
+    /// The number of copies for `Radial` and `Snowflake` (at least 2).
+    pub lines: i32,
+}
+
+/// How a stroke is composited onto the picture (the W3C compositing modes).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Blend {
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    SoftLight,
+    Difference,
+    Exclusion,
+    Add,
+}
+
+const BLENDS: &[(&str, Blend)] = &[
+    ("normal", Blend::Normal),
+    ("multiply", Blend::Multiply),
+    ("screen", Blend::Screen),
+    ("overlay", Blend::Overlay),
+    ("darken", Blend::Darken),
+    ("lighten", Blend::Lighten),
+    ("color_dodge", Blend::ColorDodge),
+    ("color_burn", Blend::ColorBurn),
+    ("hard_light", Blend::HardLight),
+    ("soft_light", Blend::SoftLight),
+    ("difference", Blend::Difference),
+    ("exclusion", Blend::Exclusion),
+    ("add", Blend::Add),
+];
+
+impl Blend {
+    pub fn from_name(name: &str) -> Option<Blend> {
+        BLENDS.iter().find(|b| b.0 == name).map(|b| b.1)
+    }
+    pub fn name(self) -> &'static str {
+        BLENDS.iter().find(|b| b.1 == self).expect("listed").0
+    }
+    pub fn names() -> Vec<&'static str> {
+        BLENDS.iter().map(|b| b.0).collect()
+    }
+
+    /// The blend function of one colour channel (backdrop `b`, source `s`, both 0 to 1, not premultiplied).
+    fn channel(self, b: f32, s: f32) -> f32 {
+        let hard = |b: f32, s: f32| {
+            if s <= 0.5 {
+                b * 2.0 * s
+            } else {
+                let t = 2.0 * s - 1.0;
+                b + t - b * t
+            }
+        };
+        match self {
+            Blend::Normal => s,
+            Blend::Multiply => b * s,
+            Blend::Screen => b + s - b * s,
+            Blend::Overlay => hard(s, b),
+            Blend::Darken => b.min(s),
+            Blend::Lighten => b.max(s),
+            Blend::ColorDodge => {
+                if b == 0.0 {
+                    0.0
+                } else if s >= 1.0 {
+                    1.0
+                } else {
+                    (b / (1.0 - s)).min(1.0)
+                }
+            }
+            Blend::ColorBurn => {
+                if b >= 1.0 {
+                    1.0
+                } else if s <= 0.0 {
+                    0.0
+                } else {
+                    1.0 - ((1.0 - b) / s).min(1.0)
+                }
+            }
+            Blend::HardLight => hard(b, s),
+            Blend::SoftLight => {
+                if s <= 0.5 {
+                    b - (1.0 - 2.0 * s) * b * (1.0 - b)
+                } else {
+                    let d = if b <= 0.25 {
+                        ((16.0 * b - 12.0) * b + 4.0) * b
+                    } else {
+                        b.sqrt()
+                    };
+                    b + (2.0 * s - 1.0) * (d - b)
+                }
+            }
+            Blend::Difference => (b - s).abs(),
+            Blend::Exclusion => b + s - 2.0 * b * s,
+            Blend::Add => (b + s).min(1.0),
+        }
+    }
+}
+
+/// Options of one stroke beyond the brush and the points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StrokeOpts {
+    /// Pen twist, in turns (libmypaint's `barrel_rotation` input).
+    pub barrel: f32,
+    pub symmetry: Option<Symmetry>,
+    /// How the stroke is composited onto what is already painted.
+    pub blend: Blend,
+    /// 0 to 1: how much of the stroke is composited (0 leaves the picture as it was).
+    pub strength: f32,
+}
+
+impl Default for StrokeOpts {
+    fn default() -> StrokeOpts {
+        StrokeOpts {
+            barrel: 0.0,
+            symmetry: None,
+            blend: Blend::Normal,
+            strength: 1.0,
         }
     }
 }
@@ -276,17 +438,71 @@ impl Canvas {
         unsafe { ffi::mypaint_fixed_tiled_surface_clear(self.raw) };
     }
 
-    /// Paint one stroke. libmypaint wants a first sample with no pressure to start the stroke and one to end it.
+    /// Paint one stroke with the default options (see [`Canvas::stroke_with`]).
     pub fn stroke(&mut self, brush: &mut Brush, points: &[Point]) {
-        let Some(first) = points.first() else { return };
+        self.stroke_with(brush, points, &StrokeOpts::default());
+    }
+
+    /// Paint one stroke. libmypaint wants a first sample with no pressure to start the stroke and one to end it.
+    /// With a blend mode other than `Normal` (or a strength below 1) the stroke is painted on a transparent copy of the
+    /// canvas first and then composited onto the picture, so a smudge brush sees none of the paint underneath.
+    pub fn stroke_with(&mut self, brush: &mut Brush, points: &[Point], opts: &StrokeOpts) {
+        if points.is_empty() {
+            return;
+        }
+        if opts.blend == Blend::Normal && opts.strength >= 1.0 {
+            self.paint(brush, points, opts);
+            return;
+        }
+        let mut layer = Canvas::new(self.w, self.h);
+        layer.paint(brush, points, opts);
+        self.composite(&layer, opts.blend, opts.strength.clamp(0.0, 1.0));
+    }
+
+    fn paint(&mut self, brush: &mut Brush, points: &[Point], opts: &StrokeOpts) {
+        let first = &points[0];
         unsafe {
+            match opts.symmetry {
+                Some(s) => {
+                    let kind = match s.kind {
+                        SymmetryKind::Vertical => 0,
+                        SymmetryKind::Horizontal => 1,
+                        SymmetryKind::Both => 2,
+                        SymmetryKind::Radial => 3,
+                        SymmetryKind::Snowflake => 4,
+                    };
+                    ffi::mypaint_tiled_surface_set_symmetry_state(
+                        self.raw,
+                        1,
+                        s.center[0],
+                        s.center[1],
+                        s.angle_deg,
+                        kind,
+                        s.lines.max(2),
+                    );
+                }
+                None => {
+                    ffi::mypaint_tiled_surface_set_symmetry_state(self.raw, 0, 0.0, 0.0, 0.0, 0, 2)
+                }
+            }
             let surf = ffi::mypaint_fixed_tiled_surface_interface(self.raw);
             ffi::mypaint_surface_begin_atomic(surf);
             brush.reset();
             ffi::mypaint_brush_new_stroke(brush.raw);
             let to = |p: &Point, pressure: f32, dt: f64| {
                 ffi::mypaint_brush_stroke_to(
-                    brush.raw, surf, p.x, p.y, pressure, p.xtilt, p.ytilt, dt, 1.0, 0.0, 0.0, 0,
+                    brush.raw,
+                    surf,
+                    p.x,
+                    p.y,
+                    pressure,
+                    p.xtilt,
+                    p.ytilt,
+                    dt,
+                    1.0,
+                    0.0,
+                    opts.barrel,
+                    0,
                 );
             };
             // libmypaint smooths the cursor towards where it was before: a long first time step (above its 5 s
@@ -298,7 +514,48 @@ impl Canvas {
             let last = points.last().expect("not empty");
             to(last, 0.0, 0.05);
             ffi::mypaint_surface_end_atomic(surf, std::ptr::null_mut());
+            ffi::mypaint_tiled_surface_set_symmetry_state(self.raw, 0, 0.0, 0.0, 0.0, 0, 2);
         }
+    }
+
+    fn read_raw(&self) -> Vec<u16> {
+        let mut raw = vec![0u16; (self.w * self.h) as usize * 4];
+        unsafe { ffi::mypaint_fixed_tiled_surface_read(self.raw, raw.as_mut_ptr()) };
+        raw
+    }
+
+    /// Composite `top` (a picture of the same size) onto this one with the blend mode, premultiplied 15-bit pixels:
+    /// `co = cs (1 - ab) + cb (1 - as) + as ab B(cb / ab, cs / as)` and `ao = as + ab - as ab`.
+    fn composite(&mut self, top: &Canvas, blend: Blend, strength: f32) {
+        let (mut dst, src) = (self.read_raw(), top.read_raw());
+        const ONE: f32 = 32768.0;
+        for (d, s) in dst.chunks_mut(4).zip(src.chunks(4)) {
+            let a_s = s[3] as f32 / ONE * strength;
+            if a_s <= 0.0 {
+                continue;
+            }
+            let a_b = d[3] as f32 / ONE;
+            let a_o = a_s + a_b - a_s * a_b;
+            for k in 0..3 {
+                let cs_p = s[k] as f32 / ONE * strength;
+                let cb_p = d[k] as f32 / ONE;
+                let cs = if a_s > 0.0 {
+                    (cs_p / a_s).min(1.0)
+                } else {
+                    0.0
+                };
+                let cb = if a_b > 0.0 {
+                    (cb_p / a_b).min(1.0)
+                } else {
+                    0.0
+                };
+                let mixed = a_s * a_b * blend.channel(cb, cs);
+                let co = cs_p * (1.0 - a_b) + cb_p * (1.0 - a_s) + mixed;
+                d[k] = (co.clamp(0.0, a_o) * ONE + 0.5) as u16;
+            }
+            d[3] = (a_o.clamp(0.0, 1.0) * ONE + 0.5) as u16;
+        }
+        unsafe { ffi::mypaint_fixed_tiled_surface_write(self.raw, dst.as_ptr()) };
     }
 
     /// The picture as `width * height * 4` bytes, premultiplied RGBA, row by row.

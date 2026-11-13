@@ -99,14 +99,17 @@ fn camera_view(cam: &Value, cw: f32, ch: f32, scale: f32) -> View {
 
 /// The points of a stroke up to `progress` (0 to 1) of its length, the last one interpolated.
 fn partial_stroke(points: &[Value], progress: f64) -> Vec<animscript_brush::Point> {
-    let pts: Vec<[f64; 4]> = points
+    let pts: Vec<[f64; 6]> = points
         .iter()
         .map(|p| {
+            let g = |i: usize, d: f64| p[i].as_f64().unwrap_or(d);
             [
-                p[0].as_f64().unwrap_or(0.0),
-                p[1].as_f64().unwrap_or(0.0),
-                p[2].as_f64().unwrap_or(0.7),
-                p[3].as_f64().unwrap_or(0.01),
+                g(0, 0.0),
+                g(1, 0.0),
+                g(2, 0.7),
+                g(3, 0.01),
+                g(4, 0.0),
+                g(5, 0.0),
             ]
         })
         .collect();
@@ -115,7 +118,7 @@ fn partial_stroke(points: &[Value], progress: f64) -> Vec<animscript_brush::Poin
         .map(|w| ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt())
         .sum();
     let target = total * progress.clamp(0.0, 1.0);
-    let mut out: Vec<[f64; 4]> = vec![];
+    let mut out: Vec<[f64; 6]> = vec![];
     let mut run = 0.0;
     for (i, p) in pts.iter().enumerate() {
         if i == 0 {
@@ -130,12 +133,12 @@ fn partial_stroke(points: &[Value], progress: f64) -> Vec<animscript_brush::Poin
         } else {
             let f = if seg > 0.0 { (target - run) / seg } else { 0.0 };
             if f > 0.0 {
-                out.push([
-                    q[0] + (p[0] - q[0]) * f,
-                    q[1] + (p[1] - q[1]) * f,
-                    q[2] + (p[2] - q[2]) * f,
-                    p[3] * f,
-                ]);
+                let mut m = [0.0; 6];
+                for k in 0..6 {
+                    m[k] = q[k] + (p[k] - q[k]) * f;
+                }
+                m[3] = p[3] * f;
+                out.push(m);
             }
             break;
         }
@@ -148,11 +151,30 @@ fn partial_stroke(points: &[Value], progress: f64) -> Vec<animscript_brush::Poin
             x: p[0] as f32,
             y: p[1] as f32,
             pressure: p[2] as f32,
-            xtilt: 0.0,
-            ytilt: 0.0,
+            xtilt: p[4] as f32,
+            ytilt: p[5] as f32,
             dt: p[3],
         })
         .collect()
+}
+
+fn blend_mode(name: &str) -> tiny_skia::BlendMode {
+    use tiny_skia::BlendMode as B;
+    match name {
+        "multiply" => B::Multiply,
+        "screen" => B::Screen,
+        "overlay" => B::Overlay,
+        "darken" => B::Darken,
+        "lighten" => B::Lighten,
+        "color_dodge" => B::ColorDodge,
+        "color_burn" => B::ColorBurn,
+        "hard_light" => B::HardLight,
+        "soft_light" => B::SoftLight,
+        "difference" => B::Difference,
+        "exclusion" => B::Exclusion,
+        "add" => B::Plus,
+        _ => B::SourceOver,
+    }
 }
 
 /// Paint a layer: every stroke is replayed with a fresh libmypaint brush (so it comes out the same every frame) onto
@@ -207,7 +229,34 @@ fn draw_paint(pm: &mut Pixmap, sh: &Value, view: &View) {
             q.x *= res as f32;
             q.y *= res as f32;
         }
-        canvas.stroke(&mut brush, &pts);
+        let symmetry = stroke["symmetry"].as_object().and_then(|y| {
+            use animscript_brush::SymmetryKind as K;
+            let kind = match y["kind"].as_str()? {
+                "vertical" => K::Vertical,
+                "horizontal" => K::Horizontal,
+                "both" => K::Both,
+                "radial" => K::Radial,
+                "snowflake" => K::Snowflake,
+                _ => return None,
+            };
+            Some(animscript_brush::Symmetry {
+                kind,
+                center: [
+                    y["center"][0].as_f64()? as f32 * res as f32,
+                    y["center"][1].as_f64()? as f32 * res as f32,
+                ],
+                angle_deg: y["angle"].as_f64().unwrap_or(0.0) as f32,
+                lines: y["lines"].as_i64().unwrap_or(2) as i32,
+            })
+        });
+        let opts = animscript_brush::StrokeOpts {
+            barrel: stroke["barrel"].as_f64().unwrap_or(0.0) as f32,
+            symmetry,
+            blend: animscript_brush::Blend::from_name(stroke["blend"].as_str().unwrap_or("normal"))
+                .unwrap_or(animscript_brush::Blend::Normal),
+            strength: stroke["strength"].as_f64().unwrap_or(1.0) as f32,
+        };
+        canvas.stroke_with(&mut brush, &pts, &opts);
     }
     let Some(size) = tiny_skia::IntSize::from_wh(pw, ph) else {
         return;
@@ -232,8 +281,8 @@ fn draw_paint(pm: &mut Pixmap, sh: &Value, view: &View) {
         .post_concat(view.tf);
     let paint = tiny_skia::PixmapPaint {
         opacity: sh["opacity"].as_f64().unwrap_or(1.0) as f32,
+        blend_mode: blend_mode(p["blend"].as_str().unwrap_or("normal")),
         quality: tiny_skia::FilterQuality::Bilinear,
-        ..tiny_skia::PixmapPaint::default()
     };
     pm.draw_pixmap(0, 0, layer.as_ref(), &paint, tf, None);
 }

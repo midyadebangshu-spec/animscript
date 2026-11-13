@@ -261,3 +261,147 @@ fn painting_is_deterministic() {
     );
     assert_eq!(go(&src).snapshots[14], go(&src).snapshots[14]);
 }
+
+// ---- tilt, symmetry and blend modes --------------------------------------------------------
+
+fn stroke_json(snap: &Value, k: usize) -> &Value {
+    &paint(snap, 0)["strokes"][k]
+}
+
+#[test]
+fn points_may_carry_a_tilt_and_a_stroke_can_default_it() {
+    let r = go(&format!("{SETUP}art.stroke(ink, [(10, 10, 0.5, 0.01, 0.3, -0.4), (60, 10, 0.5, 0.05, -0.2, 0.1)])\nart.stroke(ink, [(10, 30), (60, 30, 0.8, 0.05, 0.9, 0.9)], tilt: (0.5, 0))\n{}", scene("        wait 1.frame\n", 1)));
+    let p = &stroke_json(&r.snapshots[0], 0)["points"];
+    near(p[0][4].as_f64().unwrap(), 0.3, 1e-12);
+    near(p[1][5].as_f64().unwrap(), 0.1, 1e-12);
+    let q = &stroke_json(&r.snapshots[0], 1)["points"];
+    near(q[0][4].as_f64().unwrap(), 0.5, 1e-12); // the stroke default
+    near(q[1][4].as_f64().unwrap(), 0.9, 1e-12); // a point's own tilt wins
+}
+
+#[test]
+fn tilt_follow_leans_the_pen_the_way_the_stroke_goes() {
+    let r = go(&format!("{SETUP}art.stroke(ink, [(10, 10), (60, 10), (110, 10)], tilt: \"follow\")\nart.stroke(ink, [(10, 40), (10, 90), (10, 140)], tilt: \"follow\")\n{}", scene("        wait 1.frame\n", 1)));
+    let right = &stroke_json(&r.snapshots[0], 0)["points"][1];
+    near(right[4].as_f64().unwrap(), 0.6, 1e-9);
+    near(right[5].as_f64().unwrap(), 0.0, 1e-9);
+    let down = &stroke_json(&r.snapshots[0], 1)["points"][1];
+    near(down[4].as_f64().unwrap(), 0.0, 1e-9);
+    near(down[5].as_f64().unwrap(), 0.6, 1e-9);
+}
+
+#[test]
+fn barrel_is_stored_in_turns() {
+    let r = go(&format!(
+        "{SETUP}art.stroke(ink, [(10, 10), (60, 10)], barrel: 90.deg)\n{}",
+        scene("        wait 1.frame\n", 1)
+    ));
+    near(
+        stroke_json(&r.snapshots[0], 0)["barrel"].as_f64().unwrap(),
+        0.25,
+        1e-12,
+    );
+}
+
+#[test]
+fn symmetry_is_stored_per_stroke_with_the_canvas_centre_by_default() {
+    let r = go(&format!("{SETUP}art.stroke(ink, [(10, 10), (60, 10)], symmetry: \"radial\", lines: 5)\nart.stroke(ink, [(10, 10), (60, 10)], symmetry: \"snowflake\", lines: 8, center: (100, 50), angle: 90.deg)\nart.stroke(ink, [(10, 10), (60, 10)])\n{}", scene("        wait 1.frame\n", 1)));
+    let a = &stroke_json(&r.snapshots[0], 0)["symmetry"];
+    assert_eq!(
+        (a["kind"].as_str().unwrap(), a["lines"].as_i64().unwrap()),
+        ("radial", 5)
+    );
+    near(a["center"][0].as_f64().unwrap(), 200.0, 1e-9); // 400 x 300 canvas
+    near(a["center"][1].as_f64().unwrap(), 150.0, 1e-9);
+    let b = &stroke_json(&r.snapshots[0], 1)["symmetry"];
+    near(b["center"][0].as_f64().unwrap(), 100.0, 1e-9);
+    near(b["angle"].as_f64().unwrap(), 90.0, 1e-9); // stored in degrees
+    assert!(stroke_json(&r.snapshots[0], 2)["symmetry"].is_null());
+}
+
+#[test]
+fn a_layer_default_symmetry_applies_to_later_strokes_only() {
+    let r = go(&format!("{SETUP}art.stroke(ink, [(10, 10), (60, 10)])\nart.symmetry(\"both\", center: (50, 50))\nart.stroke(ink, [(10, 20), (60, 20)])\nart.stroke(ink, [(10, 30), (60, 30)], symmetry: none)\nart.stroke(ink, [(10, 40), (60, 40)], symmetry: \"vertical\")\nart.symmetry(none)\nart.stroke(ink, [(10, 50), (60, 50)])\n{}", scene("        wait 1.frame\n", 1)));
+    let kind = |k: usize| {
+        stroke_json(&r.snapshots[0], k)["symmetry"]["kind"]
+            .as_str()
+            .map(|s| s.to_string())
+    };
+    assert_eq!(kind(0), None);
+    assert_eq!(kind(1).as_deref(), Some("both"));
+    assert_eq!(kind(2), None, "`symmetry: none` overrides the default");
+    assert_eq!(kind(3).as_deref(), Some("vertical"));
+    assert_eq!(kind(4), None, "cleared");
+}
+
+#[test]
+fn blend_and_strength_are_stored_and_the_layer_has_a_blend() {
+    let r = go(&format!("{SETUP}art.stroke(ink, [(10, 10), (60, 10)], blend: \"multiply\", strength: 0.5)\nart.stroke(ink, [(10, 30), (60, 30)])\nart.blend = \"screen\"\n{}", scene("        wait 1.frame\n", 1)));
+    let s = stroke_json(&r.snapshots[0], 0);
+    assert_eq!(s["blend"], "multiply");
+    near(s["strength"].as_f64().unwrap(), 0.5, 1e-12);
+    assert_eq!(stroke_json(&r.snapshots[0], 1)["blend"], "normal");
+    assert_eq!(paint(&r.snapshots[0], 0)["blend"], "screen");
+}
+
+#[test]
+fn tilt_symmetry_and_blend_errors() {
+    assert_eq!(
+        err(&format!(
+            "{SETUP}art.stroke(ink, [(1, 2, 0.5, 0.01, 0.3)])\n"
+        ))
+        .code,
+        "E-BRU-002"
+    ); // five numbers
+    assert_eq!(
+        err(&format!(
+            "{SETUP}art.stroke(ink, [(1, 2, 0.5, 0.01, 2, 0)])\n"
+        ))
+        .code,
+        "E-BRU-002"
+    ); // tilt above 1
+    assert_eq!(
+        err(&format!("{SETUP}art.stroke(ink, [(1, 2)], tilt: (3, 0))\n")).code,
+        "E-BRU-002"
+    );
+    assert_eq!(
+        err(&format!(
+            "{SETUP}art.stroke(ink, [(1, 2)], tilt: \"sideways\")\n"
+        ))
+        .code,
+        "E-BRU-003"
+    );
+    assert_eq!(
+        err(&format!(
+            "{SETUP}art.stroke(ink, [(1, 2)], symmetry: \"spiral\")\n"
+        ))
+        .code,
+        "E-BRU-003"
+    );
+    assert_eq!(
+        err(&format!(
+            "{SETUP}art.stroke(ink, [(1, 2)], symmetry: \"radial\", lines: 1)\n"
+        ))
+        .code,
+        "E-BRU-003"
+    );
+    assert_eq!(
+        err(&format!(
+            "{SETUP}art.stroke(ink, [(1, 2)], blend: \"glow\")\n"
+        ))
+        .code,
+        "E-BRU-003"
+    );
+    assert_eq!(
+        err(&format!("{SETUP}art.stroke(ink, [(1, 2)], strength: 2)\n")).code,
+        "E-BRU-003"
+    );
+    assert_eq!(
+        err(&format!("{SETUP}art.blend = \"glow\"\n")).code,
+        "E-BRU-003"
+    );
+    assert_eq!(
+        err(&format!("{SETUP}art.symmetry(\"nope\")\n")).code,
+        "E-BRU-003"
+    );
+}

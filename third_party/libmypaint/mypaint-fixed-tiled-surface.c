@@ -176,3 +176,19 @@ mypaint_fixed_tiled_surface_read(MyPaintFixedTiledSurface *self, uint16_t *out)
         }
     }
 }
+
+/* The inverse of mypaint_fixed_tiled_surface_read: replace the picture with width * height premultiplied RGBA pixels. */
+void
+mypaint_fixed_tiled_surface_write(MyPaintFixedTiledSurface *self, const uint16_t *in)
+{
+    const int tp = self->parent.tile_size;
+    for (int y = 0; y < self->height; y++) {
+        for (int x = 0; x < self->width; x++) {
+            const int tx = x / tp, ty = y / tp;
+            uint16_t *tile = self->tile_buffer + ((size_t)(ty * self->tiles_width + tx) * self->tile_size) / sizeof(uint16_t);
+            uint16_t *px = tile + ((y % tp) * tp + (x % tp)) * 4;
+            const uint16_t *i = in + ((size_t)y * self->width + x) * 4;
+            px[0] = i[0]; px[1] = i[1]; px[2] = i[2]; px[3] = i[3];
+        }
+    }
+}

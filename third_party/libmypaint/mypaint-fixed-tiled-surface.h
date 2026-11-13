@@ -36,6 +36,9 @@ mypaint_fixed_tiled_surface_clear(MyPaintFixedTiledSurface *self);
 void
 mypaint_fixed_tiled_surface_read(MyPaintFixedTiledSurface *self, uint16_t *out);
 
+void
+mypaint_fixed_tiled_surface_write(MyPaintFixedTiledSurface *self, const uint16_t *in);
+
 G_END_DECLS
 
 #endif // MYPAINTFIXEDTILEDSURFACE_H

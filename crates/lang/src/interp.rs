@@ -1245,6 +1245,9 @@ impl Interp {
                 .help("use `let x = ...` to bind a name"));
         };
         match self.eval(obj, vars, mode)? {
+            Value::Shape(sn) if attr == "blend" && self.paints.contains_key(&sn) => {
+                self.set_layer_blend(&sn, &v)
+            }
             Value::Shape(sn) => {
                 if !matches!(
                     attr.as_str(),
@@ -2521,7 +2524,9 @@ impl Interp {
             ));
         }
         if let Value::Shape(sn) = &obj {
-            if self.paints.contains_key(sn) && matches!(name, "stroke" | "clear_strokes") {
+            if self.paints.contains_key(sn)
+                && matches!(name, "stroke" | "clear_strokes" | "symmetry")
+            {
                 let sn = sn.clone();
                 return self.paint_method(&sn, name, args, mode, span);
             }

@@ -112,3 +112,104 @@ fn an_unknown_brush_is_skipped_not_a_crash() {
     let pm = render_with(&snap(l), 1.0, false, false).unwrap();
     assert_eq!(px(&pm, 100, 50), (255, 255, 255));
 }
+
+// ---- symmetry, blend modes and tilt in the picture -----------------------------------------
+
+fn solid_brush(color: [f64; 3]) -> Value {
+    json!({"source": "rounded", "myb": null, "set": [["radius_logarithmic", 2.3], ["opaque", 1.0], ["hardness", 0.95]], "color": color})
+}
+fn pts(a: [f64; 2], b: [f64; 2]) -> Value {
+    json!([
+        [a[0], a[1], 1.0, 0.01],
+        [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0, 1.0, 0.03],
+        [b[0], b[1], 1.0, 0.03]
+    ])
+}
+fn two_brush_layer(strokes: Value) -> Value {
+    let mut l = layer(strokes, json!({}));
+    l["paint"]["brushes"] = json!([solid_brush([1.0, 0.0, 0.0]), solid_brush([0.0, 0.0, 1.0])]);
+    l
+}
+
+#[test]
+fn a_stroke_with_symmetry_is_repeated_in_the_picture() {
+    let strokes = json!([{"brush": 0, "progress": 1.0, "points": pts([30.0, 25.0], [50.0, 25.0]),
+        "symmetry": {"kind": "both", "lines": 2, "center": [100.0, 50.0], "angle": 0.0}}]);
+    let pm = render_with(&snap(two_brush_layer(strokes)), 1.0, false, false).unwrap();
+    for (x, y) in [(40, 25), (160, 25), (40, 75), (160, 75)] {
+        assert!(painted(&pm, x, y), "copy at ({x}, {y})");
+    }
+    assert_eq!(px(&pm, 100, 50), (255, 255, 255));
+}
+
+#[test]
+fn symmetry_follows_the_layers_resolution() {
+    let mut l = two_brush_layer(
+        json!([{"brush": 0, "progress": 1.0, "points": pts([30.0, 25.0], [50.0, 25.0]),
+        "symmetry": {"kind": "vertical", "lines": 2, "center": [100.0, 50.0], "angle": 0.0}}]),
+    );
+    l["paint"]["resolution"] = json!(2.0);
+    let pm = render_with(&snap(l), 1.0, false, false).unwrap();
+    assert!(
+        painted(&pm, 40, 25) && painted(&pm, 160, 25),
+        "mirrored about the canvas centre line at resolution 2"
+    );
+}
+
+#[test]
+fn a_multiply_stroke_darkens_what_is_under_it_and_a_layer_blend_applies_to_the_scene() {
+    let strokes = json!([
+        {"brush": 0, "progress": 1.0, "points": pts([40.0, 50.0], [120.0, 50.0])},
+        {"brush": 1, "progress": 1.0, "points": pts([80.0, 30.0], [80.0, 70.0]), "blend": "multiply", "strength": 1.0},
+    ]);
+    let pm = render_with(&snap(two_brush_layer(strokes)), 1.0, false, false).unwrap();
+    // red x blue = black where they cross; blue alone elsewhere
+    let (r, g, b) = px(&pm, 80, 50);
+    assert!(r < 40 && g < 40 && b < 40, "multiplied: {r} {g} {b}");
+    let (r, _, b) = px(&pm, 80, 70);
+    assert!(
+        b > 150 && r < 80,
+        "the blue part over the background: {r} {b}"
+    );
+    // a layer blend of multiply with a dark background keeps it dark; with `add` it lights the picture
+    let mut l = two_brush_layer(
+        json!([{"brush": 0, "progress": 1.0, "points": pts([40.0, 50.0], [120.0, 50.0])}]),
+    );
+    l["paint"]["blend"] = json!("add");
+    let mut s = snap(l);
+    s["background"] = json!("#003300");
+    let pm = render_with(&s, 1.0, false, false).unwrap();
+    let (r, g, _) = px(&pm, 80, 50);
+    assert!(
+        r > 200 && g > 40,
+        "red added to the green background: {r} {g}"
+    );
+}
+
+#[test]
+fn tilt_reaches_the_brush() {
+    let myb = r#"{"version": 3, "settings": {"opaque": {"base_value": 1.0, "inputs": {}}, "hardness": {"base_value": 0.95, "inputs": {}},
+        "radius_logarithmic": {"base_value": 1.8, "inputs": {}}, "elliptical_dab_ratio": {"base_value": 4.0, "inputs": {}},
+        "elliptical_dab_angle": {"base_value": 0.0, "inputs": {"tilt_ascension": [[-180.0, 0.0], [180.0, 180.0]]}}}}"#;
+    let one = |xt: f64, yt: f64| {
+        let mut l = layer(
+            json!([{"brush": 0, "progress": 1.0, "points": [[100.0, 50.0, 0.9, 0.01, xt, yt], [102.0, 50.0, 0.9, 0.01, xt, yt], [104.0, 50.0, 0.9, 0.01, xt, yt]]}]),
+            json!({}),
+        );
+        l["paint"]["brushes"] =
+            json!([{"source": "mine", "myb": myb, "set": [], "color": [1.0, 0.0, 0.0]}]);
+        let pm = render_with(&snap(l), 1.0, false, false).unwrap();
+        let (mut w, mut h) = ((200u32, 0u32), (100u32, 0u32));
+        for y in 0..100 {
+            for x in 0..200 {
+                if painted(&pm, x, y) {
+                    w = (w.0.min(x), w.1.max(x));
+                    h = (h.0.min(y), h.1.max(y));
+                }
+            }
+        }
+        (w.1 - w.0, h.1 - h.0)
+    };
+    let (a, b) = (one(0.9, 0.0), one(0.0, 0.9));
+    assert_ne!(a, b, "{a:?} vs {b:?}");
+}

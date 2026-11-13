@@ -977,7 +977,7 @@ judgement calls I expect you to want to look at.
     truncates a stroke to its progress along the path length (the last point interpolated), scales points and
     `radius_logarithmic` by the resolution, and draws the picture with bilinear filtering through scale/rotate/translate
     about the pivot, then the camera. Cost is proportional to the number of dabs per frame, with no caching yet.
-206. **Not yet.** Tilt input, symmetry, and per-stroke blend modes beyond what the brush itself does.
+206. **Not yet.** Per-stroke blend of the symmetric copies separately, and brush-level modes other than libmypaint's own.
 207. **A stroke starts cleanly.** libmypaint filters the cursor towards its previous position (`slow_tracking`) before it
     notices that a stroke has started, so a brush with tracking drew a tail sliding in from the last position (or the
     origin). `Canvas::stroke` now gives the first, zero-pressure sample a time step above libmypaint's 5 s limit, which
@@ -1002,4 +1002,22 @@ judgement calls I expect you to want to look at.
     quadratic and cubic) densely and resample by arc length with the shape's current transform applied; `jitter` adds
     seeded value noise (one stream per axis, advancing with path length / `scale`) so strokes of the same seed repeat.
     Argument problems are `E-FRE-001`.
+211. **Tilt.** A point may carry `xtilt, ytilt` (-1 to 1) as its 5th and 6th numbers (a point has 2, 3, 4 or 6 numbers;
+    five is an error); a stroke's `tilt: (x, y)` fills in the points that have none, and `tilt: "follow"` sets
+    `0.6 * (cos, sin)` of the local direction of travel (the line between the neighbouring points) for them. `barrel:` is
+    in turns, as libmypaint's argument. The snapshot's point arrays have six numbers; the renderer reads missing ones as 0.
+212. **Symmetry.** Uses libmypaint's own symmetry on the tiled surface (`set_symmetry_state`, applied at `begin_atomic`, cleared
+    after each stroke). Kinds `vertical`, `horizontal`, `both`, `radial`, `snowflake`; `lines` 2 to 64; `angle` in
+    degrees (the language takes an Angle); `center` defaults to the canvas centre and is multiplied by the layer's
+    resolution when rendering. It is stored on each stroke: `layer.symmetry(...)` sets the default for strokes made
+    after it, `none` clears it, and `symmetry: none` on one stroke overrides the default.
+213. **Blend modes.** `Canvas::stroke_with` paints a non-`normal` or partly strong stroke on a transparent canvas of
+    the same size, then composites it onto the picture on premultiplied 15-bit pixels with `co = cs (1 - ab) + cb (1 - as)
+    + as ab B(cb, cs)`, `ao = as + ab - as ab` (`strength` scales the source alpha and colour first), and writes the result
+    back (`mypaint_fixed_tiled_surface_write`, a new vendored accessor). Separable W3C modes: multiply, screen, overlay,
+    darken, lighten, color dodge and burn, hard and soft light, difference, exclusion, plus `add`. A smudge brush in a blended
+    stroke sees only its own canvas (documented). `art.blend` maps the same names to tiny-skia blend modes when the
+    layer is drawn onto the scene (`add` is `Plus`).
+214. **Errors.** `E-BRU-002` for bad points and tilt numbers, new `E-BRU-003` for bad tilt style, symmetry or blend arguments,
+    unknown symmetry kinds and blend modes, `lines` and `strength` out of range.
 

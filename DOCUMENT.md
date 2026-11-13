@@ -1981,6 +1981,43 @@ art.fade_to(0.5) over 1.second                                               # a
 Worked example: `examples/painting.anim` (about 35 seconds to render 16 seconds of video, because every frame replays
 every stroke).
 
+### Tilt, symmetry and blend modes
+
+```anim
+# tilt: a pen leaning on the surface (-1 to 1 each way, as a tablet reports it); brushes such as calligraphy react
+art.stroke(pen, [(10, 10, 0.5, 0.02, 0.3, -0.4), (60, 10)], tilt: (0.5, 0))     # per point (x, y, pressure, seconds, xtilt, ytilt) or a default
+art.stroke(pen, points, tilt: "follow", barrel: 45.deg)                         # lean the way the stroke goes; twist the pen
+
+# symmetry: every dab is repeated around a centre (default: the canvas centre)
+art.stroke(ink, points, symmetry: "radial", lines: 6, center: (400, 300), angle: 15.deg)
+art.symmetry("snowflake", lines: 8)        # the default for the strokes that follow ...
+art.symmetry(none)                         # ... until cleared; `symmetry: none` on a stroke overrides it once
+
+# blend modes: composite a stroke onto what is already painted
+art.stroke(glow, points, blend: "screen", strength: 0.8)
+art.blend = "add"                          # how the whole layer is composited onto the scene
+```
+
+- **Tilt.** A point has 2, 3, 4 or 6 numbers: `(x, y)`, `(x, y, pressure)`, `(x, y, pressure, seconds)` or all six with
+  `xtilt, ytilt`. `tilt: (x, y)` is the default for points without their own, `tilt: "follow"` leans the pen 0.6 of the
+  way towards the direction of travel, and `barrel:` twists it (an angle). Out of range is `E-BRU-002`, a bad `tilt:` value
+  `E-BRU-003`. Only brushes that use tilt inputs (calligraphy, some chalks) change.
+- **Symmetry.** `vertical` (mirrors across the vertical line through the centre), `horizontal`, `both` (four copies),
+  `radial` (`lines` copies turned around the centre) and `snowflake` (the same, each also reflected); `angle` turns the
+  lines. A stroke keeps the symmetry it was made with, so the snapshot is self-contained. Bad kinds or `lines` outside
+  2 to 64 are `E-BRU-003`.
+- **Blend modes.** `normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `color_dodge`, `color_burn`,
+  `hard_light`, `soft_light`, `difference`, `exclusion`, `add` (the W3C compositing formulas). `strength` (0 to 1) is how
+  much of the stroke is composited. A blended stroke is painted on a transparent copy first, so a **smudge** brush in
+  a blended stroke sees nothing under it; later strokes see the blended result. `art.blend = "..."` blends the whole
+  layer onto the scene. Unknown modes and a `strength` outside 0 to 1 are `E-BRU-003`.
+- **Modes that live in the brush.** `eraser: true` (erase), `lock_alpha: 1` (paint only where there is paint) and
+  `colorize: 1` (take the hue and saturation of the colour, keep the lightness underneath) are libmypaint brush
+  settings, set like any other: `brush("rounded", lock_alpha: 1, color: #ff0000)`.
+
+Worked example: `examples/mandala.anim`.
+
+
 ## 13o. Freehand drawing: Bezier fitting and point lists
 
 Hand-drawn points (a tremor and all) become smooth cubic Bezier curves with Philip Schneider's curve-fitting
