@@ -11,4 +11,4 @@ mod parse;
 pub use diff::DiffError;
 pub use eval::EvalError;
 pub use ir::{bin_apply, noise_apply, un_apply, Bin, Builder, Id, Node, Program, Rate, Un};
-pub use parse::{parse, Env, ParseError};
+pub use parse::{apply_fn, parse, Env, ParseError};

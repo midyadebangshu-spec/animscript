@@ -2194,6 +2194,41 @@ pub fn polygon(points: &[P]) -> Res<Shape> {
     }
     Ok(closed(points))
 }
+/// A polyline through `points` (v1..vN in order, one straight edge between neighbours); with `closed`, the last
+/// joins the first and there is a face. Needs two points (three if closed).
+pub fn polyline(points: &[P], closed_path: bool) -> Res<Shape> {
+    let need = if closed_path { 3 } else { 2 };
+    if points.len() < need {
+        return Err(invalid(format!(
+            "a {} curve needs at least {need} points, got {}",
+            if closed_path { "closed" } else { "open" },
+            points.len()
+        )));
+    }
+    if closed_path {
+        return Ok(closed(points));
+    }
+    let mut s = Shape::new("shape");
+    for p in points {
+        s.new_vertex(p[0], p[1], None);
+    }
+    for i in 1..points.len() as u32 {
+        s.new_edge(i, i + 1, None);
+    }
+    Ok(s)
+}
+/// A shape of loose segments: vertex k at `points[k]` and one straight edge per `(a, b)` pair of point indices
+/// (used for contours, which have no face).
+pub fn segments(points: &[P], pairs: &[(usize, usize)]) -> Shape {
+    let mut s = Shape::new("shape");
+    for p in points {
+        s.new_vertex(p[0], p[1], None);
+    }
+    for (a, b) in pairs {
+        s.new_edge(*a as u32 + 1, *b as u32 + 1, None);
+    }
+    s
+}
 /// Two vertices and one edge, no face.
 pub fn line(a: P, b: P) -> Shape {
     let mut s = Shape::new("shape");

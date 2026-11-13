@@ -349,6 +349,28 @@ pub fn motion_value(m: &Motion, x0: f64, t: f64) -> f64 {
 pub enum ModKind {
     Wobble,
     Noise,
+    /// An equation (see `mathfx`): the values come from `ModReq::drive`, not from `comps`.
+    Drive,
+}
+
+/// What a `drive` computes: a compiled equation program and where each output goes.
+#[derive(Clone, Debug)]
+pub struct Drive {
+    /// Point inputs `x, y, i, u`; frame inputs `t, n`; one output per entry of `outs`.
+    pub prog: animscript_math::Program,
+    /// The vertices the equation runs over (empty for shape-level properties, which see one point).
+    pub verts: Vec<u32>,
+    pub outs: Vec<DriveOut>,
+    /// Replace the rest value instead of adding to it.
+    pub replace: bool,
+    /// Multiplies time (`t` is seconds since the drive started, times this).
+    pub speed: f64,
+}
+
+/// One output of a drive: `props[k]` receives point `k`'s value (vertex drives) or all receive point 0 (shape level).
+#[derive(Clone, Debug)]
+pub struct DriveOut {
+    pub props: Vec<PropId>,
 }
 
 /// One scalar driven by a procedural modifier.
@@ -374,6 +396,7 @@ pub struct ModReq {
     pub frames: Option<i64>,
     pub blend_in: i64,
     pub blend_out: i64,
+    pub drive: Option<std::rc::Rc<Drive>>,
 }
 
 /// What a `start` statement launches without blocking.

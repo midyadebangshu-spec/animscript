@@ -1723,7 +1723,7 @@ impl Interp {
         })
     }
 
-    fn lookup(&mut self, n: &str, vars: &Vars) -> Res<Value> {
+    pub(crate) fn lookup(&mut self, n: &str, vars: &Vars) -> Res<Value> {
         if let Some(v) = vars.get(n) {
             return Ok(v.clone());
         }
@@ -2295,6 +2295,7 @@ impl Interp {
                 let pts: Vec<[f64; 2]> = items.iter().map(|p| self.point(p, "a polygon point")).collect::<Res<_>>()?;
                 Ok(Value::Fresh(Box::new(polygon(&pts)?)))
             }
+            "plot" | "curve" | "polar" | "implicit" => self.math_shape(name, args),
             "line" => {
                 let m = self.bind(name, args, &["a", "b"], &["a", "b"])?;
                 Ok(Value::Fresh(Box::new(line(self.point(&m["a"], "`a`")?, self.point(&m["b"], "`b`")?))))
@@ -2566,6 +2567,7 @@ impl Interp {
         }
         match name {
             "wobble" | "noise" => return self.modifier_method(obj, name, args, span, mode),
+            "drive" => return self.drive_method(obj, args, span, mode),
             "fall" | "bounce_in" => return self.physics_method(obj, name, args, span, mode),
             "fill_to" | "stroke_to" | "width_to" | "fade_to" | "tint_to" => {
                 return self.colour_method(obj, name, args, span, mode)
@@ -3865,7 +3867,11 @@ impl Interp {
     }
 
     /// The vertices a modifier or physics action drives: every vertex of the element(s), once each.
-    fn target_vertices(&self, obj: &Value, what: &str) -> Res<Option<(String, Vec<u32>)>> {
+    pub(crate) fn target_vertices(
+        &self,
+        obj: &Value,
+        what: &str,
+    ) -> Res<Option<(String, Vec<u32>)>> {
         let refs: Vec<(String, ElemRef)> = match obj {
             Value::Elem(s, r) => vec![(s.clone(), *r)],
             Value::List(items) => items
@@ -3897,7 +3903,7 @@ impl Interp {
 
     /// The next stream seed for a base name: calls on the same target and kind are numbered, so
     /// unrelated modifiers elsewhere never change this one's numbers.
-    fn mod_seed(&mut self, base: &str) -> u64 {
+    pub(crate) fn mod_seed(&mut self, base: &str) -> u64 {
         let n = self.mod_counts.entry(base.to_string()).or_insert(0);
         let k = *n;
         *n += 1;
@@ -4115,6 +4121,7 @@ impl Interp {
             frames,
             blend_in,
             blend_out,
+            drive: None,
         })))
     }
 

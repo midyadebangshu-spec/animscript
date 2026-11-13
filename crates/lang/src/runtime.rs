@@ -10,7 +10,7 @@ use crate::snapshot::{build_snapshot, snapshot_hash, Resolved};
 use crate::value::*;
 use animscript_core::*;
 use serde_json::Value as J;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 #[derive(Default, Clone, Debug)]
@@ -63,6 +63,7 @@ struct ModSet {
     shape: String,
     kind: ModKind,
     comps: Vec<ModComp>,
+    drive: Option<std::rc::Rc<Drive>>,
     from: i64,
     to: Option<i64>,
     blend_in: i64,
@@ -157,6 +158,8 @@ pub struct Runtime {
     resolved: Resolved,
     keysets: Vec<KeySet>,
     modsets: Vec<ModSet>,
+    /// Drives that already traced a non-finite result (once each).
+    drive_warned: BTreeSet<u32>,
     handles: BTreeMap<u32, HandleState>,
     main_task: Option<u32>,
     main_done: bool,
@@ -237,6 +240,7 @@ impl Runtime {
             resolved: Resolved::default(),
             keysets: vec![],
             modsets: vec![],
+            drive_warned: BTreeSet::new(),
             handles: BTreeMap::new(),
             main_task: None,
             main_done: false,
@@ -1085,6 +1089,7 @@ impl Runtime {
             shape: m.shape,
             kind: m.kind,
             comps: m.comps,
+            drive: m.drive,
             from: tick,
             to,
             blend_in: m.blend_in,
@@ -1771,8 +1776,81 @@ impl Runtime {
             if let (true, Some(to)) = (m.blend_out > 0, m.to) {
                 w = w.min((to - tick) as f64 / m.blend_out as f64);
             }
+            if let Some(d) = &m.drive {
+                let t = secs * d.speed;
+                let (xs, ys, idx, us): (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) =
+                    if d.verts.is_empty() {
+                        // a shape-level drive sees the shape's rest centre (in the scene)
+                        let sh = &self.it.shapes[&m.shape];
+                        let c = sh.transform().apply(sh.bbox_center());
+                        (vec![c[0]], vec![c[1]], vec![0.0], vec![0.0])
+                    } else {
+                        let n = d.verts.len();
+                        (
+                            d.verts
+                                .iter()
+                                .map(|v| self.rest_value(&m.shape, PropId::Vx(*v)))
+                                .collect(),
+                            d.verts
+                                .iter()
+                                .map(|v| self.rest_value(&m.shape, PropId::Vy(*v)))
+                                .collect(),
+                            (0..n).map(|i| i as f64).collect(),
+                            (0..n)
+                                .map(|i| {
+                                    if n > 1 {
+                                        i as f64 / (n - 1) as f64
+                                    } else {
+                                        0.0
+                                    }
+                                })
+                                .collect(),
+                        )
+                    };
+                let n = xs.len();
+                let nf = if d.verts.is_empty() { 1.0 } else { n as f64 };
+                let out = d
+                    .prog
+                    .eval_n(n, &[&xs, &ys, &idx, &us], &[t, nf], &[])
+                    .expect("a drive program matches its inputs");
+                for (k, o) in d.outs.iter().enumerate() {
+                    for (vi, prop) in o.props.iter().enumerate() {
+                        let mut value = out[k][if d.verts.is_empty() { 0 } else { vi }];
+                        if !value.is_finite() {
+                            if self.drive_warned.insert(m.id) {
+                                self.it.trace_line(
+                                    "MATH",
+                                    &format!("{} gave {value}; treated as 0", m.shape),
+                                );
+                            }
+                            value = if d.replace {
+                                self.rest_value(&m.shape, *prop)
+                            } else {
+                                0.0
+                            };
+                        }
+                        if d.replace {
+                            value -= self.rest_value(&m.shape, *prop);
+                        }
+                        by_prop
+                            .entry((m.shape.clone(), *prop))
+                            .or_default()
+                            .push(Contribution {
+                                layer: 2,
+                                mode: BlendMode::Add,
+                                weight: w.clamp(0.0, 1.0),
+                                priority: 0,
+                                start: m.from,
+                                id: m.id,
+                                value,
+                            });
+                    }
+                }
+                continue;
+            }
             for c in &m.comps {
                 let value = match m.kind {
+                    ModKind::Drive => 0.0,
                     ModKind::Wobble => {
                         c.amount * (std::f64::consts::TAU * (c.speed * secs + c.phase)).sin()
                     }

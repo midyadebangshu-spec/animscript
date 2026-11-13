@@ -316,90 +316,7 @@ impl P<'_> {
         }
     }
     fn call(&mut self, name: &str, a: &[Id], at: usize) -> Result<Id, ParseError> {
-        let want = |n: usize| -> Result<(), ParseError> {
-            if a.len() == n {
-                Ok(())
-            } else {
-                Err(ParseError {
-                    msg: format!(
-                        "`{name}` takes {n} argument{}, {} given",
-                        if n == 1 { "" } else { "s" },
-                        a.len()
-                    ),
-                    at,
-                })
-            }
-        };
-        let un = |this: &mut Self, op: Un| -> Result<Id, ParseError> {
-            want(1)?;
-            Ok(this.b.un(op, a[0]))
-        };
-        let bn = |this: &mut Self, op: Bin| -> Result<Id, ParseError> {
-            want(2)?;
-            Ok(this.b.bin(op, a[0], a[1]))
-        };
-        match name {
-            "sin" => un(self, Un::Sin),
-            "cos" => un(self, Un::Cos),
-            "tan" => un(self, Un::Tan),
-            "asin" => un(self, Un::Asin),
-            "acos" => un(self, Un::Acos),
-            "atan" => un(self, Un::Atan),
-            "sinh" => un(self, Un::Sinh),
-            "cosh" => un(self, Un::Cosh),
-            "tanh" => un(self, Un::Tanh),
-            "exp" => un(self, Un::Exp),
-            "log" | "ln" => un(self, Un::Log),
-            "log2" => un(self, Un::Log2),
-            "log10" => un(self, Un::Log10),
-            "sqrt" => un(self, Un::Sqrt),
-            "abs" => un(self, Un::Abs),
-            "floor" => un(self, Un::Floor),
-            "ceil" => un(self, Un::Ceil),
-            "round" => un(self, Un::Round),
-            "trunc" => un(self, Un::Trunc),
-            "frac" | "fract" => un(self, Un::Fract),
-            "sign" => un(self, Un::Sign),
-            "hash" => un(self, Un::Hash),
-            "atan2" => bn(self, Bin::Atan2),
-            "pow" => bn(self, Bin::Pow),
-            "min" => bn(self, Bin::Min),
-            "max" => bn(self, Bin::Max),
-            "mod" | "fmod" => bn(self, Bin::Rem),
-            "clamp" => {
-                want(3)?;
-                Ok(self.b.clamp(a[0], a[1], a[2]))
-            }
-            "mix" | "lerp" => {
-                want(3)?;
-                Ok(self.b.mix(a[0], a[1], a[2]))
-            }
-            "smoothstep" => {
-                want(3)?;
-                Ok(self.b.smoothstep(a[0], a[1], a[2]))
-            }
-            "step" => {
-                want(2)?;
-                Ok(self.b.step(a[0], a[1]))
-            }
-            "if" => {
-                want(3)?;
-                Ok(self.b.select(a[0], a[1], a[2]))
-            }
-            "noise" => {
-                if !(1..=3).contains(&a.len()) {
-                    return Err(ParseError {
-                        msg: "`noise` takes 1 to 3 coordinates".into(),
-                        at,
-                    });
-                }
-                Ok(self.b.noise(self.env.noise_seed, a))
-            }
-            _ => Err(ParseError {
-                msg: format!("unknown function `{name}`"),
-                at,
-            }),
-        }
+        apply_fn(self.b, name, a, self.env.noise_seed).map_err(|msg| ParseError { msg, at })
     }
 }
 
@@ -412,4 +329,83 @@ pub fn parse(src: &str, b: &mut Builder, env: &Env) -> Result<Id, ParseError> {
         return p.err("unexpected input after the expression");
     }
     Ok(id)
+}
+
+/// The function table shared by the string parser and the language frontend: `name(args)` as nodes in `b`.
+pub fn apply_fn(b: &mut Builder, name: &str, a: &[Id], noise_seed: u32) -> Result<Id, String> {
+    let want = |n: usize| -> Result<(), String> {
+        if a.len() == n {
+            Ok(())
+        } else {
+            Err(format!(
+                "`{name}` takes {n} argument{}, {} given",
+                if n == 1 { "" } else { "s" },
+                a.len()
+            ))
+        }
+    };
+    let un = |b: &mut Builder, op: Un| -> Result<Id, String> {
+        want(1)?;
+        Ok(b.un(op, a[0]))
+    };
+    let bn = |b: &mut Builder, op: Bin| -> Result<Id, String> {
+        want(2)?;
+        Ok(b.bin(op, a[0], a[1]))
+    };
+    match name {
+        "sin" => un(b, Un::Sin),
+        "cos" => un(b, Un::Cos),
+        "tan" => un(b, Un::Tan),
+        "asin" => un(b, Un::Asin),
+        "acos" => un(b, Un::Acos),
+        "atan" => un(b, Un::Atan),
+        "sinh" => un(b, Un::Sinh),
+        "cosh" => un(b, Un::Cosh),
+        "tanh" => un(b, Un::Tanh),
+        "exp" => un(b, Un::Exp),
+        "log" | "ln" => un(b, Un::Log),
+        "log2" => un(b, Un::Log2),
+        "log10" => un(b, Un::Log10),
+        "sqrt" => un(b, Un::Sqrt),
+        "abs" => un(b, Un::Abs),
+        "floor" => un(b, Un::Floor),
+        "ceil" => un(b, Un::Ceil),
+        "round" => un(b, Un::Round),
+        "trunc" => un(b, Un::Trunc),
+        "frac" | "fract" => un(b, Un::Fract),
+        "sign" => un(b, Un::Sign),
+        "hash" => un(b, Un::Hash),
+        "atan2" => bn(b, Bin::Atan2),
+        "pow" => bn(b, Bin::Pow),
+        "min" => bn(b, Bin::Min),
+        "max" => bn(b, Bin::Max),
+        "mod" | "fmod" => bn(b, Bin::Rem),
+        "clamp" => {
+            want(3)?;
+            Ok(b.clamp(a[0], a[1], a[2]))
+        }
+        "mix" | "lerp" => {
+            want(3)?;
+            Ok(b.mix(a[0], a[1], a[2]))
+        }
+        "smoothstep" => {
+            want(3)?;
+            Ok(b.smoothstep(a[0], a[1], a[2]))
+        }
+        "step" => {
+            want(2)?;
+            Ok(b.step(a[0], a[1]))
+        }
+        "if" | "select" => {
+            want(3)?;
+            Ok(b.select(a[0], a[1], a[2]))
+        }
+        "noise" => {
+            if !(1..=3).contains(&a.len()) {
+                return Err("`noise` takes 1 to 3 coordinates".into());
+            }
+            Ok(b.noise(noise_seed, a))
+        }
+        _ => Err(format!("unknown function `{name}`")),
+    }
 }

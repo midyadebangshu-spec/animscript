@@ -2050,6 +2050,57 @@ art.stroke(pencil, jitter(resample(corners, 4), amount: 3, scale: 25, seed: "box
 
 Worked example: `examples/freehand.anim`.
 
+## 13p. Equations: `plot`, `curve`, `polar`, `implicit`, `drive` and `std/waves`
+
+Any shape can be given an equation. An equation is a **string** (`"sin(x / 40 + t * 3) * 8"`) or a **lambda**
+(`(x, t) -> sin(x / 40 + t * 3) * 8`). Both compile to the same small program (the math engine, crate
+`animscript-math`), which is run over all the points at once and gives the same numbers on every machine.
+
+```anim
+shape wave  = plot(y: "sin(x / 30) * 20", from: 0, to: 800, n: 120)            # y as a function of x
+shape heart = curve(x: "16 * sin(u)^3", y: "-13 * cos(u) + 5 * cos(2*u) + 2 * cos(3*u) + cos(4*u)", from: 0, to: 6.2832, n: 120, closed: true)
+shape rose  = polar(r: "40 * cos(3 * theta)", n: 200)                          # closed by default (full turn)
+shape ring  = implicit(f: "x*x + y*y - 100*100", x0: -150, y0: -150, x1: 150, y1: 150, res: 64)   # where f = 0
+
+water.drive(y: "amp * sin(tau * (x / 240 - t / 3))", amp: 10) over 8.seconds     # moves every vertex of `water`
+start boat.drive(pos_y: "6 * sin(t * 2)", rotation: "0.02 * sin(t)")             # shape properties
+```
+
+- **Shapes from equations** are ordinary shapes (fill, move, animate, drive them). `plot`, `curve` and `polar` sample `n`
+  points (default 100, 2 to 100000) from `from` to `to`; with `closed: true` the last point joins the first (and the
+  samples exclude the end value, so a full turn does not repeat its first point). `plot` gives `x`, `curve` gives `u`,
+  `polar` gives `theta` (radians, default 0 to tau); a non-finite value is `E-MTH-005`. `implicit` finds where `f`
+  changes sign on a grid of `res` x `res` cells (marching squares, negative is inside) and joins the crossings into
+  edges; it has no face, and no crossing at all is `E-MTH-003`.
+- **Equation syntax (strings):** numbers, `+ - * / %`, `^` (right-associative, tighter than unary minus), comparisons,
+  `&&` `||` `!` (giving 0 or 1), `c ? a : b` and `if(c, a, b)`; constants `pi tau e`; functions `sin cos tan asin acos
+  atan atan2 sinh cosh tanh exp log ln log2 log10 sqrt abs floor ceil round trunc frac sign min max pow mod clamp
+  mix smoothstep step noise hash select`. Angles are **radians**. `noise(x)`, `noise(x, y)`, `noise(x, y, z)` is smooth
+  value noise in [-1, 1], seeded by the script's seed, so it is the same on every run. A syntax error is `E-MTH-001`.
+- **Lambdas** name their inputs as parameters (`(x, t) -> ...`). They may use `+ - * / %`, comparisons, `and or not`
+  and the functions above (there is no `^`: write `pow(x, 2)`). Anything that does not mention an input is worked out
+  first by the interpreter, so `amp * 2`, `3.seconds` or `s.v2.x` are fine as constants; anything else is `E-MTH-002`.
+- **Named numbers:** any extra named argument that is a number (or a duration, angle or bool) is a constant in the
+  equation (`amp: 10`); durations are seconds and angles radians there.
+- **`drive`** is a layer-2 modifier, like `wobble`: it *adds* to what is below it and keyframes and locks still win.
+  It needs `over` or `start`. On a shape it moves all its vertices; on a vertex selection (`w.vertices.first(5)`) just
+  those. Properties: `x`, `y` (vertex offsets), or `opacity`, `width`, `rotation` (turns), `scale`, `pos_x`, `pos_y`
+  for the shape (not both kinds in one drive, `E-MTH-004`). Options: `mode: "replace"` (the equation gives the value
+  itself instead of an offset), `speed` (multiplies `t`), `blend_in`, `blend_out`, `over`.
+- **Inputs of a drive:** `x`, `y` (the vertex's own rest position; for shape properties the shape's rest centre in the
+  scene), `i` (vertex index, 0-based, in id order), `n` (vertex count), `u` (i / (n - 1)), and `t` (seconds since the
+  drive started, times `speed`). A result that is not a finite number drives nothing (0 is added, and a `MATH` line
+  appears in the trace once).
+- **`import "std/waves"`** (read `crates/lang/lib/waves.anim`): `swell(amp, length, period, over, blend)` a travelling
+  sine, `ripples(...)` two crossing waves plus noise, `choppy(..., sharp)` sharp crests (vertices also move sideways),
+  `float_on(amp, length, period, tilt, over, blend)` bobs and tilts a shape with a `swell` surface at its own x (give
+  it the surface's numbers). They use the equations above: copy and change them.
+
+Diagnostics: `E-MTH-001` equation syntax, `-002` construct not allowed in an equation, `-003` bad arguments (missing
+equation, `n`, `res`, bounds, `mode`), `-004` unknown or mixed drive property, `-005` non-finite value while building a shape.
+
+Worked example: `examples/water.anim`.
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,
@@ -2080,6 +2131,7 @@ help: did you mean `over: 1.second`?
 | Statements | `E-STM-001` blocking statement in `setup:`, `-003` zero-time loop body |
 | Scenes | `E-SCN-001` `for auto` without `main:`, `-002` unknown set, `E-SCR-001` script heading names no known set |
 | Properties | `E-CON-001` constraint cycle, `E-PRP-002` two locks on one component, `-003` overlapping keyframes |
+| Equations | `E-MTH-001` equation syntax, `-002` construct not allowed in an equation, `-003` bad arguments, `-004` unknown or mixed drive property, `-005` non-finite value |
 | Camera / assets | `E-CAM-001` zoom outside [1, 8], `E-AST-001` asset file not found |
 | Runtime | `E-RUN-001` tick did not settle in 64 deltas, `-002` action failed or rejected, `-004` `assert` failed |
 | Warnings | `W-TIM-001` sub-frame duration, `W-SEQ-001` non-blocking after long blocking, `W-RUL-001` rule can never fire, `W-RUL-002` flag set but never read, `W-SCR-001` script line matched no phrase, `W-AUD-001` mix clipped, `W-CNT-001` entity outside canvas |

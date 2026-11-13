@@ -7,4 +7,5 @@ edition.workspace = true
 animscript-core.workspace = true
 animscript-physics.workspace = true
 animscript-brush.workspace = true
+animscript-math.workspace = true
 serde_json.workspace = true

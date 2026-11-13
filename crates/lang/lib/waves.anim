@@ -1,0 +1,21 @@
+## std/waves: water-like motion from equations, written in AnimScript. Import with `import "std/waves"`.
+## Each action runs a `drive` (see the guide, section 13p) over a polyline made with `plot` (or any shape with
+## many vertices). Nothing here is built into the language: copy any of it and change the equations.
+## Times inside the equations are seconds, angles are radians, and `x` is the vertex's own x.
+
+## A gentle travelling swell: one sine wave, `amp` high and `length` long, moving once per `period`.
+action swell(self: Shape, amp: Number = 10, length: Number = 120, period: Duration = 2.seconds, over: Duration = 4.seconds, blend: Duration = 0.5.seconds):
+    self.drive(y: "amp * sin(tau * (x / length - t / period))", amp: amp, length: length, period: period, blend_in: blend, blend_out: blend) over over
+
+## Choppy water: two waves crossing, plus a little noise.
+action ripples(self: Shape, amp: Number = 6, length: Number = 40, period: Duration = 1.second, over: Duration = 4.seconds, blend: Duration = 0.5.seconds):
+    self.drive(y: "amp * (sin(tau * (x / length - t / period)) + 0.6 * sin(tau * (x / (length * 1.7) + t / (period * 1.3) + 0.2))) / 1.6 + noise(x / length, t / period) * amp * 0.3", amp: amp, length: length, period: period, blend_in: blend, blend_out: blend) over over
+
+## Sharp crests: vertices also move sideways towards the crest (a Gerstner wave); `sharp` is 0 (a plain swell) to 1.
+action choppy(self: Shape, amp: Number = 12, length: Number = 140, period: Duration = 2.5.seconds, sharp: Number = 0.6, over: Duration = 4.seconds, blend: Duration = 0.5.seconds):
+    self.drive(x: "-sharp * amp * cos(tau * (x / length - t / period))", y: "amp * sin(tau * (x / length - t / period))", amp: amp, length: length, period: period, sharp: sharp, blend_in: blend, blend_out: blend) over over
+
+## Ride a `swell` surface: bob with its height at this shape's x and tilt with its slope (`tilt` 0 to 1).
+## Give it the same amp, length and period as the surface.
+action float_on(self: Shape, amp: Number = 10, length: Number = 120, period: Duration = 2.seconds, tilt: Number = 0.6, over: Duration = 4.seconds, blend: Duration = 0.5.seconds):
+    self.drive(pos_y: "amp * sin(tau * (x / length - t / period))", rotation: "tilt * atan(amp * tau / length * cos(tau * (x / length - t / period))) / tau", amp: amp, length: length, period: period, tilt: tilt, blend_in: blend, blend_out: blend) over over

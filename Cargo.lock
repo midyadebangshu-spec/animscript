@@ -37,6 +37,7 @@ version = "0.1.0"
 dependencies = [
  "animscript-brush",
  "animscript-core",
+ "animscript-math",
  "animscript-physics",
  "serde_json",
 ]

@@ -11,6 +11,7 @@ const STD: &[(&str, &str)] = &[
     ("motion", include_str!("../lib/motion.anim")),
     ("gait", include_str!("../lib/gait.anim")),
     ("2d", include_str!("../lib/2d.anim")),
+    ("waves", include_str!("../lib/waves.anim")),
 ];
 
 /// The text of a bundled library module (`motion`, not `std/motion`).

@@ -1,0 +1,47 @@
+project "Water":
+    anim_version: "0.1"
+    canvas: 800x600
+    fps: 24
+    background: #f7d9a8
+
+import "std/waves"
+
+# ---- every shape here is made from an equation ---------------------------------------------------------
+# a sun: a closed polar-style curve, 12 rays; x and y are equations of the parameter u (0 to tau)
+shape sun = curve(x: "620 + (46 + 7 * sin(12 * u)) * cos(u)", y: "150 + (46 + 7 * sin(12 * u)) * sin(u)", from: 0, to: 6.283185307179586, n: 240, closed: true)
+sun.fill = #ffb43c
+sun.stroke = #ff8a3d
+sun.stroke_width = 3
+
+# a sea is a closed curve: 97 points along the top edge, then the two bottom corners (below the canvas, so they
+# never show). u runs 0, 1, 2 ... 98 and `select(c, a, b)` picks the piece of the outline.
+shape far_sea = curve(x: "select(u < 97, 800 * u / 96, select(u < 98, 800, 0))", y: "select(u < 97, top, 700)", top: 330, from: 0, to: 99, n: 99, closed: true)
+far_sea.fill = #5aa0c8
+far_sea.stroke = #e9f6ff
+far_sea.stroke_width = 2
+
+shape near_sea = curve(x: "select(u < 97, 800 * u / 96, select(u < 98, 800, 0))", y: "select(u < 97, top, 700)", top: 390, from: 0, to: 99, n: 99, closed: true)
+near_sea.fill = #2f78a8
+near_sea.stroke = #ffffff
+near_sea.stroke_width = 3
+
+# a boat on the near sea: a hull and a sail that follows it
+shape hull = polygon([(350, 372), (450, 372), (430, 400), (370, 400)])
+hull.fill = #7a4a2b
+hull.stroke = #4a2a14
+hull.stroke_width = 3
+shape sail = polygon([(398, 366), (398, 300), (436, 366)])
+sail.fill = #fffaf0
+sail.stroke = #c9b99a
+sail.stroke_width = 2
+
+scene "Water" for 10.seconds:
+    main:
+        attach sail to hull
+        # the sun breathes and turns slowly (shape properties are driven too; rotation is in turns)
+        start sun.drive(scale: "0.04 * sin(tau * t / 3)", rotation: "t / 25")
+        # the far sea ripples, the near sea rolls in long swells
+        start far_sea.ripples(amp: 5, length: 90, period: 1.6.seconds, over: 10.seconds)
+        start near_sea.swell(amp: 11, length: 240, period: 3.seconds, over: 10.seconds)
+        # the boat rides the same wave as the sea under it (same amp, length and period)
+        hull.float_on(amp: 11, length: 240, period: 3.seconds, tilt: 0.5, over: 10.seconds)
