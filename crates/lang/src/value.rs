@@ -353,11 +353,54 @@ pub enum ModKind {
     Drive,
 }
 
+/// An equation program ready to run: the interpreter, or (with the `jit` feature, for many points) machine code
+/// that gives the very same bits.
+#[derive(Debug)]
+pub enum Kernel {
+    Interp(animscript_math::Program),
+    #[cfg(feature = "jit")]
+    Jit(Box<animscript_math::Compiled>),
+}
+
+impl Kernel {
+    pub fn eval_n(
+        &self,
+        n: usize,
+        point: &[&[f64]],
+        frame: &[f64],
+        params: &[f64],
+    ) -> Result<Vec<Vec<f64>>, animscript_math::EvalError> {
+        match self {
+            Kernel::Interp(p) => p.eval_n(n, point, frame, params),
+            #[cfg(feature = "jit")]
+            Kernel::Jit(c) => c.eval_n(n, point, frame, params),
+        }
+    }
+    pub fn is_jit(&self) -> bool {
+        #[cfg(feature = "jit")]
+        if matches!(self, Kernel::Jit(_)) {
+            return true;
+        }
+        false
+    }
+}
+
+/// When `drive` equations are compiled to machine code (only in a build with the `jit` feature; results never
+/// depend on it).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum JitMode {
+    /// For drives over many vertices.
+    #[default]
+    Auto,
+    Always,
+    Off,
+}
+
 /// What a `drive` computes: a compiled equation program and where each output goes.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Drive {
     /// Point inputs `x, y, i, u`; frame inputs `t, n`; one output per entry of `outs`.
-    pub prog: animscript_math::Program,
+    pub prog: Kernel,
     /// The vertices the equation runs over (empty for shape-level properties, which see one point).
     pub verts: Vec<u32>,
     pub outs: Vec<DriveOut>,

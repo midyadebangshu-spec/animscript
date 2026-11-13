@@ -264,6 +264,7 @@ pub struct Interp {
     pub events: BTreeSet<String>,
     pub staged: Vec<Staged>,
     pub trace_on: bool,
+    pub jit: JitMode,
     pub trace: Vec<String>,
     /// Key sets registered by `keyframes` statements, waiting for the runtime to pick them up.
     pub pending_keysets: Vec<KeySetSpec>,
@@ -367,6 +368,7 @@ impl Interp {
             events: BTreeSet::new(),
             staged: vec![],
             trace_on: false,
+            jit: JitMode::Auto,
             trace: vec![],
             pending_keysets: vec![],
             pending_starts: vec![],

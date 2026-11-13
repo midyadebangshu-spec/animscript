@@ -6,9 +6,14 @@
 mod diff;
 mod eval;
 mod ir;
+#[cfg(feature = "jit")]
+mod jit;
 mod parse;
 
 pub use diff::DiffError;
 pub use eval::EvalError;
 pub use ir::{bin_apply, noise_apply, un_apply, Bin, Builder, Id, Node, Program, Rate, Un};
 pub use parse::{apply_fn, parse, Env, ParseError};
+
+#[cfg(feature = "jit")]
+pub use jit::{Compiled, JitError};

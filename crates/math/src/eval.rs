@@ -54,15 +54,33 @@ fn at(r: &Reg, i: usize) -> f64 {
 }
 
 impl Program {
-    /// Evaluate over `n` points. `point` holds one slice per per-point input (in the order they were declared) and
-    /// `frame` one number per per-frame input; the result has one vector of `n` numbers per output.
-    pub fn eval_n(
+    /// Where each declared input lives: its rate and its index among the inputs of that rate.
+    pub(crate) fn input_slots(&self) -> Vec<(Rate, usize)> {
+        let (mut pi, mut fi) = (0, 0);
+        self.inputs
+            .iter()
+            .map(|i| match i.rate {
+                Rate::Point => {
+                    pi += 1;
+                    (Rate::Point, pi - 1)
+                }
+                Rate::Frame => {
+                    fi += 1;
+                    (Rate::Frame, fi - 1)
+                }
+            })
+            .collect()
+    }
+
+    /// Check the arguments of an evaluation and say where each declared input lives (its rate and its index among
+    /// the inputs of that rate).
+    pub(crate) fn slots(
         &self,
         n: usize,
         point: &[&[f64]],
         frame: &[f64],
         params: &[f64],
-    ) -> Result<Vec<Vec<f64>>, EvalError> {
+    ) -> Result<Vec<(Rate, usize)>, EvalError> {
         let (np, nf) = (
             self.inputs.iter().filter(|i| i.rate == Rate::Point).count(),
             self.inputs.iter().filter(|i| i.rate == Rate::Frame).count(),
@@ -88,22 +106,21 @@ impl Program {
         if point.iter().any(|p| p.len() != n) {
             return Err(EvalError::Length);
         }
-        // where each declared input lives in `point` / `frame`
-        let (mut pi, mut fi) = (0, 0);
-        let slot: Vec<(Rate, usize)> = self
-            .inputs
-            .iter()
-            .map(|i| match i.rate {
-                Rate::Point => {
-                    pi += 1;
-                    (Rate::Point, pi - 1)
-                }
-                Rate::Frame => {
-                    fi += 1;
-                    (Rate::Frame, fi - 1)
-                }
-            })
-            .collect();
+        Ok(self.input_slots())
+    }
+}
+
+impl Program {
+    /// Evaluate over `n` points. `point` holds one slice per per-point input (in the order they were declared) and
+    /// `frame` one number per per-frame input; the result has one vector of `n` numbers per output.
+    pub fn eval_n(
+        &self,
+        n: usize,
+        point: &[&[f64]],
+        frame: &[f64],
+        params: &[f64],
+    ) -> Result<Vec<Vec<f64>>, EvalError> {
+        let slot = self.slots(n, point, frame, params)?;
         let varying = self.varying();
         let mut regs: Vec<Reg> = Vec::with_capacity(self.nodes.len());
         for (idx, node) in self.nodes.iter().enumerate() {

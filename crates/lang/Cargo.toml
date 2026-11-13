@@ -3,6 +3,10 @@ name = "animscript-lang"
 version.workspace = true
 edition.workspace = true
 
+[features]
+# run `drive` equations as machine code (Cranelift) on big vertex counts: same results, faster
+jit = ["animscript-math/jit"]
+
 [dependencies]
 animscript-core.workspace = true
 animscript-physics.workspace = true

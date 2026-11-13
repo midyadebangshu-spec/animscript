@@ -1,6 +1,7 @@
 //! The `anim` command line: check, run, render.
+use animscript_lang::value::JitMode;
 use animscript_lang::{check_in, run_in, RunOptions};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -9,6 +10,17 @@ use std::process::ExitCode;
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
+    /// Machine code for `drive` equations (only in a build with `--features jit`; results are identical either way).
+    #[arg(long, global = true, value_enum, default_value_t = JitArg::Auto)]
+    jit: JitArg,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum JitArg {
+    /// For drives over many vertices.
+    Auto,
+    Always,
+    Off,
 }
 
 #[derive(Subcommand)]
@@ -78,6 +90,11 @@ fn read(file: &PathBuf) -> Result<String, ExitCode> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    let jit = match cli.jit {
+        JitArg::Auto => JitMode::Auto,
+        JitArg::Always => JitMode::Always,
+        JitArg::Off => JitMode::Off,
+    };
     match cli.cmd {
         Cmd::Check { file } => {
             let src = match read(&file) {
@@ -103,7 +120,7 @@ fn main() -> ExitCode {
                 Err(c) => return c,
             };
             let name = file.display().to_string();
-            match run_in(&src, &RunOptions { trace }, &base_of(&file)) {
+            match run_in(&src, &RunOptions { trace, jit }, &base_of(&file)) {
                 Ok(r) => {
                     for l in &r.trace {
                         println!("{l}");
@@ -138,7 +155,14 @@ fn main() -> ExitCode {
                 Err(c) => return c,
             };
             let name = file.display().to_string();
-            let res = match run_in(&src, &RunOptions::default(), &base_of(&file)) {
+            let res = match run_in(
+                &src,
+                &RunOptions {
+                    jit,
+                    ..Default::default()
+                },
+                &base_of(&file),
+            ) {
                 Ok(r) => r,
                 Err(d) => {
                     eprint!("{}", d.render(Some(&src), &name));
@@ -181,7 +205,14 @@ fn main() -> ExitCode {
                 Err(c) => return c,
             };
             let name = file.display().to_string();
-            let res = match run_in(&src, &RunOptions::default(), &base_of(&file)) {
+            let res = match run_in(
+                &src,
+                &RunOptions {
+                    jit,
+                    ..Default::default()
+                },
+                &base_of(&file),
+            ) {
                 Ok(r) => r,
                 Err(d) => {
                     eprint!("{}", d.render(Some(&src), &name));

@@ -87,8 +87,14 @@ fn restitution_makes_the_ball_bounce() {
 #[test]
 fn touching_is_a_trigger() {
     let text = src(&format!("{BALL_AND_GROUND}scene \"s\" for 2.seconds:\n    when ball.touches(ground):\n        ball.fill_to(#ff0000) over 1.frame\n"));
-    let r = run(&text, &RunOptions { trace: true })
-        .unwrap_or_else(|d| panic!("{}", d.render(Some(&text), "t")));
+    let r = run(
+        &text,
+        &RunOptions {
+            trace: true,
+            ..Default::default()
+        },
+    )
+    .unwrap_or_else(|d| panic!("{}", d.render(Some(&text), "t")));
     let fire: Vec<&String> = r.trace.iter().filter(|l| l.contains("FIRE")).collect();
     assert_eq!(fire.len(), 1, "{fire:?}");
     // the ball is about 435 px above its landing: sqrt(2 * 4.35 / 9.8) = 0.94 s, so tick ~22
@@ -221,8 +227,14 @@ fn bad_bodies_and_joints_are_rejected() {
 fn a_fast_bounce_still_counts_as_touching_for_that_tick() {
     // restitution 0.8: each contact begins and ends within one frame, yet every landing must fire the rule
     let text = src("shape ball = circle(16, radius: 25, at: (400, 100))\nshape ground = rectangle(width: 800, height: 40, at: (400, 580))\nground.body(kind: static, restitution: 0.8)\nball.body(restitution: 0.8)\nscene \"s\" for 6.seconds:\n    whenever ball.touches(ground):\n        ball.fill_to(#ff0000) over 1.frame\n");
-    let r = run(&text, &RunOptions { trace: true })
-        .unwrap_or_else(|d| panic!("{}", d.render(Some(&text), "t")));
+    let r = run(
+        &text,
+        &RunOptions {
+            trace: true,
+            ..Default::default()
+        },
+    )
+    .unwrap_or_else(|d| panic!("{}", d.render(Some(&text), "t")));
     let fires: Vec<i64> = r
         .trace
         .iter()

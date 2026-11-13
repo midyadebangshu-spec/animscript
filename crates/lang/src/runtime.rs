@@ -16,6 +16,8 @@ use std::rc::Rc;
 #[derive(Default, Clone, Debug)]
 pub struct RunOptions {
     pub trace: bool,
+    /// Machine code for equations (see `JitMode`); never changes results.
+    pub jit: JitMode,
 }
 
 pub struct RunResult {
@@ -211,6 +213,7 @@ fn run_in_here(src: &str, opts: &RunOptions, base: &std::path::Path) -> Res<RunR
     let mut it = Interp::new(src, program)?;
     it.base_dir = base.to_path_buf();
     it.trace_on = opts.trace;
+    it.jit = opts.jit;
     it.build()?;
     let mut rt = Runtime::new(it);
     let scenes: Vec<Rc<Scene>> = rt.it.program.scenes.clone();

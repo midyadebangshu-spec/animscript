@@ -2096,6 +2096,13 @@ start boat.drive(pos_y: "6 * sin(t * 2)", rotation: "0.02 * sin(t)")            
   `float_on(amp, length, period, tilt, over, blend)` bobs and tilts a shape with a `swell` surface at its own x (give
   it the surface's numbers). They use the equations above: copy and change them.
 
+**Machine code (optional).** A build with `--features jit` (`cargo build -p anim --release --features jit`) compiles the
+equations of a `drive` over 128 or more vertices to machine code (Cranelift). The results are identical to the
+interpreter's bit for bit (a NaN stays a NaN), so scripts, snapshots and hashes never change; only the speed does (about
+3x on wave-like equations, up to 30x on arithmetic-only ones, 1.4x when almost all the time is in `sin`/`exp`). Choose
+with `anim --jit auto|always|off` (default `auto`); if the machine does not allow it the interpreter is used and a
+`JIT` line appears in the trace.
+
 Diagnostics: `E-MTH-001` equation syntax, `-002` construct not allowed in an equation, `-003` bad arguments (missing
 equation, `n`, `res`, bounds, `mode`), `-004` unknown or mixed drive property, `-005` non-finite value while building a shape.
 

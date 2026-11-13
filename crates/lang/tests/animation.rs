@@ -449,7 +449,14 @@ fn start_does_not_block_and_await_waits_for_the_end() {
             3
         )
     ));
-    let r = run(&src, &RunOptions { trace: true }).unwrap();
+    let r = run(
+        &src,
+        &RunOptions {
+            trace: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let start_of = |what: &str| -> String {
         r.trace
             .iter()
@@ -565,7 +572,14 @@ fn shape_level_and_selection_colour_actions() {
         )
     ));
     let r = go(&sel);
-    let r2 = run(&sel, &RunOptions { trace: true }).unwrap();
+    let r2 = run(
+        &sel,
+        &RunOptions {
+            trace: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert_eq!(r2.trace.iter().filter(|t| t.contains(" ACT+ ")).count(), 1); // one action for the whole selection
     assert_eq!(r.snapshots[12]["shapes"][0]["faces"][1]["fill"], "#bcbcbc");
 }

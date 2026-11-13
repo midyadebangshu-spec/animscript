@@ -335,7 +335,14 @@ fn selection_methods_and_lambdas_are_fine_at_runtime() {
 #[test]
 fn a_selection_animates_as_one_action() {
     let src = body("shape s = square(size: 100)\nscene \"x\" for 1.second:\n    main:\n        s.vertices.every(2).move_by(0, 10) over 0.5.seconds ease linear\n");
-    let r = run(&src, &RunOptions { trace: true }).unwrap();
+    let r = run(
+        &src,
+        &RunOptions {
+            trace: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert_eq!(
         r.trace.iter().filter(|t| t.contains(" ACT+ ")).count(),
         1,

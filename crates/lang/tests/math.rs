@@ -299,7 +299,14 @@ fn a_non_finite_result_drives_nothing() {
         scene(3, "        start w.drive(y: \"1 / (i - 3)\")\n")
     );
     let text = format!("{HEAD}{src}");
-    let r = run(&text, &RunOptions { trace: true }).unwrap();
+    let r = run(
+        &text,
+        &RunOptions {
+            trace: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let v = verts(&r.snapshots[0], 0);
     assert_eq!(v[3].1, 0.0);
     near(v[4].1, 1.0, 1e-9);

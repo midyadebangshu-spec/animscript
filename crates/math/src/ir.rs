@@ -192,7 +192,14 @@ pub fn noise_apply(dims: u8, seed: u32, x: f64, y: f64, z: f64) -> f64 {
         if dims >= 3 { fz as i64 } else { 0 },
     );
     let mix = |a: f64, b: f64, t: f64| a + (b - a) * t;
-    let corner = |dx: i64, dy: i64, dz: i64| lattice(seed, ix + dx, iy + dy, iz + dz);
+    let corner = |dx: i64, dy: i64, dz: i64| {
+        lattice(
+            seed,
+            ix.wrapping_add(dx),
+            iy.wrapping_add(dy),
+            iz.wrapping_add(dz),
+        )
+    };
     let plane = |dz: i64| {
         let (a, b) = (
             mix(corner(0, 0, dz), corner(1, 0, dz), tx),

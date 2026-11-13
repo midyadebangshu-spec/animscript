@@ -374,7 +374,14 @@ fn reactive_rule_moves_vertices_in_the_same_tick_the_flag_is_set() {
         "prop bird:\n    states: is_scared\n\nshape cloud = square(size: 100)\n\n\
          scene \"r\" for 2.seconds:\n    main:\n        wait 1.second\n        bird becomes is_scared\n    when bird.is_scared:\n        cloud.v[2].move_by(0, 10) over 0.5.seconds ease linear\n",
     );
-    let r = run(&src, &RunOptions { trace: true }).unwrap();
+    let r = run(
+        &src,
+        &RunOptions {
+            trace: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let y = |k: usize| vtx(&r.snapshots[k], 0)[&2].1;
     near(y(23), 50.0);
     near(y(24), 50.0); // starts in the very tick the flag is set

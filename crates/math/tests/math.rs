@@ -183,3 +183,15 @@ fn derivative_wrt_other_input_is_zero() {
     let d = b.diff(f, t).unwrap();
     assert_eq!(b.as_const(d), Some(0.0));
 }
+
+#[test]
+fn noise_at_huge_coordinates_does_not_overflow() {
+    let mut b = Builder::new();
+    let x = b.input("x", Rate::Point);
+    let n = b.noise(1, &[x]);
+    let p = b.finish(&[n]);
+    let r = p
+        .eval(&[&[1e300, -1e300, 9.3e18, f64::MAX]], &[], &[])
+        .unwrap();
+    assert!(r[0].iter().all(|v| (-1.0..=1.0).contains(v)));
+}

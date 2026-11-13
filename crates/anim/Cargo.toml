@@ -7,6 +7,9 @@ edition.workspace = true
 name = "anim"
 path = "src/main.rs"
 
+[features]
+jit = ["animscript-lang/jit"]
+
 [dependencies]
 animscript-core.workspace = true
 animscript-lang.workspace = true

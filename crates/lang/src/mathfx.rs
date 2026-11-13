@@ -21,6 +21,11 @@ fn mth(code: &'static str, msg: impl Into<String>) -> Diagnostic {
     Diagnostic::new(code, msg)
 }
 
+/// With `JitMode::Auto`, drives over at least this many vertices are compiled (a compile costs about half a
+/// millisecond, which fewer points never win back).
+#[cfg(feature = "jit")]
+const JIT_MIN_POINTS: usize = 128;
+
 /// The equation inputs of a `drive`.
 const DRIVE_POINT: [&str; 4] = ["x", "y", "i", "u"];
 const DRIVE_FRAME: [&str; 2] = ["t", "n"];
@@ -409,6 +414,29 @@ impl Interp {
         Ok(Value::Fresh(Box::new(segments(&pts, &pairs))))
     }
 
+    /// The interpreter or, in a `jit` build, machine code for the same program (see `JitMode`).
+    fn make_kernel(&mut self, prog: m::Program, points: usize) -> Kernel {
+        #[cfg(feature = "jit")]
+        {
+            let want = match self.jit {
+                JitMode::Off => false,
+                JitMode::Always => true,
+                JitMode::Auto => points >= JIT_MIN_POINTS,
+            };
+            if want {
+                match prog.compile() {
+                    Ok(c) => {
+                        self.trace_line("JIT", &format!("compiled a drive over {points} points"));
+                        return Kernel::Jit(Box::new(c));
+                    }
+                    Err(e) => self.trace_line("JIT", &format!("{e}; using the interpreter")),
+                }
+            }
+        }
+        let _ = points;
+        Kernel::Interp(prog)
+    }
+
     // ---- drive ---------------------------------------------------------------------------------
 
     pub(crate) fn drive_method(
@@ -559,6 +587,7 @@ impl Interp {
         };
         let eqs: Vec<(&str, &Value)> = names.iter().map(|k| (*k, &m[k])).collect();
         let prog = self.compile_equations(&eqs, &DRIVE_POINT, &DRIVE_FRAME, &consts, seed)?;
+        let prog = self.make_kernel(prog, verts.len());
         let drive = Drive {
             prog,
             verts,
