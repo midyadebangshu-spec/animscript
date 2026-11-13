@@ -1,0 +1,82 @@
+## std/2d: the standard motions for shapes (and bones), written in AnimScript. Import with `import "std/2d"`.
+## Nothing here is built into the language: copy any of it into your own file and change it.
+## The directions `up`, `down`, `left`, `right`, `up_left`, `up_right`, `down_left` and `down_right` are
+## built-in unit vectors (screen y points down, so `up` is (0, -1)).
+## Targets are points: use `center(thing)` to aim at a shape. Every action takes the `body` channel.
+
+## Turn to face a point. `facing` is the direction the art points at rest.
+action look_at(self: Shape, target: Point, over: Duration = 0.5.seconds, ease: Easing = ease_in_out, facing: Angle = 0.deg):
+    uses body
+    let c = center(self)
+    self.rotate_to(atan2(target.y - c.y, target.x - c.x) - facing) over over ease ease
+
+## Sweep the gaze left and right and come back.
+action look_around(self: Shape, sweep: Angle = 60.deg, over: Duration = 1.5.seconds):
+    uses body
+    self.rotate_by(sweep * 0.5) over over * 0.25 ease ease_in_out
+    self.rotate_by(sweep * -1) over over * 0.5 ease ease_in_out
+    self.rotate_by(sweep * 0.5) over over * 0.25 ease ease_in_out
+
+## Move directly away from a point.
+action step_back(self: Shape, from: Point, distance: Number = 40, over: Duration = 0.5.seconds):
+    uses body
+    let c = center(self)
+    let a = atan2(c.y - from.y, c.x - from.x)
+    let d = unit_vector(a)
+    self.move_by(d.x * distance, d.y * distance) over over ease ease_out
+
+## Walk in a straight line until the centre is at the target, at `speed` px/s.
+action walk_to(self: Shape, target: Point, speed: Number = 120):
+    uses body
+    let c = center(self)
+    let dx = target.x - c.x
+    let dy = target.y - c.y
+    let dist = sqrt(dx * dx + dy * dy)
+    if dist > 0.001:
+        self.move_by(dx, dy) over (dist / speed) * 1.second ease linear
+
+## Flip to face the other way (mirrors horizontally).
+action turn_around(self: Shape, over: Duration = 0.3.seconds):
+    uses body
+    self.scale_to((self.scale.x * -1, self.scale.y)) over over ease ease_in_out
+
+## Fly off in a direction, with a seeded sway; ends far outside the canvas.
+action fly_away(self: Shape, direction: Point = up_right, over: Duration = 3.seconds, irregularity: Number = 0.2):
+    uses body
+    let n = frames(over)
+    let sx = self.position.x
+    let sy = self.position.y
+    let i = 1
+    while i <= n:
+        let t = i / n
+        let s = t * t * (3 - 2 * t)
+        let sway = noise(self.name, t * 3) * irregularity * 120 * sin(t * 0.5.turns)
+        self.position = (sx + direction.x * 1200 * s - direction.y * sway, sy + direction.y * 1200 * s + direction.x * sway)
+        wait 1.frame
+        i += 1
+
+## Fly to a point (the centre ends there), curving a little.
+action fly_to(self: Shape, target: Point, over: Duration = 2.seconds, irregularity: Number = 0.1):
+    uses body
+    let c = center(self)
+    let dx = target.x - c.x
+    let dy = target.y - c.y
+    let n = frames(over)
+    let sx = self.position.x
+    let sy = self.position.y
+    let i = 1
+    while i <= n:
+        let t = i / n
+        let s = t * t * (3 - 2 * t)
+        let sway = noise(self.name, t * 2) * irregularity * 0.5 * sqrt(dx * dx + dy * dy) * sin(t * 0.5.turns)
+        self.position = (sx + dx * s, sy + dy * s + sway)
+        wait 1.frame
+        i += 1
+
+action fade_in(self: Shape, over: Duration = 1.second):
+    uses body
+    self.fade_to(1) over over
+
+action fade_out(self: Shape, over: Duration = 1.second):
+    uses body
+    self.fade_to(0) over over

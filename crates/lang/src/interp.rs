@@ -301,6 +301,8 @@ pub struct Interp {
     pub ik_live: BTreeMap<String, (P, f64)>,
     /// User-defined `action`s and `fn`s by name.
     pub defs: BTreeMap<String, Rc<Def>>,
+    /// Every definition with a `self` parameter, by name: one name may have several, for different `self` types.
+    pub method_defs: BTreeMap<String, Vec<Rc<Def>>>,
     /// The value of the last executed `return`.
     pub ret: Option<Value>,
     pub call_depth: usize,
@@ -387,6 +389,7 @@ impl Interp {
             flag_hist: BTreeMap::new(),
             ik_live: BTreeMap::new(),
             defs: BTreeMap::new(),
+            method_defs: BTreeMap::new(),
             ret: None,
             call_depth: 0,
             program: Program::default(),
@@ -1708,6 +1711,35 @@ impl Interp {
         if self.entities.contains_key(n) {
             return Ok(Value::Entity(n.to_string()));
         }
+        let dirs: [(&str, f64, f64); 8] = [
+            ("up", 0.0, -1.0),
+            ("down", 0.0, 1.0),
+            ("left", -1.0, 0.0),
+            ("right", 1.0, 0.0),
+            (
+                "up_left",
+                -std::f64::consts::FRAC_1_SQRT_2,
+                -std::f64::consts::FRAC_1_SQRT_2,
+            ),
+            (
+                "up_right",
+                std::f64::consts::FRAC_1_SQRT_2,
+                -std::f64::consts::FRAC_1_SQRT_2,
+            ),
+            (
+                "down_left",
+                -std::f64::consts::FRAC_1_SQRT_2,
+                std::f64::consts::FRAC_1_SQRT_2,
+            ),
+            (
+                "down_right",
+                std::f64::consts::FRAC_1_SQRT_2,
+                std::f64::consts::FRAC_1_SQRT_2,
+            ),
+        ];
+        if let Some(d) = dirs.iter().find(|d| d.0 == n) {
+            return Ok(Value::Tuple(vec![Value::Num(d.1), Value::Num(d.2)]));
+        }
         if n == "canvas" {
             return Ok(Value::Rect([
                 0.0,
@@ -2386,10 +2418,16 @@ impl Interp {
         span: Span,
         mode: Mode,
     ) -> Res<Value> {
-        if let Some(def) = self.defs.get(name).cloned() {
-            if def.params.first().map(|p| p.name.as_str()) == Some("self") {
-                return self.call_def(&def, args, Some(obj), mode);
-            }
+        if let Some(cands) = self.method_defs.get(name).cloned() {
+            let def = if cands.len() == 1 {
+                Rc::clone(&cands[0])
+            } else {
+                self.pick_overload(name, &cands, &obj)?
+            };
+            return self.call_def(&def, args, Some(obj), mode);
+        }
+        if name == "play_clip" {
+            return self.play_clip(obj, args, mode);
         }
         if TOPOLOGY_METHODS.contains(&name) {
             self.guard_topology(mode, name)?;

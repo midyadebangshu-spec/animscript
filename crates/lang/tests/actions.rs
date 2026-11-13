@@ -120,7 +120,7 @@ fn return_ends_an_action_early_and_actions_can_call_actions_and_fns() {
 fn meta_lines_are_accepted_and_requires_is_checked() {
     let ok = go(&format!("action tap(self: Shape, n: Int = 1):\n    uses body\n    requires n > 0\n    priority 2\n    self.move_by(n, 0)\n\n{SQ}s.tap()\n{SC}"));
     near(centre(&ok.snapshots[0], 0).0, 1.0, 1e-9);
-    assert_eq!(err(&format!("action tap(self: Shape, n: Int = 1):\n    requires n > 0\n    self.move_by(n, 0)\n\n{SQ}s.tap(0)\n{SC}")).code, "E-CAP-002");
+    assert_eq!(err(&format!("action tap(self: Shape, n: Int = 1):\n    requires n > 0\n    self.move_by(n, 0)\n\n{SQ}s.tap(0)\n{SC}")).code, "E-CAP-001");
 }
 
 #[test]

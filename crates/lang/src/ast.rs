@@ -293,6 +293,8 @@ pub struct Def {
     pub params: Vec<Param>,
     pub ret: Option<String>,
     pub body: Block,
+    /// Declared with `clip` (keyframes of a known duration) rather than `action`.
+    pub clip: bool,
     /// `uses body, gaze`: the channels the action occupies (recorded, not yet enforced).
     pub uses: Vec<(String, Policy)>,
     /// `requires EXPR`: checked with the arguments bound, every call.

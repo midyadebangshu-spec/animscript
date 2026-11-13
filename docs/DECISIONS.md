@@ -881,4 +881,26 @@ judgement calls I expect you to want to look at.
 187. **Note on `move_to`.** On a shape, `move_to` and `move_by` change the `position` offset, not the centre
     (DOCUMENT section 8.1's `follow` example is therefore exact only for shapes whose rest centre is the origin;
     use `p - center(self)` to aim a centre). Found while writing the links example.
+188. **`requires` is `E-CAP-001`.** A `requires` that is false (and any action whose receiver does not fit) is a missing
+    capability, `E-CAP-001`, as spec 8.3 says; it used to be `E-CAP-002` (decision 154), which the spec keeps for
+    ambiguity. The existing test and DOCUMENT were updated.
+189. **Overloading by `self` type.** `method_defs` keeps every definition with a `self` parameter by name. One candidate:
+    called as before (a type mismatch is `E-TYP-001`). Several: those whose `self` type accepts the receiver are
+    candidates; a named type has rank 2, `Any` or untyped rank 1; the highest rank wins and a tie would be `E-CAP-002`
+    (it cannot happen yet because two definitions with the same, or an untyped, `self` are refused at registration as
+    `E-DEF-001`, as is a method and a plain function of one name). No fit is `E-CAP-001` listing the types. Overloading
+    on other parameters is not supported.
+190. **`clip` is sugar for an action.** `clip name(params) over D [uses ...]:` plus `at T:` blocks is lowered by the
+    parser into `action name(params, speed: Number = 1, loop: Bool = false)` with `requires speed > 0`, the `Acquire` of
+    its channels (default `body`), one `keyframes over D / speed` with every key time divided by `speed`, and a
+    `while loop:` that plays the keys again. For `self: Armature` each key's first path component names a bone: the keys
+    are grouped per bone and one `self.bone.keyframes` per bone runs in a `together:`. `self` must be a `Shape` or
+    an `Armature`; a clip needs `over` and at least one key. Clips are not loaded from assets (this project has no
+    asset system for animation data). `play_clip("name", ...)` finds the clips of that name, picks by `self` like any
+    call, and passes `speed`/`loop`/parameters through.
+191. **`std/2d`.** Shape versions of the spec's character actions. Because a shape has no gaze or rig, `look_at` turns
+    the shape (with `facing`), `step_back` and `walk_to` work on the centre, and targets are points. `fly_away` and
+    `fly_to` move frame by frame with a seeded sway from `noise(self.name, ...)`, so they are deterministic and differ
+    between shapes. Directions are built-in names (like `canvas`), resolved after user names. The camera actions
+    (`hold`, `pan_to`, `zoom_to`, `follow`, `shake`) are for the camera round, and `std/motion` is unchanged.
 

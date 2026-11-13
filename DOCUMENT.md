@@ -628,7 +628,7 @@ scene "s" for 3.seconds:
 - A `fn` cannot wait or animate (`E-DEF-002`); calls nest at most 64 deep (`E-RUN-007`); a `while` that never
   waits is stopped (`E-STM-003`).
 - Optional first lines of a definition: `uses body [on_conflict POLICY]` (channels, see 13k), `priority 2` and
-  `requires n > 0` (checked on every call; `E-CAP-002` when false).
+  `requires n > 0` (checked on every call; `E-CAP-001` when false).
 - `import "file.anim"` (relative to the importing file) or `import "std/motion"` (bundled) includes
   definitions. Library files are plain AnimScript: see `crates/lang/lib/motion.anim`, and copy and change them freely.
 - `atan2(y, x)` gives an Angle; `angle_to(a, b)` (from `std/motion`) is the direction from one point to another.
@@ -1850,6 +1850,44 @@ constrain tail.position to follow(head, lag: 6.frames) weight 0.8
   line is present, shape motion and colour inside it must be on `body`: otherwise `E-CAP-003`.
 
 Worked example: `examples/links.anim`.
+
+## 13l. Clips, overloading and `std/2d` (round L3)
+
+**Clips** are named keyframes of a known duration, called like an action:
+
+```anim
+clip wave(self: Shape, amount: Number = 20) over 1.second:        # self: Shape or Armature
+    at 0.s:   rotation = 0.deg
+    at 0.5.s: rotation = amount.deg ease ease_in_out
+    at 1.s:   rotation = 0.deg
+
+clip bend(self: Armature) over 1.second uses face:                # armature clips key bones by name
+    at 0.s: upper.rotation = 0.deg
+    at 1.s: upper.rotation = 90.deg
+
+a.wave()                         # blocks for 1 second; start/together/cancel work as for any action
+a.wave(amount: 40, speed: 2)     # `speed` divides every key time; every clip also takes `loop: true`
+let h = start a.wave(loop: true) # plays until cancelled
+a.play_clip("wave", speed: 2)    # by name
+```
+
+A clip is an ordinary action underneath: it takes the `body` channel of its shape (`uses face` or
+`uses body, gaze on_conflict share` after `over D` picks others), so two clips on one shape take turns unless they
+use different channels. Keys follow the rules of `keyframes` (a key past the duration is `E-TYP-001`). `speed` must be
+above zero (`E-CAP-001`).
+
+**One name, several `self` types.** Actions of one name may coexist when their first parameter is typed differently,
+and a call picks the one that accepts the receiver (a specific type beats `Any`). If none fits, `E-CAP-001` lists
+what the name is defined for. Two with the same `self` type, or a plain `fn` of the same name, are `E-DEF-001`.
+`std/gait`'s `walk_to` (an armature) and `std/2d`'s (a shape) are both usable in one file.
+
+**`import "std/2d"`** (written in AnimScript, see `crates/lang/lib/2d.anim`): `look_at(target, over, ease, facing)`,
+`look_around(sweep, over)`, `step_back(from, distance, over)`, `walk_to(target, speed)`, `turn_around(over)`,
+`fly_away(direction, over, irregularity)`, `fly_to(target, over, irregularity)`, `fade_in`, `fade_out`. Targets are
+points (`center(thing)` to aim at a shape). The directions `up`, `down`, `left`, `right`, `up_left`, `up_right`,
+`down_left`, `down_right` are built-in unit vectors. The camera actions of the spec arrive with the camera.
+
+Worked example: `examples/clips.anim`.
 
 ## 14. Diagnostics, tracing and the command line
 

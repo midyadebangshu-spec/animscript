@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 const STD: &[(&str, &str)] = &[
     ("motion", include_str!("../lib/motion.anim")),
     ("gait", include_str!("../lib/gait.anim")),
+    ("2d", include_str!("../lib/2d.anim")),
 ];
 
 /// The text of a bundled library module (`motion`, not `std/motion`).

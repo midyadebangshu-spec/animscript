@@ -201,6 +201,14 @@ impl Parser {
                     let d = self.def(is_action)?;
                     prog.defs.push(Rc::new(d));
                 }
+                T::Ident(s)
+                    if s == "clip"
+                        && matches!(&self.peek_at(1).t, T::Ident(_))
+                        && matches!(&self.peek_at(2).t, T::Op("(")) =>
+                {
+                    let d = self.clip()?;
+                    prog.defs.push(Rc::new(d));
+                }
                 T::Ident(s) if s == "prop" || s == "character" => {
                     let e = self.entity()?;
                     prog.entities.push(e);
@@ -461,6 +469,252 @@ impl Parser {
         })
     }
 
+    /// `clip name(self: Shape, ...) over D:` and `at T:` key blocks. It is lowered here into an ordinary action
+    /// that takes the `body` channel, plays the keys once and, while `loop` is true, again. The extra parameters
+    /// `speed` (divides the key times) and `loop` come with every clip. For `self: Armature` the keys name bones
+    /// (`at 0.s: arm.rotation = ...`) and one `keyframes` runs per bone, together.
+    fn clip(&mut self) -> Res<Def> {
+        let start = self.next().span;
+        let name = self.ident("a clip name")?;
+        self.expect_op("(")?;
+        let mut params: Vec<Param> = vec![];
+        while !self.at_op(")") {
+            let span = self.peek().span;
+            let pname = self.ident("a parameter name")?;
+            if params.iter().any(|p| p.name == pname) {
+                return Err(Diagnostic::new(
+                    "E-DEF-001",
+                    format!("parameter `{pname}` is listed twice"),
+                )
+                .at(span));
+            }
+            let ty = if self.eat_op(":") {
+                Some(self.ident("a type name")?)
+            } else {
+                None
+            };
+            let default = if self.eat_op("=") {
+                Some(self.expr()?)
+            } else {
+                None
+            };
+            params.push(Param {
+                name: pname,
+                ty,
+                default,
+                span,
+            });
+            if !self.eat_op(",") {
+                break;
+            }
+        }
+        self.expect_op(")")?;
+        let self_ty = match params.first() {
+            Some(p) if p.name == "self" => p.ty.clone(),
+            _ => None,
+        };
+        if !matches!(self_ty.as_deref(), Some("Shape") | Some("Armature")) {
+            return Err(Diagnostic::new(
+                "E-SYN-001",
+                "a clip needs `self: Shape` or `self: Armature` as its first parameter",
+            )
+            .at(start));
+        }
+        if params.iter().any(|p| p.name == "speed" || p.name == "loop") {
+            return Err(Diagnostic::new(
+                "E-DEF-001",
+                "`speed` and `loop` are parameters every clip already has",
+            )
+            .at(start));
+        }
+        if !self.at_ident("over") {
+            return self.err("a clip needs its duration: `clip name(self: Shape) over 1.second:`");
+        }
+        self.next();
+        let dur = self.expr()?;
+        // `uses face on_conflict share`: another channel than `body` (several channels may be listed)
+        let mut chans: Vec<(String, Policy)> = vec![];
+        if self.at_ident("uses") {
+            self.next();
+            loop {
+                let ch = self.ident("a channel name")?;
+                let mut policy = Policy::Queue;
+                if self.at_ident("on_conflict") {
+                    self.next();
+                    policy = match self.ident("a policy")?.as_str() {
+                        "queue" => Policy::Queue,
+                        "interrupt" => Policy::Interrupt,
+                        "reject" => Policy::Reject,
+                        "share" => Policy::Share,
+                        other => {
+                            return Err(Diagnostic::new(
+                                "E-SYN-001",
+                                format!("unknown conflict policy `{other}`"),
+                            )
+                            .at(self.prev_span())
+                            .help("policies: queue, interrupt, reject, share"))
+                        }
+                    };
+                }
+                chans.push((ch, policy));
+                if !self.eat_op(",") {
+                    break;
+                }
+            }
+        }
+        if chans.is_empty() {
+            chans.push(("body".to_string(), Policy::Queue));
+        }
+        let mut opts = KeyOpts::default();
+        let keys = self.key_blocks(Some(&mut opts))?;
+        if keys.is_empty() {
+            return Err(
+                Diagnostic::new("E-SYN-001", "a clip needs at least one `at TIME:` block")
+                    .at(start),
+            );
+        }
+        let sp = start;
+        let ex = |kind: ExprKind| Expr { kind, span: sp };
+        let name_of = |n: &str| ex(ExprKind::Name(n.to_string()));
+        let div = |a: Expr| {
+            ex(ExprKind::Binary(
+                "/",
+                Box::new(a),
+                Box::new(name_of("speed")),
+            ))
+        };
+        let scaled = |keys: &[KeyBlock]| -> Vec<KeyBlock> {
+            keys.iter()
+                .map(|k| KeyBlock {
+                    at: div(k.at.clone()),
+                    assigns: k.assigns.clone(),
+                    span: k.span,
+                })
+                .collect()
+        };
+        let play_for = |target: Expr, keys: Vec<KeyBlock>| Stmt {
+            kind: StmtKind::Keyframes {
+                target,
+                over: div(dur.clone()),
+                opts: KeyOpts::default(),
+                keys,
+            },
+            span: sp,
+        };
+        let play = if self_ty.as_deref() == Some("Armature") {
+            // group the keys by the bone they name, dropping the bone from each path
+            fn root(e: &Expr) -> Option<String> {
+                match &e.kind {
+                    ExprKind::Name(n) => Some(n.clone()),
+                    ExprKind::Member(o, _) => root(o),
+                    _ => None,
+                }
+            }
+            fn strip(e: &Expr) -> Expr {
+                match &e.kind {
+                    ExprKind::Member(o, n) => match &o.kind {
+                        ExprKind::Name(_) => Expr {
+                            kind: ExprKind::Name(n.clone()),
+                            span: e.span,
+                        },
+                        _ => Expr {
+                            kind: ExprKind::Member(Box::new(strip(o)), n.clone()),
+                            span: e.span,
+                        },
+                    },
+                    _ => e.clone(),
+                }
+            }
+            let mut bones: Vec<String> = vec![];
+            for k in &keys {
+                for a in &k.assigns {
+                    let Some(b) =
+                        root(&a.lhs).filter(|_| matches!(a.lhs.kind, ExprKind::Member(..)))
+                    else {
+                        return Err(Diagnostic::new("E-SYN-001", "in an armature clip a key names a bone: `at 0.s: upper.rotation = 10.deg`").at(a.span));
+                    };
+                    if !bones.contains(&b) {
+                        bones.push(b);
+                    }
+                }
+            }
+            let mut stmts = vec![];
+            for b in &bones {
+                let mut blocks = vec![];
+                for k in &keys {
+                    let assigns: Vec<KeyAssign> = k
+                        .assigns
+                        .iter()
+                        .filter(|a| root(&a.lhs).as_deref() == Some(b.as_str()))
+                        .map(|a| KeyAssign {
+                            lhs: strip(&a.lhs),
+                            ..a.clone()
+                        })
+                        .collect();
+                    if !assigns.is_empty() {
+                        blocks.push(KeyBlock {
+                            at: k.at.clone(),
+                            assigns,
+                            span: k.span,
+                        });
+                    }
+                }
+                let target = ex(ExprKind::Member(Box::new(name_of("self")), b.clone()));
+                stmts.push(play_for(target, scaled(&blocks)));
+            }
+            Stmt {
+                kind: StmtKind::Together(Rc::new(stmts)),
+                span: sp,
+            }
+        } else {
+            play_for(name_of("self"), scaled(&keys))
+        };
+        let again = Stmt {
+            kind: StmtKind::While {
+                cond: name_of("loop"),
+                body: Rc::new(vec![play.clone()]),
+            },
+            span: sp,
+        };
+        params.push(Param {
+            name: "speed".into(),
+            ty: Some("Number".into()),
+            default: Some(ex(ExprKind::Num("1".into()))),
+            span: sp,
+        });
+        params.push(Param {
+            name: "loop".into(),
+            ty: Some("Bool".into()),
+            default: Some(ex(ExprKind::Bool(false))),
+            span: sp,
+        });
+        let uses = chans;
+        let requires = vec![ex(ExprKind::Binary(
+            ">",
+            Box::new(name_of("speed")),
+            Box::new(ex(ExprKind::Num("0".into()))),
+        ))];
+        Ok(Def {
+            name,
+            is_action: true,
+            params,
+            ret: None,
+            body: Rc::new(vec![
+                Stmt {
+                    kind: StmtKind::Acquire(uses.clone(), 0),
+                    span: sp,
+                },
+                play,
+                again,
+            ]),
+            clip: true,
+            uses,
+            requires,
+            priority: 0,
+            span: start,
+        })
+    }
+
     /// `action name(self: Shape, n: Int = 2):` or `fn name(a: Number) -> Number:` and an indented body whose
     /// first lines may be `uses ...`, `requires ...` and `priority N`.
     fn def(&mut self, is_action: bool) -> Res<Def> {
@@ -606,6 +860,7 @@ impl Parser {
             params,
             ret,
             body: Rc::new(body),
+            clip: false,
             uses,
             requires,
             priority,

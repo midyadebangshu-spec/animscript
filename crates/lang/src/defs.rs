@@ -24,11 +24,25 @@ impl Interp {
     pub fn register_defs(&mut self) -> Res<()> {
         let defs = self.program.defs.clone();
         for d in defs {
-            if self.defs.contains_key(&d.name) {
+            let is_method = d.params.first().is_some_and(|p| p.name == "self");
+            let self_ty = |d: &Def| d.params.first().and_then(|p| p.ty.clone());
+            let clash = match self.method_defs.get(&d.name) {
+                // several actions of one name are fine when they take different `self` types
+                Some(prev) => {
+                    !is_method
+                        || prev.iter().any(|p| {
+                            self_ty(p) == self_ty(&d)
+                                || self_ty(p).is_none()
+                                || self_ty(&d).is_none()
+                        })
+                }
+                None => self.defs.contains_key(&d.name),
+            };
+            if clash {
                 return Err(
                     Diagnostic::new("E-DEF-001", format!("`{}` is defined twice", d.name))
                         .at(d.span)
-                        .help("rename one of them"),
+                        .help("rename one of them, or give each a different `self` type (`self: Shape`, `self: Armature`)"),
                 );
             }
             for p in &d.params {
@@ -55,9 +69,86 @@ impl Interp {
                     .at(d.span));
                 }
             }
-            self.defs.insert(d.name.clone(), d);
+            if is_method {
+                self.method_defs
+                    .entry(d.name.clone())
+                    .or_default()
+                    .push(Rc::clone(&d));
+            }
+            self.defs.entry(d.name.clone()).or_insert(d);
         }
         Ok(())
+    }
+
+    /// Choose among actions of one name by the type of `self` (spec 8.3): the most specific accepting type wins.
+    pub(crate) fn pick_overload(&self, name: &str, cands: &[Rc<Def>], obj: &Value) -> Res<Rc<Def>> {
+        let ty_of = |d: &Rc<Def>| d.params.first().and_then(|p| p.ty.clone());
+        let rank = |d: &Rc<Def>| match ty_of(d).as_deref() {
+            None | Some("Any") => 1,
+            _ => 2,
+        };
+        let fits: Vec<&Rc<Def>> = cands
+            .iter()
+            .filter(|d| ty_of(d).is_none_or(|t| Self::type_ok(&t, obj)))
+            .collect();
+        let Some(best) = fits.iter().map(|d| rank(d)).max() else {
+            let types: Vec<String> = cands
+                .iter()
+                .map(|d| ty_of(d).unwrap_or_else(|| "Any".into()))
+                .collect();
+            return Err(Diagnostic::new(
+                "E-CAP-001",
+                format!("`{name}` cannot be called on a {}", obj.type_name()),
+            )
+            .help(format!("`{name}` is defined for: {}", types.join(", "))));
+        };
+        let top: Vec<&&Rc<Def>> = fits.iter().filter(|d| rank(d) == best).collect();
+        if top.len() > 1 {
+            return Err(Diagnostic::new(
+                "E-CAP-002",
+                format!(
+                    "`{name}` is ambiguous for a {}: {} definitions fit equally well",
+                    obj.type_name(),
+                    top.len()
+                ),
+            )
+            .help("give the definitions different `self` types"));
+        }
+        Ok(Rc::clone(top[0]))
+    }
+
+    /// `thing.play_clip("name", speed: 2, loop: true)`: run a clip by name.
+    pub(crate) fn play_clip(&mut self, obj: Value, mut args: Args, mode: Mode) -> Res<Value> {
+        let first = if args.first().is_some_and(|a| a.0.is_none()) {
+            Some(args.remove(0).1)
+        } else {
+            args.iter()
+                .position(|a| a.0.as_deref() == Some("clip"))
+                .map(|i| args.remove(i).1)
+        };
+        let Some(Value::Str(cname)) = first else {
+            return Err(Diagnostic::new(
+                "E-TYP-003",
+                "`play_clip` needs the clip's name as a string, such as `play_clip(\"wave\")`",
+            ));
+        };
+        let cands: Vec<Rc<Def>> = self
+            .method_defs
+            .get(&cname)
+            .map(|v| v.iter().filter(|d| d.clip).cloned().collect())
+            .unwrap_or_default();
+        if cands.is_empty() {
+            return Err(
+                Diagnostic::new("E-NAM-001", format!("there is no clip named `{cname}`"))
+                    .help("declare it with `clip name(self: Shape) over 1.second:`"),
+            );
+        }
+        let def = if cands.len() == 1 {
+            Rc::clone(&cands[0])
+        } else {
+            self.pick_overload(&cname, &cands, &obj)?
+        };
+        self.call_def(&def, args, Some(obj), mode)
     }
 
     fn type_ok(ty: &str, v: &Value) -> bool {
@@ -214,7 +305,7 @@ impl Interp {
                 Value::Bool(true) => {}
                 Value::Bool(false) => {
                     return Err(Diagnostic::new(
-                        "E-CAP-002",
+                        "E-CAP-001",
                         format!(
                             "`{}` cannot be called here: `{}` is not satisfied",
                             def.name,

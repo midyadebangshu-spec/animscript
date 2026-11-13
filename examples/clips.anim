@@ -1,0 +1,78 @@
+project "Clips and std/2d":
+    anim_version: "0.1"
+    canvas: 800x600
+    fps: 24
+    background: #eef1f6
+
+import "std/2d"
+
+# ---- the figure from the rig example (bones are nodes; art is bound or skinned to them) --------------
+armature hero:
+    bone torso:    at: (250, 440), length: 120, angle: -90.deg
+    bone head:     parent: torso, length: 36, limits: (-40.deg, 40.deg)
+    bone arm_up_r: parent: torso, at: 0.92, length: 70, angle: 90.deg, limits: (-120.deg, 120.deg)
+    bone arm_lo_r: parent: arm_up_r, length: 62, limits: (-150.deg, 0.deg)
+    bone arm_up_l: parent: torso, at: 0.92, length: 70, angle: -90.deg
+    bone arm_lo_l: parent: arm_up_l, length: 62, limits: (0.deg, 150.deg)
+    bone leg_r:    parent: torso, at: 0.0, length: 90, angle: 170.deg
+    bone leg_l:    parent: torso, at: 0.0, length: 90, angle: -170.deg
+
+shape body = rectangle(width: 54, height: 120, at: (250, 380))
+shape head_art = circle(20, radius: 30, at: (250, 302))
+shape arm_r = rectangle(width: 132, height: 16, at: (316, 348))
+shape arm_l = rectangle(width: 132, height: 16, at: (184, 348))
+shape leg_r_art = rectangle(width: 18, height: 90, at: (254, 485))
+shape leg_l_art = rectangle(width: 18, height: 90, at: (246, 485))
+body.fill = #4f8fe0
+head_art.fill = #f2c9a0
+arm_r.fill = #e0674f
+arm_l.fill = #e0674f
+arm_r.stroke = none
+arm_l.stroke = none
+leg_r_art.fill = #35507a
+leg_l_art.fill = #35507a
+body.bind(hero.torso)
+head_art.bind(hero.head)
+leg_r_art.bind(hero.leg_r)
+leg_l_art.bind(hero.leg_l)
+arm_r.f1.subdivide(4)
+arm_r.skin(hero, bones: [hero.arm_up_r, hero.arm_lo_r], blend: 10)
+arm_l.f1.subdivide(4)
+arm_l.skin(hero, bones: [hero.arm_up_l, hero.arm_lo_l], blend: 10)
+
+# ---- clips: named keyframes of a known duration; every clip also takes `speed` and `loop` -----------------
+clip wave(self: Armature, lift: Angle = -75.deg) over 0.8.seconds:
+    at 0.s:   arm_up_l.rotation = 0.deg
+    at 0.4.s: arm_up_l.rotation = lift ease ease_in_out
+    at 0.8.s: arm_up_l.rotation = 0.deg ease ease_in_out
+
+# a second clip on another channel, so it can run while the first loops
+clip nod(self: Armature) over 0.6.seconds uses face:
+    at 0.s:   head.rotation = 0.deg
+    at 0.3.s: head.rotation = 20.deg ease ease_in_out
+    at 0.6.s: head.rotation = 0.deg ease ease_in_out
+
+# ---- a little ball, moved by std/2d ----------------------------------------------------------------------------
+shape ball = circle(24, radius: 22, at: (620, 520))
+shape friend = circle(24, radius: 14, at: (640, 330))
+ball.fill = #7bd88f
+friend.fill = #f2c94c
+shape ground = rectangle(width: 780, height: 30, at: (400, 570))
+ground.fill = #6b5b4b
+
+scene "Clips" for 12.seconds:
+    main:
+        # a looping clip (stopped later), a nod on its own channel at the same time
+        let w = start hero.wave(loop: true, speed: 1.2)
+        repeat 2 times:
+            hero.nod()
+        # standard motions, plain actions written in AnimScript
+        ball.look_at((250, 520))
+        ball.walk_to((420, 520), speed: 140)
+        ball.step_back((250, 520), distance: 60, over: 0.6.seconds)
+        cancel w
+        hero.wave(lift: -110.deg, speed: 0.7)
+        friend.fade_out(over: 0.5.seconds)
+        friend.fade_in(over: 0.5.seconds)
+        friend.fly_to((640, 200), over: 1.5.seconds)
+        friend.fly_away(direction: up_right, over: 2.5.seconds)
