@@ -454,6 +454,12 @@ impl Runtime {
             PropId::EdgeWidth(e) => sh.edges[&e].width.unwrap_or(sh.stroke_width),
             PropId::ShapeWidth => sh.stroke_width,
             PropId::Opacity => sh.opacity,
+            PropId::StrokeProgress(i) => self
+                .it
+                .paints
+                .get(shape)
+                .and_then(|l| l.strokes.get(i as usize))
+                .map_or(1.0, |s| s.progress),
             c => self
                 .colour_rest(shape, c)
                 .map_or(0.0, |col| col[Self::colour_comp(c)]),
@@ -482,6 +488,17 @@ impl Runtime {
                 PropId::ShapeFillC(_) => sh.fill = Some(c8),
                 PropId::ShapeStrokeC(_) => sh.stroke = Some(c8),
                 _ => sh.tint = c8,
+            }
+            return;
+        }
+        if let PropId::StrokeProgress(i) = prop {
+            if let Some(st) = self
+                .it
+                .paints
+                .get_mut(shape)
+                .and_then(|l| l.strokes.get_mut(i as usize))
+            {
+                st.progress = v.clamp(0.0, 1.0);
             }
             return;
         }
@@ -2022,6 +2039,11 @@ impl Runtime {
                 }
                 PropId::Opacity => {
                     resolved.opacity.insert(shape.clone(), v.clamp(0.0, 1.0));
+                }
+                PropId::StrokeProgress(i) => {
+                    resolved
+                        .stroke_progress
+                        .insert((shape.clone(), i), v.clamp(0.0, 1.0));
                 }
             }
         }

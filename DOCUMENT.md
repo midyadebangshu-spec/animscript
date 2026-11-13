@@ -1942,6 +1942,45 @@ scene "Garden" for 15.seconds:
 
 Worked example: `examples/shots.anim`.
 
+## 13n. Painting with brushes (libmypaint)
+
+Strokes are painted by **libmypaint**, the brush engine of MyPaint, so brushes behave and look like MyPaint's. A
+`brush(...)` value says which brush and what to change; a `paint_layer()` shape holds the strokes.
+
+```anim
+let ink    = brush("pen", radius: 3, color: #223355)             # a bundled brush
+let chalk  = brush("charcoal", radius: 7, opacity: 0.6, hardness: 0.5)
+let mine   = brush("brushes/mine.myb", slow_tracking: 2)         # a .myb file (MyPaint brush format)
+shape art = paint_layer(z: 5, resolution: 2)                     # declare it like a shape
+
+art.stroke(ink, [(10, 10), (100, 40, 0.5), (200, 60)])                       # painted at once
+art.stroke(ink, [(10, 10), (300, 10)]) over 2.seconds ease linear            # drawn in over time (a blocking action)
+art.stroke(ink, points, speed: 400)                                          # px/s: sets the time between points
+art.clear_strokes()
+art.fade_to(0.5) over 1.second                                               # a layer is a shape: move, fade, rotate, z
+```
+
+- **Brushes.** Bundled: `pencil`, `pen`, `marker`, `charcoal`, `calligraphy`, `ink`, `smudge`, `eraser`, `rounded`
+  (MyPaint's classic brushes, CC0). A name with `/` or ending in `.myb` is a file. Named arguments set libmypaint
+  settings by name (`radius` in pixels, `opacity` for `opaque`, `color`, `hardness`, `eraser: true`, `slow_tracking`,
+  and any other setting of `brushsettings.json`). Unknown brushes, settings or files are `E-BRU-001`.
+- **Points** are `(x, y)`, `(x, y, pressure)` or `(x, y, pressure, seconds)`: pressure is 0 to 1 (default 0.7) and the
+  seconds since the previous point default to the distance divided by `speed` (300 px/s). Speed-dependent brushes
+  react to it. Bad points are `E-BRU-002`.
+- **Drawing in.** A stroke with `over` starts empty and its *progress* (0 to 1, along its length) animates like any
+  property; one without `over` is complete at once. Strokes have channels of their own, so `together:` draws several
+  strokes at the same time.
+- **The layer** is a shape with no geometry: position, scale, rotation (about the canvas centre), opacity, `z` and
+  visibility work as for shapes, and the camera applies. Order with other shapes is by `z`. `resolution` (0.25 to 4)
+  paints on more pixels per canvas pixel, so a zoomed picture stays crisp.
+- **How it renders.** The snapshot carries the brushes and the strokes with their progress, never pixels; the
+  renderer replays every stroke with a fresh libmypaint brush onto a transparent picture each frame and draws it
+  through the layer's transform and the camera. Smudge and eraser brushes therefore see the strokes painted before
+  them, in order.
+
+Worked example: `examples/painting.anim` (about 35 seconds to render 16 seconds of video, because every frame replays
+every stroke).
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,

@@ -97,6 +97,147 @@ fn camera_view(cam: &Value, cw: f32, ch: f32, scale: f32) -> View {
     }
 }
 
+/// The points of a stroke up to `progress` (0 to 1) of its length, the last one interpolated.
+fn partial_stroke(points: &[Value], progress: f64) -> Vec<animscript_brush::Point> {
+    let pts: Vec<[f64; 4]> = points
+        .iter()
+        .map(|p| {
+            [
+                p[0].as_f64().unwrap_or(0.0),
+                p[1].as_f64().unwrap_or(0.0),
+                p[2].as_f64().unwrap_or(0.7),
+                p[3].as_f64().unwrap_or(0.01),
+            ]
+        })
+        .collect();
+    let total: f64 = pts
+        .windows(2)
+        .map(|w| ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt())
+        .sum();
+    let target = total * progress.clamp(0.0, 1.0);
+    let mut out: Vec<[f64; 4]> = vec![];
+    let mut run = 0.0;
+    for (i, p) in pts.iter().enumerate() {
+        if i == 0 {
+            out.push(*p);
+            continue;
+        }
+        let q = pts[i - 1];
+        let seg = ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt();
+        if run + seg <= target + 1e-9 {
+            out.push(*p);
+            run += seg;
+        } else {
+            let f = if seg > 0.0 { (target - run) / seg } else { 0.0 };
+            if f > 0.0 {
+                out.push([
+                    q[0] + (p[0] - q[0]) * f,
+                    q[1] + (p[1] - q[1]) * f,
+                    q[2] + (p[2] - q[2]) * f,
+                    p[3] * f,
+                ]);
+            }
+            break;
+        }
+    }
+    if progress <= 0.0 {
+        return vec![];
+    }
+    out.iter()
+        .map(|p| animscript_brush::Point {
+            x: p[0] as f32,
+            y: p[1] as f32,
+            pressure: p[2] as f32,
+            xtilt: 0.0,
+            ytilt: 0.0,
+            dt: p[3],
+        })
+        .collect()
+}
+
+/// Paint a layer: every stroke is replayed with a fresh libmypaint brush (so it comes out the same every frame) onto
+/// a transparent picture, which is then drawn through the shape's transform and the camera.
+fn draw_paint(pm: &mut Pixmap, sh: &Value, view: &View) {
+    let p = &sh["paint"];
+    let size = (
+        p["size"][0].as_u64().unwrap_or(0) as f64,
+        p["size"][1].as_u64().unwrap_or(0) as f64,
+    );
+    let res = p["resolution"].as_f64().unwrap_or(1.0);
+    let (pw, ph) = (
+        (size.0 * res).round().max(1.0) as u32,
+        (size.1 * res).round().max(1.0) as u32,
+    );
+    let brushes = p["brushes"].as_array().cloned().unwrap_or_default();
+    let mut canvas = animscript_brush::Canvas::new(pw, ph);
+    for stroke in p["strokes"].as_array().into_iter().flatten() {
+        let Some(spec) = brushes.get(stroke["brush"].as_u64().unwrap_or(0) as usize) else {
+            continue;
+        };
+        let source = spec["source"].as_str().unwrap_or("pencil");
+        let brush = match spec["myb"].as_str() {
+            Some(text) => animscript_brush::Brush::from_myb(text).ok(),
+            None => animscript_brush::Brush::bundled(source),
+        };
+        let Some(mut brush) = brush else { continue };
+        for kv in spec["set"].as_array().into_iter().flatten() {
+            if let (Some(k), Some(v)) = (kv[0].as_str(), kv[1].as_f64()) {
+                let _ = brush.set(k, v as f32);
+            }
+        }
+        // a higher resolution paints the same stroke on more pixels: the dab radius grows with it
+        if let Some(r) = brush.get("radius_logarithmic") {
+            let _ = brush.set("radius_logarithmic", r + res.ln() as f32);
+        }
+        if let Some(c) = spec["color"].as_array() {
+            brush.set_color([
+                c[0].as_f64().unwrap_or(0.0) as f32,
+                c[1].as_f64().unwrap_or(0.0) as f32,
+                c[2].as_f64().unwrap_or(0.0) as f32,
+            ]);
+        }
+        let mut pts = partial_stroke(
+            stroke["points"]
+                .as_array()
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]),
+            stroke["progress"].as_f64().unwrap_or(1.0),
+        );
+        for q in pts.iter_mut() {
+            q.x *= res as f32;
+            q.y *= res as f32;
+        }
+        canvas.stroke(&mut brush, &pts);
+    }
+    let Some(size) = tiny_skia::IntSize::from_wh(pw, ph) else {
+        return;
+    };
+    let Some(layer) = Pixmap::from_vec(canvas.rgba8(), size) else {
+        return;
+    };
+    let t = &sh["transform"];
+    let g = |k: &str, i: usize, d: f32| t[k][i].as_f64().map_or(d, |v| v as f32);
+    let (pos, scale, piv) = (
+        (g("position", 0, 0.0), g("position", 1, 0.0)),
+        (g("scale", 0, 1.0), g("scale", 1, 1.0)),
+        (g("pivot", 0, 0.0), g("pivot", 1, 0.0)),
+    );
+    let rot = t["rotation"].as_f64().unwrap_or(0.0) as f32 * 360.0;
+    let shape_tf = Transform::from_translate(-piv.0, -piv.1)
+        .post_scale(scale.0, scale.1)
+        .post_rotate(rot)
+        .post_translate(piv.0 + pos.0, piv.1 + pos.1);
+    let tf = Transform::from_scale(1.0 / res as f32, 1.0 / res as f32)
+        .post_concat(shape_tf)
+        .post_concat(view.tf);
+    let paint = tiny_skia::PixmapPaint {
+        opacity: sh["opacity"].as_f64().unwrap_or(1.0) as f32,
+        quality: tiny_skia::FilterQuality::Bilinear,
+        ..tiny_skia::PixmapPaint::default()
+    };
+    pm.draw_pixmap(0, 0, layer.as_ref(), &paint, tf, None);
+}
+
 /// Foam and spray: small white specks that fade with age.
 fn draw_foam(pm: &mut Pixmap, fl: &Value, view: &View) {
     let spacing = fl["spacing"].as_f64().unwrap_or(8.0);
@@ -615,6 +756,10 @@ fn render_view(
         .unwrap_or(&[])
     {
         if sh["visible"] == Value::Bool(false) {
+            continue;
+        }
+        if sh["paint"].is_object() {
+            draw_paint(&mut pm, sh, &view);
             continue;
         }
         // every face is filled with its own resolved colour, every edge stroked with its own

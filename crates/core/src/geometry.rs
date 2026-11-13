@@ -188,8 +188,17 @@ pub struct Shape {
     /// Multiplies the colour of every fill and stroke (white = no change).
     pub tint: Color,
     pub image: Option<ImageFill>,
+    /// Set on a paint layer (`paint_layer()`): its size in canvas pixels and resolution; the strokes live in the runtime.
+    pub paint: Option<PaintInfo>,
     /// Texture coordinates `[u, v]` (0 to 1) fixed when the image was assigned.
     pub uv: BTreeMap<u32, [f64; 2]>,
+}
+
+/// A paint layer's raster size (canvas pixels) and how many picture pixels there are per canvas pixel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PaintInfo {
+    pub size: [u32; 2],
+    pub resolution: f64,
 }
 
 /// Scale about the pivot, then rotate about the pivot, then translate by `position`.
@@ -410,6 +419,7 @@ impl Shape {
             opacity: 1.0,
             tint: [255, 255, 255, 255],
             image: None,
+            paint: None,
             uv: BTreeMap::new(),
         }
     }

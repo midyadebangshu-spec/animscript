@@ -26,6 +26,8 @@ pub struct Resolved {
     pub tint: BTreeMap<String, [f64; 4]>,
     pub shape_width: BTreeMap<String, f64>,
     pub opacity: BTreeMap<String, f64>,
+    /// Painted fraction of paint-layer strokes.
+    pub stroke_progress: BTreeMap<(String, u32), f64>,
     /// The physics section of the snapshot (contacts, joints, sleep flags), when a world exists.
     pub physics: Option<J>,
     /// Live particles per emitter, when the program declares emitters.
@@ -111,6 +113,9 @@ pub fn build_snapshot(
                 "transform": {"position": pt(&tf.position), "scale": pt(&tf.scale), "rotation": tf.rotation, "pivot": pt(&tf.pivot)},
                 "vertices": vertices, "edges": edges, "faces": faces,
             });
+            if let Some(p) = it.paint_snapshot(n, &resolved.stroke_progress) {
+                shape_json["paint"] = p;
+            }
             if let Some(img) = &sh.image {
                 let tris = textured_triangles(sh, ov, &tf);
                 shape_json["image"] = json!({"src": img.src, "w": img.w, "h": img.h, "hash": format!("{:016x}", img.hash), "tris": tris});

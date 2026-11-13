@@ -35,6 +35,7 @@ version = "0.1.0"
 name = "animscript-lang"
 version = "0.1.0"
 dependencies = [
+ "animscript-brush",
  "animscript-core",
  "animscript-physics",
  "serde_json",
@@ -48,6 +49,7 @@ version = "0.1.0"
 name = "animscript-render"
 version = "0.1.0"
 dependencies = [
+ "animscript-brush",
  "png 0.18.1",
  "serde_json",
  "tiny-skia",

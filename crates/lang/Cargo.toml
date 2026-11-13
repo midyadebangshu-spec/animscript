@@ -6,4 +6,5 @@ edition.workspace = true
 [dependencies]
 animscript-core.workspace = true
 animscript-physics.workspace = true
+animscript-brush.workspace = true
 serde_json.workspace = true

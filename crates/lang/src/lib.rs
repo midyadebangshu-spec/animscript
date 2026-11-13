@@ -11,6 +11,7 @@ pub mod imports;
 pub mod interp;
 pub mod layers;
 pub mod lexer;
+pub mod paint;
 pub mod parser;
 pub mod particles;
 pub mod phys;

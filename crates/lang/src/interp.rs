@@ -308,6 +308,8 @@ pub struct Interp {
     pub defs: BTreeMap<String, Rc<Def>>,
     /// Every definition with a `self` parameter, by name: one name may have several, for different `self` types.
     pub method_defs: BTreeMap<String, Vec<Rc<Def>>>,
+    /// The strokes of every paint layer, by shape name.
+    pub paints: BTreeMap<String, crate::paint::PaintLayer>,
     /// The value of the last executed `return`.
     pub ret: Option<Value>,
     pub call_depth: usize,
@@ -398,6 +400,7 @@ impl Interp {
             ik_live: BTreeMap::new(),
             defs: BTreeMap::new(),
             method_defs: BTreeMap::new(),
+            paints: BTreeMap::new(),
             ret: None,
             call_depth: 0,
             program: Program::default(),
@@ -681,6 +684,7 @@ impl Interp {
                 sh.name = name.clone();
                 self.shapes.insert(name.clone(), *sh);
                 self.shape_order.push(name.clone());
+                self.register_paint(name);
                 if let Some(b) = body {
                     t.push_block(Rc::clone(b), vec![]);
                 }
@@ -2387,6 +2391,8 @@ impl Interp {
                 };
                 Ok(Value::Bool(self.events.contains(&format!("marker:{n}"))))
             }
+            "brush" => self.brush_builtin(args),
+            "paint_layer" => self.paint_layer_builtin(args),
             "bounds" | "anchor" => {
                 let m = self.bind(name, args, &["of"], &["of"])?;
                 match (&m["of"], name) {
@@ -2512,6 +2518,12 @@ impl Interp {
             return Ok(Value::Bool(
                 self.scene_frames.is_some_and(|f| self.tick >= f - n),
             ));
+        }
+        if let Value::Shape(sn) = &obj {
+            if self.paints.contains_key(sn) && matches!(name, "stroke" | "clear_strokes") {
+                let sn = sn.clone();
+                return self.paint_method(&sn, name, args, mode, span);
+            }
         }
         if name == "play_clip" {
             return self.play_clip(obj, args, mode);

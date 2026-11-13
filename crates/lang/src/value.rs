@@ -240,6 +240,8 @@ pub enum PropId {
     EdgeWidth(u32),
     ShapeWidth,
     Opacity,
+    /// How much of a paint layer's stroke is painted (0 to 1).
+    StrokeProgress(u32),
 }
 
 impl PropId {
@@ -487,6 +489,8 @@ pub enum Value {
     Joint(usize),
     /// A particle emitter, by name.
     Emitter(String),
+    /// A brush made by `brush(...)`.
+    Brush(Rc<crate::paint::BrushSpec>),
     /// A fluid, by name.
     Fluid(String),
     /// A loaded picture, for `shape.fill = image("file.png")`.
@@ -535,6 +539,7 @@ impl Value {
             Value::Entity(_) => "Entity",
             Value::Ease(_) => "Easing",
             Value::SceneObj => "Scene",
+            Value::Brush(_) => "Brush",
             Value::Pending(_) => "Action",
             Value::Lambda(_) => "Lambda",
             Value::Modifier(_) => "Modifier",

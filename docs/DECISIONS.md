@@ -955,4 +955,28 @@ judgement calls I expect you to want to look at.
     RGBA picture; `stroke` begins with a zero-pressure sample and ends with one, as libmypaint expects; `rgba8`
     converts 15-bit pixels). Nine MyPaint classic brushes (CC0, `Licenses.dep5` kept beside them) are bundled:
     pencil, pen, marker, charcoal, calligraphy, ink, smudge, eraser, rounded.
+201. **Paint layers are shapes (B2).** `paint_layer(z:, resolution:)` returns a geometry-less shape (core `Shape.paint`
+    holds the canvas size and resolution); registering it as `shape name = ...` creates its stroke list and puts its
+    pivot at the canvas centre. Position, scale, rotation, opacity, z and visibility are the shape's, folded by the
+    usual layers; the snapshot entry has no vertices and a `paint` object (`size`, `resolution`, `brushes`, `strokes`).
+202. **Strokes are data, progress is a property.** A stroke is a brush index, points `[x, y, pressure, dt]` and a
+    progress. `PropId::StrokeProgress(i)` makes a timed stroke an ordinary action (`over`, `ease`, `cancel`, keyframes,
+    locks all work); the default easing of a stroke is linear. A stroke made with `over` while the scene runs starts at
+    0, any other at 1. Every stroke has its own channel (`0x4000_0000 + index`) so strokes can be drawn together;
+    statements in sequence draw one after another. Strokes are made when the statement runs, not when it starts waiting.
+203. **Brush values.** `brush(source, name: value, ...)` validates at once: a bundled name is built, a `.myb` path is
+    read relative to the program's folder (its text is kept in the value so the snapshot does not depend on the file),
+    and every setting is tried on a probe brush (`E-BRU-001` for unknown names, bad types, `radius <= 0`).
+    `radius` is converted to libmypaint's logarithm, `opacity` is the name of `opaque`, booleans are 0 and 1. A layer
+    stores each distinct brush once.
+204. **Points and time.** Without a fourth number the time since the previous point is the distance over `speed` (min 1 ms)
+    and the first point's is 10 ms; this is what libmypaint's speed inputs and spacing see, so the same path drawn with
+    another `speed` looks different. Pressure outside 0..1 or a negative time is `E-BRU-002`.
+205. **Replay rendering.** The renderer builds a `Canvas` of `size * resolution` pixels per layer and frame, replays
+    each stroke with a fresh `Brush` (so the random numbers restart and a frame is a pure function of the snapshot),
+    truncates a stroke to its progress along the path length (the last point interpolated), scales points and
+    `radius_logarithmic` by the resolution, and draws the picture with bilinear filtering through scale/rotate/translate
+    about the pivot, then the camera. Cost is proportional to the number of dabs per frame, with no caching yet.
+206. **Not yet.** Strokes along curved shape edges, fitting hand-drawn points to Bezier curves (B3), tilt input,
+    symmetry, and per-stroke blend modes beyond what the brush itself does.
 
