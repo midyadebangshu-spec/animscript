@@ -1,0 +1,16 @@
+# libmypaint, vendored for AnimScript
+
+Source: https://github.com/mypaint/libmypaint, commit in `COMMIT` (ISC licence, see `COPYING`).
+
+Only the brush engine and the fixed-size tiled surface are kept (no glib, no json-c, no GEGL, no gettext).
+Changes to the upstream files:
+
+- `config.h` is new: it only sets `MYPAINT_CONFIG_USE_GLIB 0`.
+- `mypaint-brush-settings-gen.h` and `brushsettings-gen.h` are the output of `python3 generate.py <public.h> <internal.h>`
+  from `brushsettings.json` (the autotools build normally makes them).
+- `mypaint-brush.c`: the json-c based brush loading (`mypaint_brush_from_string` and helpers) and the `brush_json`
+  field are compiled only if `MYPAINT_USE_JSON` is set, and the GObject wrapper include only with glib. AnimScript
+  reads `.myb` files in Rust and sets the settings through `mypaint_brush_set_base_value` / `_set_mapping_*`.
+- `mypaint-fixed-tiled-surface.{c,h}`: `mypaint_fixed_tiled_surface_clear` and `mypaint_fixed_tiled_surface_read`
+  are added so the picture can be cleared to transparent and copied out.
+- `mypaint-brush.c`: the `printf("Time is running backwards!")` debug message is removed (the value is still clamped).

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/lang", "crates/render", "crates/anim", "crates/physics"]
+members = ["crates/core", "crates/lang", "crates/render", "crates/anim", "crates/physics", "crates/brush"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,6 +12,7 @@ animscript-core = { path = "crates/core" }
 animscript-lang = { path = "crates/lang" }
 animscript-render = { path = "crates/render" }
 animscript-physics = { path = "crates/physics" }
+animscript-brush = { path = "crates/brush" }
 serde_json = "1"
 tiny-skia = "0.11"
 clap = { version = "4", features = ["derive"] }

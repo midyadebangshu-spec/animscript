@@ -1,0 +1,13 @@
+[package]
+name = "animscript-brush"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The libmypaint brush engine (vendored, ISC) behind a small safe API: brushes, strokes, a fixed-size canvas"
+build = "build.rs"
+
+[dependencies]
+serde_json.workspace = true
+
+[build-dependencies]
+cc = "1"
