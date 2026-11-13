@@ -64,6 +64,8 @@ impl Vars {
 pub struct Entity {
     pub states: Vec<String>,
     pub flags: BTreeMap<String, bool>,
+    /// Names of derived flags (their values live in `flags` too).
+    pub derived: Vec<String>,
 }
 
 /// A zero-time effect that is applied at the end of the delta (spec §6.3).
@@ -109,6 +111,8 @@ pub enum Req {
     Await(u32),
     Act(ActionReq),
     Together(Vec<Block>),
+    /// Like `Together`, but the first child to finish cancels the others and wakes the parent.
+    Race(Vec<Block>),
 }
 pub enum Step {
     Done,
@@ -162,6 +166,8 @@ pub struct Task {
     pub rule: Option<usize>,
     /// Tasks waiting for this one to finish (`await` on a started user action).
     pub awaiters: Vec<u32>,
+    /// Waiting in a `race:`: the first child to finish ends the wait.
+    pub race: bool,
 }
 impl Task {
     pub fn new(id: u32, block: Block, mut vars: Vars, mode: Mode, scope: bool) -> Task {
@@ -184,6 +190,7 @@ impl Task {
             wake: 0,
             rule: None,
             awaiters: vec![],
+            race: false,
         }
     }
     pub(crate) fn push_block(&mut self, b: Block, bind: Vec<(String, Value)>) {
@@ -244,6 +251,8 @@ pub struct Interp {
     pub live_tf: BTreeMap<String, Transform>,
     /// Last solved bone poses `(head, tip, angle)` keyed `armature.bone`.
     pub rig_live: BTreeMap<String, (P, P, f64)>,
+    pub derived: Vec<crate::derive::DerivedFlag>,
+    pub flag_hist: BTreeMap<(String, String), crate::derive::FlagHist>,
     /// Last solved IK handles `(target, weight)` keyed `armature.handle`.
     pub ik_live: BTreeMap<String, (P, f64)>,
     /// User-defined `action`s and `fn`s by name.
@@ -326,6 +335,8 @@ impl Interp {
             rig_sim: None,
             live_tf: BTreeMap::new(),
             rig_live: BTreeMap::new(),
+            derived: vec![],
+            flag_hist: BTreeMap::new(),
             ik_live: BTreeMap::new(),
             defs: BTreeMap::new(),
             ret: None,
@@ -357,10 +368,12 @@ impl Interp {
                 Entity {
                     states: e.states.clone(),
                     flags,
+                    derived: vec![],
                 },
             );
             it.entity_order.push(e.name.clone());
         }
+        it.register_derives(&program.entities)?;
         it.program = program;
         it.register_defs()?;
         Ok(it)
@@ -378,6 +391,41 @@ impl Interp {
         self.eval_emitters()?;
         self.eval_fluids()?;
         Ok(())
+    }
+
+    /// Run a `finally:` body: zero-time statements only, with a copy of the task's variables.
+    pub fn run_final(&mut self, body: &Block, vars: &Vars, mode: Mode) -> Res<()> {
+        let mut t = Task::new(0, Rc::clone(body), vars.flatten(), mode, true);
+        match self.step(&mut t) {
+            Ok(Step::Done) => Ok(()),
+            Ok(Step::Blocked(_)) => Err(Self::final_blocks()),
+            Err(d) if d.code == "E-STM-001" => Err(Self::final_blocks()),
+            Err(d) => Err(d),
+        }
+    }
+
+    fn final_blocks() -> Diagnostic {
+        Diagnostic::new("E-STM-003", "a `finally:` block cannot wait or run a timed action")
+            .help("`finally:` runs while a task is being stopped: use only zero-time statements (`note`, `let`, `becomes`, `emit`, ...)")
+    }
+
+    /// The `finally:` bodies of a task's blocks that have not reached them yet, innermost first.
+    pub fn pending_finals(t: &Task) -> Vec<Block> {
+        let mut out = vec![];
+        for f in t.frames.iter().rev() {
+            if let Frame::Block { stmts, idx, .. } = f {
+                if let Some(Stmt {
+                    kind: StmtKind::Finally(b),
+                    ..
+                }) = stmts.last()
+                {
+                    if *idx < stmts.len() {
+                        out.push(Rc::clone(b));
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// Run a task that must not block (build and setup code) to completion.
@@ -765,11 +813,26 @@ impl Interp {
                 let kids: Vec<Block> = body.iter().map(|s| Rc::new(vec![s.clone()])).collect();
                 return Ok(Some(Req::Together(kids)));
             }
+            StmtKind::Race(body) => {
+                let kids: Vec<Block> = body.iter().map(|s| Rc::new(vec![s.clone()])).collect();
+                return Ok(Some(Req::Race(kids)));
+            }
+            StmtKind::Finally(body) => {
+                // reached by running off the end of its block: the normal way a block finishes
+                self.run_final(body, &t.vars, mode)?;
+            }
             StmtKind::Become { target, flag, set } => {
                 let ent = self.entities.get(target).ok_or_else(|| {
                     Diagnostic::new("E-NAM-001", format!("unknown entity `{target}`"))
                         .help("declare it with `prop name:` and `states: ...`")
                 })?;
+                if ent.derived.contains(flag) {
+                    return Err(Diagnostic::new(
+                        "E-STA-001",
+                        format!("`{flag}` of `{target}` is derived, so it cannot be set or cleared"),
+                    )
+                    .help("a derived flag follows its `derive ... when` condition; change what the condition looks at"));
+                }
                 if !ent.states.contains(flag) {
                     return Err(Diagnostic::new(
                         "E-NAM-003",
@@ -1277,6 +1340,11 @@ impl Interp {
             ExprKind::Color(c) => Ok(Value::Color(*c)),
             ExprKind::Name(n) => self.lookup(n, vars),
             ExprKind::Member(o, n) => {
+                if n == "rose" {
+                    if let Some(v) = self.flag_rose(o, vars) {
+                        return Ok(v);
+                    }
+                }
                 let ov = self.eval(o, vars, mode)?;
                 self.get_attr(ov, n)
             }
@@ -1807,6 +1875,11 @@ impl Interp {
         vars: &Vars,
         mode: Mode,
     ) -> Res<Value> {
+        if let ExprKind::Member(o, name) = &f.kind {
+            if let Some(r) = self.flag_call(o, name, args, vars, mode) {
+                return r;
+            }
+        }
         let mut vals: Vec<(Option<String>, Value)> = vec![];
         let callee = match &f.kind {
             ExprKind::Member(o, name) => Some((self.eval(o, vars, mode)?, name.clone())),
@@ -1978,6 +2051,23 @@ impl Interp {
                         .help("try `spring(3, 5)`: three bounces, damping 5"));
                 }
                 Ok(Value::Ease(Ease::Spring { bounces, damping }))
+            }
+            "marker" => {
+                let m = self.bind(name, args, &["name"], &["name"])?;
+                let Value::Str(n) = &m["name"] else {
+                    return Err(type_err("`marker` needs the marker's name as a string"));
+                };
+                Ok(Value::Bool(self.events.contains(&format!("marker:{n}"))))
+            }
+            "cubic_bezier" => {
+                let m = self.bind(name, args, &["x1", "y1", "x2", "y2"], &["x1", "y1", "x2", "y2"])?;
+                let n = |k: &str| self.num(&m[k], "a `cubic_bezier` value");
+                let v = [n("x1")?, n("y1")?, n("x2")?, n("y2")?];
+                if !(0.0..=1.0).contains(&v[0]) || !(0.0..=1.0).contains(&v[2]) {
+                    return Err(type_err("the x values of `cubic_bezier` must be between 0 and 1")
+                        .help("y values may go outside 0..1 to overshoot; try `cubic_bezier(0.25, 0.1, 0.25, 1)`"));
+                }
+                Ok(Value::Ease(Ease::Bezier(v)))
             }
             "rect" => {
                 let m = self.bind(name, args, &["x", "y", "w", "h"], &["x", "y", "w", "h"])?;

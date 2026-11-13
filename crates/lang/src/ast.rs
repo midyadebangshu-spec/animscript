@@ -85,6 +85,10 @@ pub enum StmtKind {
     /// `return` or `return value`, inside an `action` or `fn`.
     Return(Option<Expr>),
     Together(Block),
+    /// Like `together:`, but resumes when the first child finishes and cancels the rest.
+    Race(Block),
+    /// Runs when the enclosing block ends for any reason; zero-time statements only. Last in its block.
+    Finally(Block),
     /// `[let name =] start CALL`: begin an action or modifier without waiting for it.
     Start {
         name: Option<String>,
@@ -190,6 +194,8 @@ pub struct EntityDecl {
     pub kind: String,
     pub name: String,
     pub states: Vec<String>,
+    /// `derive name when condition`: a flag recomputed from a condition every delta.
+    pub derives: Vec<(String, Expr, Span)>,
     pub span: Span,
 }
 
@@ -222,6 +228,8 @@ pub struct Scene {
     pub setup: Option<Block>,
     pub main: Option<Block>,
     pub timeline: Vec<KeyBlock>,
+    /// `marker "name" at TIME` lines of the timeline.
+    pub markers: Vec<(String, Expr, Span)>,
     pub rules: Vec<Rule>,
     pub span: Span,
 }

@@ -1,0 +1,47 @@
+project "Control flow":
+    anim_version: "0.1"
+    canvas: 800x600
+    fps: 24
+    background: #eef1f6
+
+# an entity with authored flags and derived ones (recomputed every delta from their conditions)
+prop bird:
+    states: afraid
+    derive scared_long when afraid.held_for(1.second)
+    derive just_startled when afraid.since(0.25.seconds)
+
+shape runner = circle(20, radius: 20, at: (80, 150))
+shape guard = square(size: 40, at: (80, 300))
+shape flag_light = circle(16, radius: 16, at: (700, 450))
+runner.fill = #4f8fe0
+guard.fill = #e0674f
+flag_light.fill = #aaaaaa
+
+# a user action with `finally:`: the light always goes grey again, however the action ends
+action chase(self: Shape):
+    self.move_to((700, 150)) over 4.seconds ease cubic_bezier(0.25, 0.1, 0.25, 1)
+    finally:
+        flag_light.fill = #aaaaaa
+
+scene "Control" for 8.seconds:
+    timeline:
+        marker "alarm" at 2.seconds
+
+    when marker("alarm"):
+        bird becomes afraid
+    when bird.just_startled:
+        flag_light.fill_to(#f2c94c) over 0.2.seconds
+    when bird.scared_long:
+        flag_light.fill_to(#e0674f) over 0.2.seconds
+
+    main:
+        # a race: the runner (4 s) against the guard walking (6 s) and a 3 s timeout; the first to finish
+        # wins, the others are stopped where they are and their `finally:` blocks run
+        race:
+            runner.chase()
+            guard.move_to((700, 300)) over 6.seconds ease linear
+            wait 3.seconds
+        # (the `scared_long` rule colours the light red at the same moment; the green waits its turn)
+        wait 1.second
+        flag_light.fill_to(#4caf50) over 0.5.seconds
+        wait 3.seconds

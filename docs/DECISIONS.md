@@ -821,4 +821,27 @@ judgement calls I expect you to want to look at.
 175. **Language limits met while writing it.** Lists are immutable (no `xs[i] = v`), so per-foot state lives in
     separate tasks (`together:`), not in a list; durations are used as frame counts (`frames(d)`); there is no
     conditional expression, so direction is set with `let d = 1` and `if`.
+176. **`race:`** is `together:` with a different wake rule: the parent task wakes when the first child task finishes,
+    the other children (and everything they started) are cancelled through the same path as `cancel`, so their
+    actions keep the value they last sampled. Children are the statements of the block, like `together:`; a tie goes
+    to the lowest task id, i.e. the one written first.
+177. **`finally:`.** A statement `Finally(block)` that must be the last of its block (`E-SYN-001` otherwise, and it is
+    refused directly inside `together:`/`race:`). Running off the end of the block executes it; cancelling a task
+    (cancel, a lost race, scene end) runs the `finally:` of every block of the task's frame stack that has not
+    reached it yet, innermost first; `return` runs those of the blocks it leaves. All of them run in a throwaway
+    task with a flattened copy of the task's variables and must not block (`E-STM-003`). Scene end cancels the tasks
+    that are still alive and applies what their `finally:` blocks staged. Errors raised while cancelling are held
+    and raised at the end of the step. `finally:` is allowed anywhere a block is, including user actions (my lean).
+178. **`derive`.** Parsed inside an entity; its condition is evaluated with `self` and the entity's flag names bound as
+    variables. Derived values live in the entity's flag map (so snapshots and rules see them) and are recomputed at the
+    start of every delta, after the authored flags were noted, in dependency order (depth-first over the references
+    found in the conditions), so a rule sees this tick's value. `E-STA-002` reports the cycle path. History per flag
+    (`since`: tick it took its value; `rose`: tick and delta of the last rising edge) is kept for every flag and reset
+    at each scene start. `held_for(d)` is `now - since >= frames(d)`; `since(d)` is `now - since <= frames(d)`; `rose`
+    compares with the current tick and delta. These three are recognised syntactically (the receiver must name a flag).
+179. **`cubic_bezier`.** `Ease::Bezier([x1, y1, x2, y2])`: Newton iterations on x(t) = p with a bisection fallback, then
+    y(t); the ends are exact. x1 and x2 outside 0..1 is `E-TYP-001`.
+180. **Markers.** `marker "name" at TIME` lines inside `timeline:` (time in absolute scene time). The runtime inserts the
+    event `marker:name` on that tick before the first delta; `marker("name")` reads it, so it works as a trigger like
+    `scene.starts`. Only in `timeline:` for now (shots may declare them later).
 

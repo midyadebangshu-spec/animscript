@@ -109,6 +109,10 @@ pub struct Runtime {
     handles: BTreeMap<u32, HandleState>,
     main_task: Option<u32>,
     main_done: bool,
+    /// An error raised by a `finally:` block while a task was being cancelled.
+    deferred_err: Option<Diagnostic>,
+    /// The running scene's timeline markers: name and tick.
+    markers: Vec<(String, i64)>,
     project_tick: i64,
     scene_name: String,
     snapshots: Vec<J>,
@@ -171,6 +175,8 @@ impl Runtime {
             handles: BTreeMap::new(),
             main_task: None,
             main_done: false,
+            deferred_err: None,
+            markers: vec![],
             project_tick: 0,
             scene_name: String::new(),
             snapshots: vec![],
@@ -214,6 +220,7 @@ impl Runtime {
         self.pending.clear();
         self.channels.clear();
         self.rules = vec![RuleSt::default(); sc.rules.len()];
+        self.it.flag_hist.clear();
         self.main_task = None;
         self.main_done = false;
         self.scene_name = sc.name.clone();
@@ -249,9 +256,15 @@ impl Runtime {
             if n == 0 {
                 self.it.events.insert("scene.starts".into());
             }
+            for (name, at) in &self.markers {
+                if *at == n {
+                    self.it.events.insert(format!("marker:{name}"));
+                }
+            }
             let mut d = 1u32;
             loop {
                 self.it.delta = d;
+                self.it.update_flags()?;
                 self.dispatch_rules(sc)?;
                 self.step_tasks()?;
                 if self.it.apply_staged()? == 0 {
@@ -279,7 +292,7 @@ impl Runtime {
                 break;
             }
         }
-        self.end_scene();
+        self.end_scene()?;
         Ok(())
     }
 
@@ -595,6 +608,12 @@ impl Runtime {
             }
             self.pending.retain(|p| p.task != d);
             if let Some(t) = self.tasks.remove(&d) {
+                // a cancelled task still gets to run its `finally:` blocks
+                for b in Interp::pending_finals(&t) {
+                    if let Err(e) = self.it.run_final(&b, &t.vars, Mode::Run) {
+                        self.deferred_err.get_or_insert(e);
+                    }
+                }
                 for w in t.awaiters {
                     if let Some(x) = self.tasks.get_mut(&w) {
                         x.state = TaskState::Ready;
@@ -702,6 +721,17 @@ impl Runtime {
 
     /// A scene's `timeline:` becomes key sets with absolute scene times.
     fn register_timeline(&mut self, sc: &Rc<Scene>) -> Res<()> {
+        self.markers.clear();
+        for (name, at, span) in &sc.markers {
+            if self.markers.iter().any(|m| m.0 == *name) {
+                return Err(
+                    Diagnostic::new("E-NAM-002", format!("duplicate marker `{name}`")).at(*span),
+                );
+            }
+            let v = self.it.eval(at, &self.base_vars(), Mode::Run)?;
+            let tick = self.it.frames_of(&v, at.span)?;
+            self.markers.push((name.clone(), tick));
+        }
         if sc.timeline.is_empty() {
             return Ok(());
         }
@@ -871,7 +901,13 @@ impl Runtime {
                     }
                     self.tasks.insert(id, t);
                 }
-                Step::Blocked(Req::Together(blocks)) => {
+                Step::Blocked(req @ (Req::Together(_) | Req::Race(_))) => {
+                    let (blocks, race) = match req {
+                        Req::Together(b) => (b, false),
+                        Req::Race(b) => (b, true),
+                        _ => unreachable!(),
+                    };
+                    t.race = race;
                     t.pending = blocks.len() as u32;
                     t.state = if blocks.is_empty() {
                         TaskState::Ready
@@ -890,7 +926,10 @@ impl Runtime {
                 }
             }
         }
-        Ok(())
+        match self.deferred_err.take() {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     fn finish_task(&mut self, t: Task) {
@@ -907,11 +946,26 @@ impl Runtime {
             }
         }
         if let Some(p) = t.parent {
+            let mut lost = vec![];
             if let Some(parent) = self.tasks.get_mut(&p) {
                 parent.pending = parent.pending.saturating_sub(1);
-                if parent.pending == 0 {
+                if parent.race && parent.state == TaskState::BlockedKids {
+                    // the first child home wins: the others are cancelled
+                    parent.pending = 0;
+                    parent.race = false;
+                    parent.state = TaskState::Ready;
+                    lost = self
+                        .tasks
+                        .iter()
+                        .filter(|(_, k)| k.parent == Some(p))
+                        .map(|(k, _)| *k)
+                        .collect();
+                } else if parent.pending == 0 {
                     parent.state = TaskState::Ready;
                 }
+            }
+            for l in lost {
+                self.cancel_task(l);
             }
         }
     }
@@ -1238,7 +1292,18 @@ impl Runtime {
         self.resolved = resolved;
     }
 
-    fn end_scene(&mut self) {
+    fn end_scene(&mut self) -> Res<()> {
+        // tasks still running when the scene ends are cancelled: they run their `finally:` blocks
+        let left: Vec<u32> = self.tasks.keys().copied().collect();
+        for id in left {
+            if self.tasks.contains_key(&id) {
+                self.cancel_task(id);
+            }
+        }
+        if let Some(e) = self.deferred_err.take() {
+            return Err(e);
+        }
+        self.it.apply_staged()?; // what the `finally:` blocks changed
         self.it.live_tf.clear();
         self.it.rig_live.clear();
         self.it.ik_live.clear();
@@ -1259,6 +1324,7 @@ impl Runtime {
         self.modsets.clear();
         self.handles.clear();
         self.resolved = Resolved::default();
+        Ok(())
     }
 }
 

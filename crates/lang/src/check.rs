@@ -105,7 +105,7 @@ fn walk_stmt(it: &Interp, s: &Stmt, out: &mut Vec<Diagnostic>) {
             }
         }
         StmtKind::Cancel(e) | StmtKind::Await(e) => walk_expr(it, e, out),
-        StmtKind::Together(b) => walk_block(it, b, out),
+        StmtKind::Together(b) | StmtKind::Race(b) | StmtKind::Finally(b) => walk_block(it, b, out),
         StmtKind::While { cond, body } => {
             walk_expr(it, cond, out);
             walk_block(it, body, out);

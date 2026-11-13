@@ -16,6 +16,7 @@ pub fn parse(src: &str) -> Res<Program> {
         toks,
         i: 0,
         callable_depth: 0,
+        markers: vec![],
     };
     p.program()
 }
@@ -25,6 +26,8 @@ struct Parser {
     i: usize,
     /// How many `action` / `fn` bodies we are inside (`return` needs one).
     callable_depth: u32,
+    /// `marker` lines met while parsing a `timeline:`.
+    markers: Vec<(String, Expr, Span)>,
 }
 
 fn parse_color(hex: &str) -> [u8; 4] {
@@ -236,6 +239,17 @@ impl Parser {
             }
         } else {
             out.push(self.stmt()?);
+        }
+        if let Some(bad) = out
+            .iter()
+            .enumerate()
+            .find(|(i, s)| matches!(s.kind, StmtKind::Finally(_)) && *i + 1 != out.len())
+        {
+            return Err(Diagnostic::new(
+                "E-SYN-001",
+                "`finally:` must be the last statement of its block",
+            )
+            .at(bad.1.span));
         }
         Ok(Rc::new(out))
     }
@@ -564,23 +578,56 @@ impl Parser {
         let kind = self.ident("entity kind")?;
         let name = self.ident("an entity name")?;
         let mut states = vec![];
-        self.attrs(|p, key, _| {
+        let mut derives = vec![];
+        self.expect_op(":")?;
+        if !matches!(self.peek().t, T::Newline) {
+            return self.err("expected an indented block of `name: value` lines");
+        }
+        self.next();
+        if !matches!(self.peek().t, T::Indent) {
+            return self.err("expected an indented block");
+        }
+        self.next();
+        loop {
+            self.skip_newlines();
+            if matches!(self.peek().t, T::Dedent | T::Eof) {
+                break;
+            }
+            let span = self.peek().span;
+            if self.at_ident("derive") {
+                self.next();
+                let dname = self.ident("a derived flag name")?;
+                if !self.at_ident("when") {
+                    return self.err("expected `when` and a condition after the derived flag name");
+                }
+                self.next();
+                let cond = self.expr()?;
+                self.end_stmt()?;
+                derives.push((dname, cond, span));
+                continue;
+            }
+            let key = self.ident("an attribute name")?;
+            self.expect_op(":")?;
             if key == "states" {
                 loop {
-                    states.push(p.ident("a flag name")?);
-                    if !p.eat_op(",") {
+                    states.push(self.ident("a flag name")?);
+                    if !self.eat_op(",") {
                         break;
                     }
                 }
             } else {
-                p.expr()?;
+                self.expr()?;
             }
-            Ok(())
-        })?;
+            self.end_stmt()?;
+        }
+        if matches!(self.peek().t, T::Dedent) {
+            self.next();
+        }
         Ok(EntityDecl {
             kind,
             name,
             states,
+            derives,
             span: start,
         })
     }
@@ -624,6 +671,7 @@ impl Parser {
             setup: None,
             main: None,
             timeline: vec![],
+            markers: vec![],
             rules: vec![],
             span: start,
         };
@@ -647,7 +695,10 @@ impl Parser {
                 }
                 "setup" => sc.setup = Some(self.block()?),
                 "main" => sc.main = Some(self.block()?),
-                "timeline" => sc.timeline = self.key_blocks(None)?,
+                "timeline" => {
+                    sc.timeline = self.key_blocks(None)?;
+                    sc.markers.append(&mut self.markers);
+                }
                 "when" | "whenever" => {
                     let kind = if kw == "when" {
                         RuleKind::When
@@ -797,10 +848,29 @@ impl Parser {
                 let body = self.block()?;
                 return Ok(mk(StmtKind::Repeat { count, body }, end));
             }
-            "together" if matches!(self.peek_at(1).t, T::Op(":")) => {
+            "together" | "race" if matches!(self.peek_at(1).t, T::Op(":")) => {
                 self.next();
                 let body = self.block()?;
-                return Ok(mk(StmtKind::Together(body), start));
+                if let Some(f) = body.iter().find(|s| matches!(s.kind, StmtKind::Finally(_))) {
+                    return Err(Diagnostic::new(
+                        "E-SYN-001",
+                        format!(
+                            "`finally:` cannot be inside `{kw}:`; put it in the block around it"
+                        ),
+                    )
+                    .at(f.span));
+                }
+                let kind = if kw == "race" {
+                    StmtKind::Race(body)
+                } else {
+                    StmtKind::Together(body)
+                };
+                return Ok(mk(kind, start));
+            }
+            "finally" if matches!(self.peek_at(1).t, T::Op(":")) => {
+                self.next();
+                let body = self.block()?;
+                return Ok(mk(StmtKind::Finally(body), start));
             }
             "start" => {
                 self.next();
@@ -1017,6 +1087,26 @@ impl Parser {
                     assigns.push(self.key_assign()?);
                 }
                 out.push(KeyBlock { at, assigns, span });
+                continue;
+            }
+            if opts.is_none() && self.at_ident("marker") {
+                self.next();
+                let name =
+                    match self.next().t {
+                        T::Str(s) => s,
+                        _ => return Err(Diagnostic::new(
+                            "E-SYN-001",
+                            "`marker` needs a quoted name, such as `marker \"dawn\" at 3.seconds`",
+                        )
+                        .at(span)),
+                    };
+                if !self.at_ident("at") {
+                    return self.err("expected `at TIME` after the marker name");
+                }
+                self.next();
+                let at = self.expr()?;
+                self.end_stmt()?;
+                self.markers.push((name, at, span));
                 continue;
             }
             let Some(o) = opts.as_mut() else {

@@ -103,6 +103,8 @@ pub enum Ease {
         bounces: f64,
         damping: f64,
     },
+    /// CSS-style `cubic_bezier(x1, y1, x2, y2)`.
+    Bezier([f64; 4]),
     Linear,
     In,
     Out,
@@ -133,6 +135,44 @@ impl Ease {
     pub fn apply(self, p: f64) -> f64 {
         match self {
             Ease::Linear => p,
+            Ease::Bezier([x1, y1, x2, y2]) => {
+                // find t with x(t) = p (Newton, then bisection), and return y(t)
+                let bez = |a: f64, b: f64, t: f64| {
+                    let u = 1.0 - t;
+                    3.0 * u * u * t * a + 3.0 * u * t * t * b + t * t * t
+                };
+                let dbez = |a: f64, b: f64, t: f64| {
+                    let u = 1.0 - t;
+                    3.0 * u * u * a + 6.0 * u * t * (b - a) + 3.0 * t * t * (1.0 - b)
+                };
+                if p <= 0.0 || p >= 1.0 {
+                    return p.clamp(0.0, 1.0);
+                }
+                let mut t = p;
+                for _ in 0..8 {
+                    let err = bez(x1, x2, t) - p;
+                    if err.abs() < 1e-12 {
+                        break;
+                    }
+                    let d = dbez(x1, x2, t);
+                    if d.abs() < 1e-9 {
+                        break;
+                    }
+                    t -= err / d;
+                }
+                if !(0.0..=1.0).contains(&t) || (bez(x1, x2, t) - p).abs() > 1e-7 {
+                    let (mut lo, mut hi) = (0.0, 1.0);
+                    for _ in 0..60 {
+                        t = 0.5 * (lo + hi);
+                        if bez(x1, x2, t) < p {
+                            lo = t;
+                        } else {
+                            hi = t;
+                        }
+                    }
+                }
+                bez(y1, y2, t)
+            }
             Ease::In => p * p,
             Ease::Out => 1.0 - (1.0 - p) * (1.0 - p),
             Ease::InOut => {

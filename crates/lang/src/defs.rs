@@ -325,6 +325,17 @@ impl Interp {
     pub(crate) fn do_return(&mut self, t: &mut Task, value: Option<Value>) {
         self.ret = value;
         while let Some(f) = t.frames.pop() {
+            if let Frame::Block { stmts, idx, .. } = &f {
+                if let Some(Stmt {
+                    kind: StmtKind::Finally(b),
+                    ..
+                }) = stmts.last()
+                {
+                    if *idx < stmts.len() {
+                        let _ = self.run_final(b, &t.vars, t.mode);
+                    }
+                }
+            }
             if let Frame::Call { saved } = f {
                 if let Some(v) = saved {
                     t.vars = v;

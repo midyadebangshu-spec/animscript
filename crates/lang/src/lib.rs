@@ -5,6 +5,7 @@ pub mod ast;
 pub mod check;
 pub mod color;
 pub mod defs;
+pub mod derive;
 pub mod fluid;
 pub mod imports;
 pub mod interp;

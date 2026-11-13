@@ -1774,6 +1774,47 @@ dog.trot_to(470, speed: 120)                                                  # 
 
 Worked example: `examples/gait.anim` (a biped and a dog over stairs and a ramp, with a knock-over).
 
+## 13j. Control flow added in round L1: `race`, `finally`, `derive`, `cubic_bezier`, markers
+
+```anim
+race:                                  # starts every child; resumes when the FIRST finishes, cancels the rest
+    runner.chase()
+    wait 3.seconds                     # a timeout
+
+action chase(self: Shape):
+    self.move_to((700, 150)) over 4.seconds ease cubic_bezier(0.25, 0.1, 0.25, 1)
+    finally:                           # runs when this block ends: normally, `return`, cancel, a lost race, scene end
+        light.fill = #aaaaaa
+
+prop bird:
+    states: afraid
+    derive scared_long when afraid.held_for(1.second)     # a flag recomputed every delta
+    derive startled    when afraid.since(0.25.seconds)
+    derive fresh       when afraid.rose                   # became true in this delta
+
+scene "s" for 8.seconds:
+    timeline:
+        marker "alarm" at 2.seconds                       # an event at scene time
+    when marker("alarm"):
+        bird becomes afraid
+```
+
+- **`race:`** cancels the losers like `cancel` does: an action keeps its last sampled value. A tie goes to the
+  child written first.
+- **`finally:`** is the last statement of a block (`main:`, a rule body, an action body, any nested block) and holds
+  zero-time statements only (`E-STM-003` if it waits or runs a timed action; `E-SYN-001` if it is not last or is
+  inside `together:`/`race:`). It sees the variables of the task at the moment it runs.
+- **`derive name when condition`** goes in an entity (`prop`, `character`). `self` is the entity and bare names are
+  its own flags; other entities are written `other.flag`. `becomes`/`clears` on it is `E-STA-001`, a cycle is
+  `E-STA-002`, a name that is already a flag is `E-NAM-002`. Predicates on a flag: `x.held_for(d)` (continuously true
+  for at least `d`), `x.since(d)` (became true at most `d` ago), `x.rose` (became true in this delta).
+- **`cubic_bezier(x1, y1, x2, y2)`** is a CSS-compatible easing; the x values must be in 0..1, the y values may
+  overshoot.
+- **`marker "name" at TIME`** (in `timeline:`) raises an event on that tick; rules use `when marker("name"):`.
+  Marker names are unique in a scene (`E-NAM-002`).
+
+Worked example: `examples/control.anim`.
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,
