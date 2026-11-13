@@ -208,6 +208,8 @@ pub struct Task {
     pub awaiters: Vec<u32>,
     /// Waiting in a `race:`: the first child to finish ends the wait.
     pub race: bool,
+    /// The last statement this task ran that is in the user's own file (not in an imported one).
+    pub site: Option<Span>,
 }
 impl Task {
     pub fn new(id: u32, block: Block, mut vars: Vars, mode: Mode, scope: bool) -> Task {
@@ -231,6 +233,7 @@ impl Task {
             rule: None,
             awaiters: vec![],
             race: false,
+            site: None,
         }
     }
     pub(crate) fn push_block(&mut self, b: Block, bind: Vec<(String, Value)>) {
@@ -268,6 +271,13 @@ pub struct Interp {
     pub trace: Vec<String>,
     /// Key sets registered by `keyframes` statements, waiting for the runtime to pick them up.
     pub pending_keysets: Vec<KeySetSpec>,
+    /// The statement being executed, and the statements behind `pending_keysets` / `pending_starts` (parallel).
+    pub cur_span: Option<Span>,
+    /// Lines of the program before imports were appended to it: spans beyond are in imported files.
+    pub own_lines: u32,
+    pub keyset_spans: Vec<Option<Span>>,
+    pub start_spans: Vec<Option<Span>>,
+    pub journal: crate::journal::Journal,
     /// `(handle, request)` pairs waiting for the runtime; handle 0 means "no handle" (a blocking modifier).
     pub pending_starts: Vec<(u32, StartReq)>,
     pub pending_cancels: Vec<u32>,
@@ -381,6 +391,11 @@ impl Interp {
             jit: JitMode::Auto,
             trace: vec![],
             pending_keysets: vec![],
+            cur_span: None,
+            own_lines: u32::MAX,
+            keyset_spans: vec![],
+            start_spans: vec![],
+            journal: Default::default(),
             pending_starts: vec![],
             pending_cancels: vec![],
             pending_locks: vec![],
@@ -510,6 +525,7 @@ impl Interp {
     /// Run a `finally:` body: zero-time statements only, with a copy of the task's variables.
     pub fn run_final(&mut self, body: &Block, vars: &Vars, mode: Mode) -> Res<()> {
         let mut t = Task::new(0, Rc::clone(body), vars.flatten(), mode, true);
+        t.site = self.cur_span;
         match self.step(&mut t) {
             Ok(Step::Done) => Ok(()),
             Ok(Step::Blocked(_)) => Err(Self::final_blocks()),
@@ -665,6 +681,11 @@ impl Interp {
 
     fn exec(&mut self, st: &Stmt, t: &mut Task) -> Res<Option<Req>> {
         let mode = t.mode;
+        // what a journal entry points at: this statement, or (inside imported code) the one that led here
+        if st.span.line <= self.own_lines {
+            t.site = Some(st.span);
+        }
+        self.cur_span = t.site;
         match &st.kind {
             StmtKind::Pass => {}
             StmtKind::Let(name, e) => {
@@ -706,6 +727,7 @@ impl Interp {
                 let is_mesh = sh.mesh.is_some();
                 self.shapes.insert(name.clone(), *sh);
                 self.shape_order.push(name.clone());
+                self.journal.decl(name, "shape", st.span);
                 self.register_paint(name);
                 if is_mesh {
                     self.ensure_camera3();
@@ -778,6 +800,7 @@ impl Interp {
                                 .help("write `... over 2.seconds`, or `let h = start ...` and later `cancel h`"));
                         };
                         self.pending_starts.push((0, StartReq::Mod(*m)));
+                        self.start_spans.push(self.cur_span);
                         return Ok(Some(Req::Wait(frames)));
                     }
                     Value::Fresh(_) => {
@@ -873,6 +896,7 @@ impl Interp {
                 self.next_handle += 1;
                 let h = self.next_handle;
                 self.pending_starts.push((h, req));
+                self.start_spans.push(self.cur_span);
                 if let Some(n) = name {
                     t.vars.define(n, Value::Handle(h));
                 }
@@ -925,6 +949,8 @@ impl Interp {
                     blend,
                     (opts.hold_before, opts.hold_after),
                 )?;
+                self.keyset_spans
+                    .extend(specs.iter().map(|_| self.cur_span));
                 self.pending_keysets.extend(specs);
                 return Ok(Some(Req::Wait(d)));
             }
@@ -1136,6 +1162,7 @@ impl Interp {
             }
             StmtKind::Note(s) => {
                 self.trace_line("NOTE", s);
+                self.journal.note(self.tick, s, self.cur_span);
             }
             StmtKind::Assert(e) => match self.eval(e, &t.vars, mode)? {
                 Value::Bool(true) => {}

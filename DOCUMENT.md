@@ -2340,6 +2340,32 @@ help: did you mean `over: 1.second`?
 | `anim fmt file.anim [--to script]` | Format; optionally print a linear scene as a screenplay |
 | `anim test dir/` | Run golden-trace tests |
 
+### The editor
+
+`anim-editor [file.anim]` opens a desktop editor with six panels that can be dragged, resized, tabbed and
+closed (`View` brings them back, `View > Reset layout` restores the default):
+
+```
+cargo run -p anim-editor --release -- examples/actions.anim
+```
+
+| Panel | What it shows | What clicking does |
+|---|---|---|
+| **Code** | The program, with syntax colours, line numbers and underlined errors and warnings | The program runs again 0.35 s after you stop typing |
+| **Preview** | The frame at the playhead, drawn by the same renderer as `anim render` | Click a shape to select it; double-click to see its declaration; wheel zooms, drag pans, `Fit` resets |
+| **Hierarchy** | Scenes, shapes (top-most first), entities and other declarations | Click selects (a scene also moves the playhead to its start); double-click shows the declaration |
+| **Inspector** | The selected thing at the playhead: transform, style, what is animating it now, geometry, physics | Links lead to the source line |
+| **Timeline** | Scenes, a ruler, and one row per animated shape: actions (blue), modifiers (green), keyframes (amber diamonds) | Drag on the ruler to scrub; click a bar to select its shape and see the statement that made it |
+| **Console** | A run summary, errors and warnings with their help, `note` output, and the runtime trace (`Trace`) | Click a line to go to its source line (and tick, for a note) |
+
+Keys: `Space` play or pause, `Left` / `Right` step one tick, `Home` / `End` first and last tick (when the
+code is not being typed in), `F5` or `Ctrl+Enter` run now, `Ctrl+S` save, `Ctrl+Shift+S` save as, `Ctrl+O`
+open, `Ctrl+N` new.
+
+While the code has an error the console shows it and the other panels keep showing the last version that
+ran, marked "last good run". An error raised while a scene is running keeps the frames made before it.
+The panels do not edit the program in this version: the code is the only place to change things.
+
 ---
 
 ## 15. A complete example: "The Departure"

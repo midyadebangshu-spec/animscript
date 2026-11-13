@@ -359,7 +359,12 @@ impl Interp {
         );
         self.ret = None;
         self.call_depth += 1;
-        let result = match self.step(&mut t) {
+        // a `fn` is part of the statement that called it: that statement stays the current one
+        let caller = self.cur_span;
+        t.site = caller;
+        let stepped = self.step(&mut t);
+        self.cur_span = caller;
+        let result = match stepped {
             Ok(Step::Done) => Ok(()),
             Ok(Step::Blocked(_)) => Err(Self::cannot_take_time(def)),
             Err(d) if d.code == "E-STM-001" => Err(Self::cannot_take_time(def)),

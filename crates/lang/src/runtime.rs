@@ -25,6 +25,8 @@ pub struct RunResult {
     pub hashes: Vec<u64>,
     pub diagnostics: Vec<Diagnostic>,
     pub trace: Vec<String>,
+    /// Scenes, timed items, notes and declarations with their source lines (see `journal.rs`).
+    pub journal: crate::journal::Journal,
 }
 
 struct ActComp {
@@ -139,6 +141,7 @@ struct PendingAct {
     /// The `start` handle of this action (0 = none) and tasks waiting for it.
     handle: u32,
     waiters: Vec<u32>,
+    span: Option<Span>,
 }
 #[derive(Default, Clone)]
 struct RuleSt {
@@ -196,11 +199,33 @@ pub fn run(src: &str, opts: &RunOptions) -> Res<RunResult> {
 
 /// Like `run`, with the folder that relative asset paths (images) are resolved from.
 pub fn run_in(src: &str, opts: &RunOptions, base: &std::path::Path) -> Res<RunResult> {
+    match run_partial_in(src, opts, base)? {
+        (_, Some(err)) => Err(err),
+        (r, None) => Ok(r),
+    }
+}
+
+/// Like `run`, but an error raised while a scene runs keeps the frames made before it: the result holds
+/// those and the error. A program that does not parse or build is still an `Err`.
+pub fn run_partial(src: &str, opts: &RunOptions) -> Res<(RunResult, Option<Diagnostic>)> {
+    run_partial_in(src, opts, std::path::Path::new("."))
+}
+
+pub fn run_partial_in(
+    src: &str,
+    opts: &RunOptions,
+    base: &std::path::Path,
+) -> Res<(RunResult, Option<Diagnostic>)> {
     let (src, opts, base) = (src.to_string(), opts.clone(), base.to_path_buf());
     crate::on_big_stack(move || run_in_here(&src, &opts, &base))
 }
 
-fn run_in_here(src: &str, opts: &RunOptions, base: &std::path::Path) -> Res<RunResult> {
+fn run_in_here(
+    src: &str,
+    opts: &RunOptions,
+    base: &std::path::Path,
+) -> Res<(RunResult, Option<Diagnostic>)> {
+    let own_lines = src.lines().count() as u32;
     let src = &crate::imports::expand_imports(src, base)?;
     let program = parse(src)?;
     if program.project.is_none() {
@@ -213,19 +238,58 @@ fn run_in_here(src: &str, opts: &RunOptions, base: &std::path::Path) -> Res<RunR
     let mut it = Interp::new(src, program)?;
     it.base_dir = base.to_path_buf();
     it.trace_on = opts.trace;
+    it.own_lines = own_lines;
     it.jit = opts.jit;
     it.build()?;
     let mut rt = Runtime::new(it);
-    let scenes: Vec<Rc<Scene>> = rt.it.program.scenes.clone();
-    for sc in &scenes {
-        rt.run_scene(sc)?;
+    let p = &rt.it.program;
+    let mut decls: Vec<(String, String, Span)> = vec![];
+    decls.extend(
+        p.entities
+            .iter()
+            .map(|e| (e.name.clone(), e.kind.clone(), e.span)),
+    );
+    for (kind, list) in [
+        ("emitter", &p.emitters),
+        ("fluid", &p.fluids),
+        ("field", &p.fields),
+    ] {
+        decls.extend(
+            list.iter()
+                .map(|e| (e.name.clone(), kind.to_string(), e.span)),
+        );
     }
-    Ok(RunResult {
-        snapshots: rt.snapshots,
-        hashes: rt.hashes,
-        diagnostics: rt.it.diagnostics,
-        trace: rt.it.trace,
-    })
+    decls.extend(
+        p.armatures
+            .iter()
+            .map(|a| (a.name.clone(), "armature".to_string(), a.span)),
+    );
+    for (name, kind, span) in decls {
+        rt.it.journal.decl(&name, &kind, span);
+    }
+    let scenes: Vec<Rc<Scene>> = rt.it.program.scenes.clone();
+    let mut err = None;
+    for sc in &scenes {
+        rt.it
+            .journal
+            .begin_scene(&sc.name, sc.span, rt.project_tick);
+        let r = rt.run_scene(sc);
+        rt.it.journal.end_scene(rt.project_tick);
+        if let Err(e) = r {
+            err = Some(e);
+            break;
+        }
+    }
+    Ok((
+        RunResult {
+            snapshots: rt.snapshots,
+            hashes: rt.hashes,
+            diagnostics: rt.it.diagnostics,
+            trace: rt.it.trace,
+            journal: rt.it.journal,
+        },
+        err,
+    ))
 }
 
 impl Runtime {
@@ -648,6 +712,17 @@ impl Runtime {
             "ACT+",
             &format!("T{} {} [{} -> {}]", p.task, p.req.label, tick, end),
         );
+        self.it.journal.item(
+            crate::journal::ItemKind::Action,
+            id,
+            tick,
+            &p.req.shape,
+            &p.req.label,
+            tick,
+            Some(end),
+            &[],
+            p.span,
+        );
         if p.handle != 0 {
             self.handles.insert(p.handle, HandleState::Act(id));
         }
@@ -673,11 +748,17 @@ impl Runtime {
     /// Pick up what the last step produced: key sets, started actions and modifiers, cancellations.
     fn take_keysets(&mut self) {
         let specs = std::mem::take(&mut self.it.pending_keysets);
+        let spans = std::mem::take(&mut self.it.keyset_spans);
         let base = self.it.tick;
-        for s in specs {
-            self.add_keyset(s, base);
+        for (i, s) in specs.into_iter().enumerate() {
+            self.add_keyset(s, base, spans.get(i).copied().flatten());
         }
-        for (h, req) in std::mem::take(&mut self.it.pending_starts) {
+        let spans = std::mem::take(&mut self.it.start_spans);
+        for (i, (h, req)) in std::mem::take(&mut self.it.pending_starts)
+            .into_iter()
+            .enumerate()
+        {
+            let span = spans.get(i).copied().flatten();
             match req {
                 StartReq::Act(a) => {
                     let p = PendingAct {
@@ -687,6 +768,7 @@ impl Runtime {
                         seq: self.seq,
                         handle: h,
                         waiters: vec![],
+                        span,
                     };
                     self.seq += 1;
                     if self.key_free(&p.req) {
@@ -698,13 +780,14 @@ impl Runtime {
                         self.pending.push(p);
                     }
                 }
-                StartReq::Mod(m) => self.start_mod(m, h),
+                StartReq::Mod(m) => self.start_mod(m, h, span),
                 StartReq::Task(c) => {
                     let id = self.new_task_id();
                     let vars = Vars {
                         scopes: vec![self.it.globals.clone(), c.scope.clone()],
                     };
                     let mut t = Task::new(id, Rc::clone(&c.def.body), vars, Mode::Run, false);
+                    t.site = span;
                     self.it.next_call += 1;
                     t.frames.insert(
                         0,
@@ -1059,6 +1142,7 @@ impl Runtime {
                 .collect();
             for a in acts {
                 if let Some(act) = self.acts.remove(&a) {
+                    self.it.journal.stop(a, self.it.tick);
                     self.commit(&act, true);
                     for w in &act.waiters {
                         if let Some(t) = self.tasks.get_mut(w) {
@@ -1084,11 +1168,22 @@ impl Runtime {
         }
     }
 
-    fn start_mod(&mut self, m: ModReq, handle: u32) {
+    fn start_mod(&mut self, m: ModReq, handle: u32, span: Option<Span>) {
         let tick = self.it.tick;
         let id = self.next_act;
         self.next_act += 1;
         let to = m.frames.map(|f| tick + f);
+        self.it.journal.item(
+            crate::journal::ItemKind::Modifier,
+            id,
+            tick,
+            &m.shape,
+            &m.label,
+            tick,
+            to,
+            &[],
+            span,
+        );
         self.it.trace_line(
             "MOD+",
             &format!(
@@ -1121,6 +1216,7 @@ impl Runtime {
             Some(HandleState::Link) => self.links.retain(|l| l.handle != h),
             Some(HandleState::Act(id)) => {
                 if let Some(a) = self.acts.remove(&id) {
+                    self.it.journal.stop(id, self.it.tick);
                     self.commit(&a, true);
                     for w in &a.waiters {
                         if let Some(t) = self.tasks.get_mut(w) {
@@ -1129,7 +1225,10 @@ impl Runtime {
                     }
                 }
             }
-            Some(HandleState::Mod(id)) => self.modsets.retain(|m| m.id != id),
+            Some(HandleState::Mod(id)) => {
+                self.it.journal.stop(id, self.it.tick);
+                self.modsets.retain(|m| m.id != id)
+            }
             Some(HandleState::Task(id)) => self.cancel_task(id),
             Some(HandleState::Queued) => {
                 let mut woken = vec![];
@@ -1151,7 +1250,7 @@ impl Runtime {
         }
     }
 
-    fn add_keyset(&mut self, s: KeySetSpec, base: i64) {
+    fn add_keyset(&mut self, s: KeySetSpec, base: i64, span: Option<Span>) {
         let shift = if s.absolute { 0 } else { base };
         let keys: Vec<(i64, f64, Ease)> =
             s.keys.iter().map(|(t, v, e)| (t + shift, *v, *e)).collect();
@@ -1160,6 +1259,18 @@ impl Runtime {
         let to = if s.hold_after { None } else { Some(last) };
         let id = self.next_act;
         self.next_act += 1;
+        let ticks: Vec<i64> = keys.iter().map(|k| k.0).collect();
+        self.it.journal.item(
+            crate::journal::ItemKind::Keys,
+            id,
+            self.it.tick,
+            &s.shape,
+            &format!("{}.keyframes", s.shape),
+            from,
+            to,
+            &ticks,
+            span,
+        );
         self.it.trace_line(
             "KEYS",
             &format!(
@@ -1210,8 +1321,9 @@ impl Runtime {
             [0, 0],
             (false, false),
         )?;
+        let span = sc.timeline.first().map(|k| k.span);
         for s in specs {
-            self.add_keyset(s, 0);
+            self.add_keyset(s, 0, span);
         }
         Ok(())
     }
@@ -1516,6 +1628,7 @@ impl Runtime {
                         seq: self.seq,
                         handle: 0,
                         waiters: vec![],
+                        span: self.it.cur_span,
                     };
                     self.seq += 1;
                     self.tasks.insert(id, t);
@@ -1569,11 +1682,12 @@ impl Runtime {
                     } else {
                         TaskState::BlockedKids
                     };
-                    let (vars, prio) = (t.vars.flatten(), t.priority);
+                    let (vars, prio, site) = (t.vars.flatten(), t.priority, t.site);
                     self.tasks.insert(id, t);
                     for b in blocks {
                         let cid = self.new_task_id();
                         let mut c = Task::new(cid, b, vars.clone(), Mode::Run, true);
+                        c.site = site;
                         c.parent = Some(id);
                         c.priority = prio;
                         self.tasks.insert(cid, c);

@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/lang", "crates/render", "crates/anim", "crates/physics", "crates/physics3", "crates/brush", "crates/math"]
+members = ["crates/core", "crates/lang", "crates/render", "crates/anim", "crates/physics", "crates/physics3", "crates/brush", "crates/math", "crates/editor"]
+# the editor pulls in a GUI stack: `cargo build` / `cargo test` leave it out (use `-p anim-editor`)
+default-members = ["crates/core", "crates/lang", "crates/render", "crates/anim", "crates/physics", "crates/physics3", "crates/brush", "crates/math"]
 
 [workspace.package]
 version = "0.1.0"
