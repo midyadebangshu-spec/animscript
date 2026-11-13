@@ -194,3 +194,20 @@ fn strokes_may_leave_the_canvas_and_empty_strokes_are_fine() {
     c.stroke(&mut b, &[]);
     c.stroke(&mut b, &line(5.0, 5.0, 5.0, 5.0, 1, 0.5));
 }
+
+#[test]
+fn a_stroke_starts_at_its_first_point_even_with_slow_tracking() {
+    // the ink brush smooths the pen position; without a clean start the line would slide in from the last position
+    let mut c = Canvas::new(200, 100);
+    let mut ink = Brush::bundled("ink").unwrap();
+    ink.set_radius(3.0);
+    c.stroke(&mut ink, &line(10.0, 10.0, 30.0, 10.0, 10, 0.8));
+    c.stroke(&mut ink, &line(150.0, 60.0, 190.0, 60.0, 20, 0.8));
+    let px = c.rgba8();
+    for x in [60u32, 90, 120] {
+        // on the straight path from the end of the first stroke to the start of the second: nothing
+        let y = 10 + (x - 30) * 50 / 120;
+        assert_eq!(alpha(&px, 200, x, y), 0, "a stray tail at ({x}, {y})");
+    }
+    assert!(alpha(&px, 200, 170, 60) > 100);
+}

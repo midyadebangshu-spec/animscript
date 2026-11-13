@@ -2115,6 +2115,39 @@ fn closed(points: &[P]) -> Shape {
     s
 }
 
+/// A path of cubic Bezier pieces (from `fit_curve`) as a shape: one vertex at each join and one cubic edge per piece,
+/// and a face if the path is `closed`. The shape's vertices are v1, v2, ... in path order.
+pub fn bezier_shape(segs: &[crate::fit::FitSeg], closed_path: bool) -> Shape {
+    let mut s = Shape::new("shape");
+    let n = segs.len() as u32;
+    for seg in segs {
+        s.new_vertex(seg.p0[0], seg.p0[1], None);
+    }
+    if !closed_path {
+        if let Some(last) = segs.last() {
+            s.new_vertex(last.p3[0], last.p3[1], None);
+        }
+    }
+    let mut lp = vec![];
+    for (i, seg) in segs.iter().enumerate() {
+        let a = i as u32 + 1;
+        let b = if closed_path { (a % n) + 1 } else { a + 1 };
+        let eid = s.new_edge(a, b, None);
+        let (c1, c2) = (
+            to_local(seg.p0, seg.p3, seg.c1),
+            to_local(seg.p0, seg.p3, seg.c2),
+        );
+        if let Some(e) = s.edges.get_mut(&eid) {
+            e.curve = Curve::Cubic(c1, c2);
+        }
+        lp.push((eid, 1i8));
+    }
+    if closed_path && !lp.is_empty() {
+        s.new_face(lp, None);
+    }
+    s
+}
+
 /// A square centred on `at`: v1..v4 counter-clockwise (on screen) from the top-left.
 pub fn square(size: f64, at: P) -> Shape {
     rectangle(size, size, at)

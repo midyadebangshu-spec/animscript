@@ -289,7 +289,9 @@ impl Canvas {
                     brush.raw, surf, p.x, p.y, pressure, p.xtilt, p.ytilt, dt, 1.0, 0.0, 0.0, 0,
                 );
             };
-            to(first, 0.0, 0.1);
+            // libmypaint smooths the cursor towards where it was before: a long first time step (above its 5 s
+            // limit) makes the stroke start exactly at its first point instead of sliding in from the old position
+            to(first, 0.0, 10.0);
             for p in points {
                 to(p, p.pressure.clamp(0.0, 1.0), p.dt.max(0.0));
             }

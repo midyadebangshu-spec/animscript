@@ -7,6 +7,7 @@ pub mod color;
 pub mod defs;
 pub mod derive;
 pub mod fluid;
+pub mod freehand;
 pub mod imports;
 pub mod interp;
 pub mod layers;

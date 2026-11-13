@@ -2391,6 +2391,7 @@ impl Interp {
                 };
                 Ok(Value::Bool(self.events.contains(&format!("marker:{n}"))))
             }
+            n if Interp::is_freehand_fn(n) => self.freehand_fn(n, args),
             "brush" => self.brush_builtin(args),
             "paint_layer" => self.paint_layer_builtin(args),
             "bounds" | "anchor" => {

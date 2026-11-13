@@ -1981,6 +1981,38 @@ art.fade_to(0.5) over 1.second                                               # a
 Worked example: `examples/painting.anim` (about 35 seconds to render 16 seconds of video, because every frame replays
 every stroke).
 
+## 13o. Freehand drawing: Bezier fitting and point lists
+
+Hand-drawn points (a tremor and all) become smooth cubic Bezier curves with Philip Schneider's curve-fitting
+algorithm, with corner detection so sharp turns stay sharp.
+
+```anim
+let rough = [(100, 100), (104, 96), (110, 99), ...]                 # a hand-drawn path, any number of points
+shape heart = freehand(rough, tolerance: 6, corner: 40.deg, closed: true)    # a vector shape of cubic edges
+heart.fill = #ff8fab
+
+let clean = smooth(rough, tolerance: 6, closed: true, spacing: 3)   # the fitted curve as points 3 px apart
+art.stroke(ink, clean) over 2.seconds                               # ... painted with a brush (13n)
+art.stroke(chalk, outline(heart, spacing: 3))                       # a stroke along any shape's outline
+art.stroke(pencil, points_along(heart.e2, spacing: 2))              # ... or along one edge
+art.stroke(pencil, jitter(resample(corners, 4), amount: 3, scale: 25, seed: "box"))   # a ruler-straight path, drawn by hand
+```
+
+- `freehand(points, tolerance: 2, corner: 40.deg, closed: false)` returns a new shape: one vertex at each join and
+  one cubic edge per fitted piece (and a face when `closed`). `tolerance` is the largest distance, in pixels, a given
+  point may be from the curve; pick about the size of the tremor (a larger value gives fewer, smoother pieces; a very
+  small one follows every wobble). Turns sharper than `corner` stay corners; gentler ones are smooth. Two or more
+  different points are needed (`E-FRE-001`). The result is an ordinary shape: fill, move, rotate, morph, animate.
+- `smooth(points, tolerance:, corner:, closed:, spacing: 4)` returns the fitted curve as a list of points, ready
+  for a brush stroke. `simplify(points, tolerance)` (Douglas-Peucker) drops points that do not matter,
+  `resample(points, spacing)` spaces points evenly along the path (the ends are kept), `path_length(points)`.
+- `points_along(edge, spacing:)` and `outline(shape, spacing:)` sample a curved edge or a shape's outline (its first
+  face's boundary, else its edges in order) in world coordinates, so any Bezier edge can be painted along.
+- `jitter(points, amount: 1.5, scale: 30, seed: "name")` moves each point by a smooth seeded wobble (the wobble changes
+  over `scale` px of path), for a hand-drawn look; the same seed gives the same wobble.
+
+Worked example: `examples/freehand.anim`.
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,

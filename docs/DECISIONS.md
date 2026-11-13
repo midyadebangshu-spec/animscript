@@ -977,6 +977,29 @@ judgement calls I expect you to want to look at.
     truncates a stroke to its progress along the path length (the last point interpolated), scales points and
     `radius_logarithmic` by the resolution, and draws the picture with bilinear filtering through scale/rotate/translate
     about the pivot, then the camera. Cost is proportional to the number of dabs per frame, with no caching yet.
-206. **Not yet.** Strokes along curved shape edges, fitting hand-drawn points to Bezier curves (B3), tilt input,
-    symmetry, and per-stroke blend modes beyond what the brush itself does.
+206. **Not yet.** Tilt input, symmetry, and per-stroke blend modes beyond what the brush itself does.
+207. **A stroke starts cleanly.** libmypaint filters the cursor towards its previous position (`slow_tracking`) before it
+    notices that a stroke has started, so a brush with tracking drew a tail sliding in from the last position (or the
+    origin). `Canvas::stroke` now gives the first, zero-pressure sample a time step above libmypaint's 5 s limit, which
+    makes it start exactly at the first point. A regression test covers it.
+208. **Curve fitting (B3).** `animscript_core::fit_curve(points, tolerance, corner_deg, closed)` is Schneider's algorithm:
+    chord-length parameters, least-squares control points for the end tangents, Newton-Raphson reparametrisation, and a
+    split at the worst point with a shared tangent. Changes from the textbook: repeated points are dropped; a closed
+    path starts at its first corner (or, if smooth, joins itself with one shared tangent); acceptance also checks the
+    *true* distance from every point to the curve (nearest sample refined by ternary search), not only the distance at
+    the sample parameters, so the tolerance holds; tangents are the sum of the vectors to the points within `2 *
+    tolerance` of path (not just the next point) and the split tangent likewise; control arms longer than the chord
+    are replaced by thirds. Everything is plain f64 arithmetic, so results are deterministic.
+209. **Corners and smoothing.** A corner is a point where the path turns by more than `corner` between points
+    `max(4 * tolerance, 4)` px away on each side; the sharpest of a group closer than that along the path is kept.
+    Before fitting, the path is smoothed with a triangular moving average (window 0.7, 0.4 or 0.2 times the
+    tolerance, the first that moves no point more than half the tolerance), and the distance moved is subtracted from
+    the tolerance, so the curve stays within `tolerance` of the points that were given. Noise much larger than the
+    tolerance still makes many small pieces: the tolerance should be about the size of the tremor.
+210. **Language functions.** `freehand` builds a shape with `bezier_shape` (v1.. in path order, cubic edges stored in the
+    chord frame as the shape model wants, a face when closed); `smooth` samples the fitted pieces and resamples them;
+    `simplify`, `resample`, `path_length` wrap the core helpers; `points_along` and `outline` sample edges (straight,
+    quadratic and cubic) densely and resample by arc length with the shape's current transform applied; `jitter` adds
+    seeded value noise (one stream per axis, advancing with path length / `scale`) so strokes of the same seed repeat.
+    Argument problems are `E-FRE-001`.
 
