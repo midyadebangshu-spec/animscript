@@ -433,3 +433,35 @@ fn the_majhe_majhe_example_is_the_published_violin_melody() {
         .iter()
         .all(|e| [60, 62, 63, 64, 65, 67, 69, 70, 71, 72, 74, 75].contains(&e.note)));
 }
+
+#[test]
+fn the_ode_to_joy_example_plays_beethovens_theme() {
+    let src = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/ode_to_joy.anim"
+    ))
+    .unwrap();
+    let r = run(&src, &RunOptions::default())
+        .unwrap_or_else(|d| panic!("{}", d.render(Some(&src), "ode")));
+    let score = &r.audio.scores["ode"].score;
+    let track = |name: &str| score.tracks.iter().find(|t| t.name == name).unwrap();
+    // E E F G G F E D C C D E E D D, the first phrase, in the violin (E4 = 64)
+    let first: Vec<u8> = track("violin_a")
+        .events
+        .iter()
+        .take(15)
+        .map(|e| e.note)
+        .collect();
+    assert_eq!(
+        first,
+        vec![64, 64, 65, 67, 67, 65, 64, 62, 60, 60, 62, 64, 64, 62, 62]
+    );
+    // the cello plays it an octave lower, the flute in the last pass an octave higher
+    assert_eq!(track("cello").events[0].note, 52);
+    assert_eq!(track("flute_b").events[0].note, 76);
+    // 16 bars of the theme, notes bar by bar: 4,4,4,3 | 4,4,4,3 | 4,5,5,3 | 4,4,4,3
+    assert_eq!(track("violin_a").events.len(), 62);
+    assert!(score.tracks.len() >= 14, "a small orchestra");
+    // the whole piece is 66 bars at 108 bpm
+    assert_eq!(score.length_ticks(), 66 * 3840);
+}
