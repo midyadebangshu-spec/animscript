@@ -5,18 +5,18 @@ import "petal_lib"
 
 param axis_x = 640
 param base_y = 500
-param height = 200
-param r_base = 95
-param lean = 95
-param bulge = 40
+param height = 115
+param r_base = 108
+param lean = 40
+param bulge = 30
 param flare = 38
 param spin = 0.09.turns
 param s_bend = 0
 param sway = 0
-param wave = 12
+param wave = 8
 param waves = 1
-param count = 10
-param half_w = 42
+param count = 8
+param half_w = 36
 
 shape petals_inner = petal_ring(axis_x, base_y, height, r_base, lean, bulge, flare, spin, s_bend, sway, wave, waves, half_w, -0.35, count, 0.turns)
 petals_inner.fill = #d8c2b4

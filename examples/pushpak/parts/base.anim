@@ -5,7 +5,7 @@ import "std/3d"
 
 param axis_x = 640
 param deck_y = 498
-param deck_r = 72
+param deck_r = 92
 
 shape deck = lathe(profile: [(0, 0), (deck_r, 0), (deck_r + 8, 5), (deck_r + 8, 12), (deck_r, 18), (0, 18)], segments: 64, at: (axis_x, deck_y, 0))
 deck.fill = #8a5a2a
