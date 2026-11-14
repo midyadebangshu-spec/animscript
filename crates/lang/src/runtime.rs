@@ -425,6 +425,7 @@ impl Runtime {
                 self.it.build_soft()?;
                 self.it.fill_fluids()?;
                 self.it.build_rigs()?;
+                self.it.build_rigs3()?;
                 self.register_timeline(sc)?;
                 if let Some(main) = &sc.main {
                     let id = self.new_task_id();
@@ -2104,6 +2105,45 @@ impl Runtime {
             }
             anim_poses = self.it.rig_solve(&bones, &iks);
         }
+        let mut anim_poses3 = BTreeMap::new();
+        if self.it.has_rigs3() {
+            let (bone_keys, ik_keys) = self.it.rig3_keys();
+            let mut bones = BTreeMap::new();
+            for key in bone_keys {
+                let mut get = |p: PropId| {
+                    let rest = self.rest_value(&key, p);
+                    by_prop
+                        .get_mut(&(key.clone(), p))
+                        .map_or(rest, |c| fold(rest, c))
+                };
+                let v = [
+                    get(PropId::RotX),
+                    get(PropId::RotY),
+                    get(PropId::Rot),
+                    get(PropId::PosX),
+                    get(PropId::PosY),
+                    get(PropId::PosZ),
+                ];
+                bones.insert(key, v);
+            }
+            let mut iks = BTreeMap::new();
+            for key in ik_keys {
+                let mut get = |p: PropId| {
+                    let rest = self.rest_value(&key, p);
+                    by_prop
+                        .get_mut(&(key.clone(), p))
+                        .map_or(rest, |c| fold(rest, c))
+                };
+                let v = [
+                    get(PropId::PosX),
+                    get(PropId::PosY),
+                    get(PropId::PosZ),
+                    get(PropId::Opacity),
+                ];
+                iks.insert(key, v);
+            }
+            anim_poses3 = self.it.rig3_solve(&bones, &iks);
+        }
         let mut physics = None;
         let mut soft_snap = None;
         let mut fluid_snap = None;
@@ -2260,7 +2300,9 @@ impl Runtime {
                 poses.insert(n.clone(), t);
             }
             self.it.soft3_prepare(tick, &poses);
+            self.it.ragdoll3_prepare(tick, 1.0 / fps, &anim_poses3);
             self.it.physics3_advance(tick);
+            self.it.ragdoll3_poses(&mut anim_poses3);
             soft3_out = self.it.soft3_collect();
             soft3_snap = self.it.soft3_snapshot();
             fluid3_snap = self.it.fluid3_snapshot();
@@ -2308,7 +2350,15 @@ impl Runtime {
             }
             rigs_snap = Some(out.snapshot);
         }
+        let mut rigs3_snap = None;
+        let mut rig3_verts = vec![];
+        if self.it.has_rigs3() {
+            let out = self.it.rig3_finish(&anim_poses3);
+            rig3_verts = out.verts;
+            rigs3_snap = Some(out.snapshot);
+        }
         let mut resolved = Resolved {
+            rigs3: rigs3_snap,
             physics,
             physics3,
             soft3: soft3_snap,
@@ -2409,6 +2459,9 @@ impl Runtime {
         for (n, m) in soft3_out {
             resolved.mverts.insert(n, m);
         }
+        for (n, m) in rig3_verts {
+            resolved.mverts.insert(n, m);
+        }
         self.apply_links(&mut resolved);
         resolved.particles = self.it.particles_tick(tick, &resolved.tf);
         self.it.live_tf = resolved.tf.clone();
@@ -2431,6 +2484,8 @@ impl Runtime {
         self.it.apply_staged()?; // what the `finally:` blocks changed
         self.it.live_tf.clear();
         self.it.rig_live.clear();
+        self.it.rig3_live.clear();
+        self.it.ik3_live.clear();
         self.it.ik_live.clear();
         self.it.end_soft();
         self.it.end_fluids();

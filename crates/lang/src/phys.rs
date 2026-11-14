@@ -142,6 +142,7 @@ pub struct Decls {
     pub soft: Vec<(bool, crate::soft::SoftDecl)>,
     pub binds: Vec<(bool, crate::rig::BindDecl)>,
     pub skins: Vec<(bool, crate::rig::SkinDecl)>,
+    pub skins3: Vec<(bool, crate::rig3::Skin3Decl)>,
     pub controllers: Vec<(bool, ControllerDecl)>,
 }
 
@@ -153,6 +154,7 @@ impl Decls {
         self.soft.retain(|b| !b.0);
         self.binds.retain(|b| !b.0);
         self.skins.retain(|b| !b.0);
+        self.skins3.retain(|b| !b.0);
         self.controllers.retain(|b| !b.0);
     }
     pub fn is_empty(&self) -> bool {
@@ -371,6 +373,7 @@ impl Interp {
                 }
                 if self.decls.binds.iter().any(|d| d.1.shape == sn)
                     || self.decls.skins.iter().any(|d| d.1.shape == sn)
+                    || self.decls.skins3.iter().any(|d| d.1.shape == sn)
                 {
                     return Err(Diagnostic::new("E-RIG-003", format!("`{sn}` is driven by a rig; a shape is driven by a rig or by physics, not both (yet)")));
                 }

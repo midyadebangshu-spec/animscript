@@ -21,6 +21,23 @@ pub enum JointKind {
     },
 }
 
+/// Limits of a ball joint: how far the child's axis may swing away from its rest direction relative
+/// to the parent, and how far it may twist about that axis (radians).
+#[derive(Clone, Copy, Debug)]
+pub struct ConeDef {
+    pub swing: f64,
+    pub twist: Option<(f64, f64)>,
+}
+
+/// A muscle on a joint: an angular spring (and damper) pulling the child towards a target orientation
+/// relative to the parent, with at most `max_torque` (N m).
+#[derive(Clone, Copy, Debug)]
+pub struct MuscleDef {
+    pub hertz: f64,
+    pub zeta: f64,
+    pub max_torque: f64,
+}
+
 #[derive(Clone, Debug)]
 pub struct JointDef {
     pub a: usize,
@@ -65,6 +82,13 @@ pub struct Joint {
     acc_hi: f64,
     acc_motor: f64,
     acc_dist: f64,
+    cone: Option<ConeDef>,
+    muscle: Option<MuscleDef>,
+    /// The orientation the muscle aims for: the child's, relative to the parent's.
+    target_rel: Quat,
+    acc_swing: f64,
+    acc_tlo: f64,
+    acc_thi: f64,
 }
 
 /// One scalar constraint: its velocity is `lin . (relative anchor velocity) + ang . (relative
@@ -184,6 +208,12 @@ impl Joint {
             acc_hi: 0.0,
             acc_motor: 0.0,
             acc_dist: 0.0,
+            cone: None,
+            muscle: None,
+            target_rel: ba.q.conj().mul(bb.q),
+            acc_swing: 0.0,
+            acc_tlo: 0.0,
+            acc_thi: 0.0,
         }
     }
 
@@ -197,6 +227,169 @@ impl Joint {
         let ua = a.q.rotate(self.axis_a);
         let (xa, xb) = (a.q.rotate(self.ref_a), b.q.rotate(self.ref_b));
         xa.cross(xb).dot(ua).atan2(xa.dot(xb))
+    }
+
+    pub fn set_cone(&mut self, cone: Option<ConeDef>) {
+        self.cone = cone;
+    }
+    pub fn set_muscle(&mut self, muscle: Option<MuscleDef>) {
+        self.muscle = muscle;
+    }
+    /// Aim the muscle at the child's orientation relative to the parent's.
+    pub fn set_muscle_target(&mut self, rel: Quat) {
+        self.target_rel = rel;
+    }
+    pub fn rest_relative(&self) -> Quat {
+        self.q_rel
+    }
+
+    fn ang_mass(bodies: &[Body], a: usize, b: usize, t: V3) -> f64 {
+        let k = t.dot(bodies[a].inv_i.mul_v(t)) + t.dot(bodies[b].inv_i.mul_v(t));
+        if k > 1e-300 {
+            1.0 / k
+        } else {
+            0.0
+        }
+    }
+
+    /// One angular row `n` (world axis) of the joint: bring the relative angular velocity about it
+    /// to `target`, keeping the accumulated impulse inside `[lo, hi]`.
+    #[allow(clippy::too_many_arguments)]
+    fn angular_row(
+        bodies: &mut [Body],
+        ia: usize,
+        ib: usize,
+        n: V3,
+        target: f64,
+        acc: &mut f64,
+        lo: f64,
+        hi: f64,
+    ) {
+        let wr = (bodies[ib].w - bodies[ia].w).dot(n);
+        let m = Self::ang_mass(bodies, ia, ib, n);
+        let lam = m * (target - wr);
+        let new = (*acc + lam).clamp(lo, hi);
+        let d = new - *acc;
+        *acc = new;
+        apply_ang(bodies, ia, -n * d);
+        apply_ang(bodies, ib, n * d);
+    }
+
+    fn solve_cone(&mut self, bodies: &mut [Body], h: f64) {
+        let Some(c) = self.cone else { return };
+        let beta = 0.2 / h;
+        let (ia, ib) = (self.a, self.b);
+        let ua = bodies[ia].q.rotate(self.axis_a);
+        let ub = bodies[ib].q.rotate(self.axis_b);
+        let theta = ua.dot(ub).clamp(-1.0, 1.0).acos();
+        if theta > c.swing + 1e-9 {
+            let n = ub.cross(ua);
+            let l = n.len();
+            if l > 1e-9 {
+                let n = n / l;
+                let mut acc = self.acc_swing;
+                Self::angular_row(
+                    bodies,
+                    ia,
+                    ib,
+                    n,
+                    beta * (theta - c.swing),
+                    &mut acc,
+                    0.0,
+                    f64::MAX,
+                );
+                self.acc_swing = acc;
+            }
+        } else {
+            self.acc_swing = 0.0;
+        }
+        if let Some((lo, hi)) = c.twist {
+            let u = (ua + ub).normalized();
+            if u != V3::ZERO {
+                let flat = |v: V3| (v - u * v.dot(u)).normalized();
+                let xa = flat(bodies[ia].q.rotate(self.ref_a));
+                let xb = flat(bodies[ib].q.rotate(self.ref_b));
+                if xa != V3::ZERO && xb != V3::ZERO {
+                    let ang = xa.cross(xb).dot(u).atan2(xa.dot(xb));
+                    if ang < lo {
+                        let mut acc = self.acc_tlo;
+                        Self::angular_row(
+                            bodies,
+                            ia,
+                            ib,
+                            u,
+                            -beta * (ang - lo),
+                            &mut acc,
+                            0.0,
+                            f64::MAX,
+                        );
+                        self.acc_tlo = acc;
+                    } else {
+                        self.acc_tlo = 0.0;
+                    }
+                    if ang > hi {
+                        let mut acc = self.acc_thi;
+                        Self::angular_row(
+                            bodies,
+                            ia,
+                            ib,
+                            u,
+                            -beta * (ang - hi),
+                            &mut acc,
+                            f64::MIN,
+                            0.0,
+                        );
+                        self.acc_thi = acc;
+                    } else {
+                        self.acc_thi = 0.0;
+                    }
+                }
+            }
+        }
+    }
+
+    /// A soft angular spring towards the target orientation, limited by the muscle's torque.
+    fn solve_muscle(&mut self, bodies: &mut [Body], h: f64) {
+        let Some(m) = self.muscle else { return };
+        let (ia, ib) = (self.a, self.b);
+        let target = bodies[ia].q.mul(self.target_rel);
+        let mut qd = target.mul(bodies[ib].q.conj());
+        if qd.w < 0.0 {
+            qd = Quat {
+                w: -qd.w,
+                x: -qd.x,
+                y: -qd.y,
+                z: -qd.z,
+            };
+        }
+        let s = (qd.x * qd.x + qd.y * qd.y + qd.z * qd.z).sqrt();
+        let phi = if s < 1e-12 {
+            V3::ZERO
+        } else {
+            v3(qd.x, qd.y, qd.z) / s * (2.0 * s.atan2(qd.w))
+        };
+        let k = bodies[ia].inv_i.add(&bodies[ib].inv_i);
+        let tr = (k.m[0][0] + k.m[1][1] + k.m[2][2]) / 3.0;
+        if tr <= 1e-300 {
+            return;
+        }
+        let inertia = 1.0 / tr;
+        let omega = std::f64::consts::TAU * m.hertz;
+        let d = 2.0 * inertia * m.zeta * omega;
+        let ks = inertia * omega * omega;
+        let gamma = 1.0 / (h * (d + h * ks));
+        let beta = h * ks * gamma;
+        let wr = bodies[ib].w - bodies[ia].w;
+        let residual = wr - phi * (beta / h);
+        let inv = k.add(&Mat3::diag(gamma, gamma, gamma)).inverse();
+        let mut lam = inv.mul_v(-residual);
+        let max = m.max_torque * h;
+        let l = lam.len();
+        if l > max {
+            lam *= max / l;
+        }
+        apply_ang(bodies, ia, -lam);
+        apply_ang(bodies, ib, lam);
     }
 
     pub fn prepare(&mut self, bodies: &mut [Body]) {
@@ -300,6 +493,9 @@ impl Joint {
             l += ua * (self.acc_lo + self.acc_hi + self.acc_motor);
         }
         self.rows = rows;
+        self.acc_swing = 0.0;
+        self.acc_tlo = 0.0;
+        self.acc_thi = 0.0;
         apply_lin(bodies, ia, ra, -p);
         apply_lin(bodies, ib, rb, p);
         apply_ang(bodies, ia, -l);
@@ -328,6 +524,12 @@ impl Joint {
                 self.solve_block(bodies);
                 if let JointKind::Hinge { limits, motor } = kind {
                     self.solve_hinge(bodies, h, 0.2 / h, limits, motor);
+                }
+                if self.cone.is_some() {
+                    self.solve_cone(bodies, h);
+                }
+                if self.muscle.is_some() {
+                    self.solve_muscle(bodies, h);
                 }
             }
         }

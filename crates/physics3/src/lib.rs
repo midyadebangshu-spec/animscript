@@ -12,6 +12,7 @@ mod hull;
 mod joint;
 mod math;
 mod par;
+mod rig;
 mod shape;
 mod soft;
 mod tet;
@@ -20,8 +21,9 @@ mod world;
 pub use collide::{collide, Manifold};
 pub use fluid::{Absorbed, Fluid3, FluidParams3, Foam3, Impact, Surface, SurfaceSample};
 pub use hull::{Edge, Face, Hull, MassProps};
-pub use joint::{Joint, JointDef, JointKind};
+pub use joint::{ConeDef, Joint, JointDef, JointKind, MuscleDef};
 pub use math::{v3, Mat3, Quat, V3};
+pub use rig::{arc, auto_weights3, skin_point3, slerp, BoneDef3, BonePose, Skeleton3};
 pub use shape::{MassData, Shape, WShape};
 pub use soft::{
     coupled_step3, is_closed, soft_step, Pin, Point, SoftBody3, SoftParams, SurfaceSpec,

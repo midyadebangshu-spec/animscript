@@ -230,6 +230,9 @@ impl Interp {
 
     /// `armature.ragdoll(strength: 0, push: (0, 0))` and `armature.animate()`.
     pub fn armature_method(&mut self, arm: &str, name: &str, args: Args, mode: Mode) -> Res<Value> {
+        if self.rigs3.contains_key(arm) {
+            return self.armature_method3(arm, name, args, mode);
+        }
         if self.rigs[arm].ragdoll.is_none() {
             return Err(rag_err(format!("armature `{arm}` has no `ragdoll:` line"))
                 .help("add `ragdoll: radius: 8` to the armature to give its bones bodies"));

@@ -121,6 +121,10 @@ impl Interp {
         let decls = self.program.armatures.clone();
         let vars = crate::interp::Vars::new(); // armatures come first, so no names are defined yet
         for d in &decls {
+            if Interp::armature_is_3d(&d.items) {
+                self.eval_armature3(d)?;
+                continue;
+            }
             if self.rigs.contains_key(&d.name) {
                 return Err(
                     e1(format!("there is already an armature named `{}`", d.name)).at(d.span),
@@ -453,6 +457,9 @@ impl Interp {
     }
 
     pub fn armature_member(&self, arm: &str, name: &str) -> Res<Value> {
+        if self.rigs3.contains_key(arm) {
+            return self.armature_member3(arm, name);
+        }
         let r = &self.rigs[arm];
         if r.bones.iter().any(|b| b == name) || r.ik.iter().any(|k| k.name == name) {
             return Ok(Value::Shape(format!("{arm}.{name}")));
@@ -471,6 +478,9 @@ impl Interp {
 
     /// `head`, `tip` (world px) and `angle` of a bone pseudo-shape: the last solved pose, or the rest pose.
     pub fn bone_attr(&self, key: &str, name: &str) -> Option<Value> {
+        if let Some(v) = self.bone3_attr(key, name) {
+            return Some(v);
+        }
         if matches!(name, "target" | "weight") {
             let (arm, k) = self.ik_of(key)?;
             let (t, w) = self
@@ -544,6 +554,9 @@ impl Interp {
         mode: Mode,
         span: Span,
     ) -> Res<Value> {
+        if self.rig3_wants(sn, name, &args) {
+            return self.rig3_method(sn, name, args, mode, span);
+        }
         match name {
             "reach" | "release" => {
                 let Some((arm, k)) = self.ik_of(sn) else {

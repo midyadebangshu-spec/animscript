@@ -75,6 +75,8 @@ pub struct Body {
     pub force: V3,
     pub torque: V3,
     pub mass: f64,
+    /// Mass properties as if dynamic, kept so a body can change kind.
+    dyn_props: (f64, f64, Mat3),
 }
 
 impl Body {
@@ -188,15 +190,22 @@ impl World {
     pub fn create_body(&mut self, def: &BodyDef) -> BodyId {
         let (mut inv_mass, mut inv_i) = (0.0, Mat3::ZERO);
         let mut mass = 0.0;
-        if def.kind == BodyKind::Dynamic {
+        let mut dyn_props = (0.0, 0.0, Mat3::ZERO);
+        {
             let md = def.shape.mass_data(def.density);
             if md.mass > 0.0 {
-                mass = md.mass;
-                inv_mass = 1.0 / md.mass;
-                if !def.fixed_rotation {
-                    inv_i = md.inertia.inverse();
-                }
+                let i = if def.fixed_rotation {
+                    Mat3::ZERO
+                } else {
+                    md.inertia.inverse()
+                };
+                dyn_props = (md.mass, 1.0 / md.mass, i);
             }
+        }
+        if def.kind == BodyKind::Dynamic {
+            mass = dyn_props.0;
+            inv_mass = dyn_props.1;
+            inv_i = dyn_props.2;
         }
         let mut b = Body {
             kind: def.kind,
@@ -219,6 +228,7 @@ impl World {
             force: V3::ZERO,
             torque: V3::ZERO,
             mass,
+            dyn_props,
         };
         b.refresh_inertia();
         self.bodies.push(b);
@@ -249,6 +259,18 @@ impl World {
     }
     pub fn joint_anchors(&self, id: JointId) -> (V3, V3) {
         self.joints[id].anchors(&self.bodies)
+    }
+    pub fn set_joint_cone(&mut self, id: JointId, cone: Option<crate::joint::ConeDef>) {
+        self.joints[id].set_cone(cone);
+    }
+    pub fn set_joint_muscle(&mut self, id: JointId, muscle: Option<crate::joint::MuscleDef>) {
+        self.joints[id].set_muscle(muscle);
+    }
+    pub fn set_joint_muscle_target(&mut self, id: JointId, rel: Quat) {
+        self.joints[id].set_muscle_target(rel);
+    }
+    pub fn joint_rest_relative(&self, id: JointId) -> Quat {
+        self.joints[id].rest_relative()
     }
     pub fn joint_angle(&self, id: JointId) -> f64 {
         self.joints[id].angle(&self.bodies)
@@ -291,6 +313,22 @@ impl World {
         let b = &mut self.bodies[id];
         b.force += force;
         b.torque += (point - b.p).cross(force);
+        self.wake(id);
+    }
+    /// Turn a body into a kinematic (or static) one, or back into a dynamic one with its own mass.
+    pub fn set_body_kind(&mut self, id: BodyId, kind: BodyKind) {
+        let b = &mut self.bodies[id];
+        b.kind = kind;
+        if kind == BodyKind::Dynamic {
+            (b.mass, b.inv_mass, b.inv_i_local) = b.dyn_props;
+        } else {
+            b.mass = 0.0;
+            b.inv_mass = 0.0;
+            b.inv_i_local = Mat3::ZERO;
+            b.v = V3::ZERO;
+            b.w = V3::ZERO;
+        }
+        b.refresh_inertia();
         self.wake(id);
     }
     pub fn set_transform(&mut self, id: BodyId, p: V3, q: Quat) {

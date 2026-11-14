@@ -618,7 +618,7 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View) {
 /// between their anchors. Drawn over the finished picture, without hiding.
 pub fn draw_physics3(pm: &mut Pixmap, snapshot: &Value, tf: Transform) {
     let (c, phys) = (&snapshot["camera3"], &snapshot["physics3"]);
-    if !c.is_object() || !phys.is_object() {
+    if !c.is_object() || !(phys.is_object() || snapshot["rigs3"].is_array()) {
         return;
     }
     let s = Screen {
@@ -679,6 +679,25 @@ pub fn draw_physics3(pm: &mut Pixmap, snapshot: &Value, tf: Transform) {
                 );
                 if let Some(path) = pb.finish() {
                     pm.stroke_path(&path, &blue, &line, ident, None);
+                }
+            }
+        }
+    }
+    // bones: green lines from head to tip with a ring at the head
+    let mut green = Paint::default();
+    green.set_color(Color::from_rgba8(0x20, 0xa0, 0x50, 255));
+    green.anti_alias = true;
+    for rig in snapshot["rigs3"].as_array().into_iter().flatten() {
+        for b in rig["bones"].as_array().into_iter().flatten() {
+            if let (Some((ax, ay)), Some((bx, by))) = (at(v3(&b["head"])), at(v3(&b["tip"]))) {
+                let mut pb = PathBuilder::new();
+                pb.move_to(ax, ay);
+                pb.line_to(bx, by);
+                if let Some(path) = pb.finish() {
+                    pm.stroke_path(&path, &green, &line, ident, None);
+                }
+                if let Some(dot) = PathBuilder::from_circle(ax, ay, 4.0) {
+                    pm.stroke_path(&dot, &green, &line, ident, None);
                 }
             }
         }

@@ -2336,6 +2336,30 @@ fluid splash:
 - **Errors:** `E-MSH-001` for a bad material argument, `sky` that is not two colours, or `glass`/`mirror` on a shape that is not a mesh; `E-FLD-001` for `field:` without `level:`, an unknown channel, or `ripple`, `reflect`, `refract` out of range. Worked example: `examples/harbour.anim`.
 - **Limits:** no caustics (light patterns on the floor), no total internal reflection, reflections do not see glass or water, and a field must be a grid field.
 
+## 13x. 3D skeletons, skinning and ragdolls (round R)
+
+An `armature` whose bones have a `dir:` is a 3D skeleton (everything of §11's 2D armatures that makes sense carries over: bones and IK handles are hidden pseudo-shapes `armature.bone`, so every action, keyframe, easing and `drive` works on them).
+
+```
+armature puppet:
+    ragdoll: radius: 12, density: 100, friction: 0.7
+    bone spine: at: (640, 384, 200), dir: (0, -1, 0), length: 120, swing: 35.deg, twist: (-25.deg, 25.deg)
+    bone upper_r: parent: spine, at: 1.0, dir: (1, 0, 0), length: 85, swing: 150.deg, twist: (-60.deg, 60.deg)
+    bone fore_r: parent: upper_r, length: 85, axis: (1, 0, 0), limits: (-150.deg, 0.deg)
+    ik hand_r: chain: [upper_r, fore_r], bend: (760, 384, 60)
+```
+
+- **Bones.** `at:` is a 3D point for the root and a fraction (0 to 1, default 1) along the parent for the others; `dir:` is the rest direction (a child inherits its parent's); `length:` is required; `radius:` sizes the ragdoll capsule. A bone is a **hinge** (`axis:` and `limits:`, a pair of angles about the world rest axis) or a **ball** (`swing:` is a cone half-angle about the rest direction, `twist:` a pair of angles about it); both at once is an error.
+- **Posing.** A bone's `rotation.x`, `.y`, `.z` (turns, applied y, then x, then z like a mesh's) rotate it about its own head relative to its rest pose, in the frame its parent carries. The root bone's `position` (x, y, z) offsets the whole skeleton. Rotation beyond the limits is clamped with `W-RIG-001`.
+- **IK.** `hand.reach((x, y, z), over:, ease:)` and `hand.release()`; the handle's position is the target relative to the rest tip and its opacity the weight. A two-bone chain is solved exactly (the elbow lies in the plane through the pole point `bend:`; with a hinged lower bone the upper bone is twisted so the hinge stands across the bend plane), longer chains with FABRIK. A target out of reach straightens the chain towards it.
+- **Meshes.** `mesh.bind(armature.bone)` fixes a mesh to a bone, `mesh.skin(armature, blend: 20, bones: [...])` blends it over bones by distance (`exp(-d / blend)`, normalised, linear blend skinning), `mesh.set_weight(where: p -> p.y < 300, bone: armature.bone, weight: 1)` paints. Vertices are skinned from the rest pose; the mesh's own transform is baked into its vertices when the scene starts. A mesh is rigid, soft or rig-driven, never two (`E-RIG-007`). `bone.head`, `bone.tip`, `hand.target`, `hand.weight` read the solved pose.
+- **Ragdolls.** With a `ragdoll:` line every bone gets a capsule body in the 3D world (ball joints with the cone and twist limits, hinges with theirs). Bones start *animated*: kinematic bodies that follow the pose and can push other bodies. `armature.ragdoll(strength: 0, push: (vx, vy, vz))` makes them dynamic; above zero every joint has a muscle (a spring on the joint's orientation, torque limited to `strength` times what holds the limb against gravity) and every bone is pulled towards its animated placement (speed capped at 3 m/s). `armature.animate()` hands them back. While physical, skinned meshes, `bone.head` and the snapshot follow the bodies; `armature.ragdolled` reads the state. Muscles at `strength` 1 can stretch joints by a few centimetres; use 0.7 or less for stiffness without strain.
+- **Debug.** `--debug-physics` draws bones as green lines with a ring at the head. The snapshot has `rigs3` (per armature the bones' head, tip and orientation quaternion, and the ik targets).
+- **Errors.** `E-RIG-005` bad bone, `E-RIG-006` bad ik line, `E-RIG-007` bind/skin/weight on something that is not a free mesh, `E-RIG-008` ragdoll misuse (no `ragdoll:` line, not in a running scene, bad `strength` or `push`).
+- **Limits.** No IK-planted walking gait for 3D (the 2D `gait` has no 3D counterpart yet), no blend shapes, IK ignores a ball joint's swing cone (the limit clamps afterwards), mesh import is not supported.
+
+Example: `examples/puppet3d.anim` (waving, knocked over by a ball, limp, standing up again as an active ragdoll).
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,

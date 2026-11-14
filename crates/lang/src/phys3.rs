@@ -146,6 +146,7 @@ pub struct Physics3 {
     touching: BTreeSet<(usize, usize)>,
     began: BTreeSet<(usize, usize)>,
     floats: Vec<FloatRt>,
+    pub(crate) rag: BTreeMap<String, crate::ragdoll3::Rag3>,
 }
 
 /// What a tick produced: for every dynamic body the shape position (x, y, z in pixels) and the
@@ -198,6 +199,7 @@ impl Physics3 {
             touching: BTreeSet::new(),
             began: BTreeSet::new(),
             floats: vec![],
+            rag: BTreeMap::new(),
         }
     }
 }
@@ -340,6 +342,9 @@ impl Interp {
                     ));
                 }
                 let scene = mode == Mode::Setup;
+                if self.decls.skins3.iter().any(|d| d.1.shape == sn) {
+                    return Err(Diagnostic::new("E-RIG-007", format!("`{sn}` is driven by a rig; a mesh is rigid, soft or rig-driven, not two of them")));
+                }
                 self.decls3.bodies.push((scene, decl));
                 Ok(Value::None)
             }
@@ -690,7 +695,7 @@ impl Interp {
     }
 
     pub fn build_physics3(&mut self) -> Res<()> {
-        if self.decls3.is_empty() {
+        if self.decls3.is_empty() && !self.has_ragdolls3() {
             self.phys3 = None;
             return Ok(());
         }
@@ -709,6 +714,7 @@ impl Interp {
             touching: BTreeSet::new(),
             began: BTreeSet::new(),
             floats: vec![],
+            rag: BTreeMap::new(),
         };
         let decls: Vec<Body3Decl> = self.decls3.bodies.iter().map(|b| b.1.clone()).collect();
         for d in &decls {
@@ -935,6 +941,7 @@ impl Interp {
             }
             world.create_joint(&def);
         }
+        self.build_ragdolls3(&mut world, &mut ph);
         let ops: Vec<InitOp3> = self.decls3.ops.iter().map(|o| o.1.clone()).collect();
         for op in &ops {
             match op {

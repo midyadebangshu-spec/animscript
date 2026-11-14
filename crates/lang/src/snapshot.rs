@@ -50,6 +50,8 @@ pub struct Resolved {
     pub fluids: Option<J>,
     /// Armatures: every bone's head, tip and angle, and the ik targets, when any are declared.
     pub rigs: Option<J>,
+    /// 3D armatures: bone heads, tips and orientations.
+    pub rigs3: Option<J>,
 }
 
 /// The complete description of one tick. Vertex positions, curve handles and styles are fully resolved
@@ -180,6 +182,9 @@ pub fn build_snapshot(
     }
     if let Some(p) = &resolved.soft {
         snap["soft"] = p.clone();
+    }
+    if let Some(p) = &resolved.rigs3 {
+        snap["rigs3"] = p.clone();
     }
     if let Some(p) = &resolved.rigs {
         snap["rigs"] = p.clone();

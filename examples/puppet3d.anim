@@ -1,0 +1,136 @@
+project "Puppet":
+    anim_version: "0.1"
+    canvas: 1280x720
+    fps: 24
+    background: #e9dcc6
+
+import "std/3d"
+
+# 3D armatures and ragdolls: a stuffed puppet is a skeleton of bones (`dir:` makes an armature 3D) with hinged
+# elbows and knees and ball-jointed shoulders and hips. Its limbs are lathed tubes skinned over two bones each, so
+# they bend smoothly; head, torso and feet are bound rigidly. It waves (an IK hand reaching for points in space),
+# a ball knocks it over (`ragdoll()` hands the bones to physics, which uses the joint limits), it lies limp, then
+# stands up as an *active* ragdoll: muscles pull each joint back towards the animated pose.
+world:
+    gravity: (0, 9.8, 0)
+    scale: 100
+    substeps: 4
+
+stage3(fov: 40, light: (-0.6, 0.8, 0.5), ambient: 0.4, bands: 4, crease: 38.deg, smooth: 60.deg)
+
+armature puppet:
+    ragdoll: radius: 12, density: 100, friction: 0.7
+    bone spine: at: (640, 384, 200), dir: (0, -1, 0), length: 120, swing: 35.deg, twist: (-25.deg, 25.deg)
+    bone neck: parent: spine, dir: (0, -1, 0), length: 30, swing: 40.deg, twist: (-40.deg, 40.deg)
+    bone head: parent: neck, dir: (0, -1, 0), length: 70, swing: 40.deg, twist: (-40.deg, 40.deg), radius: 30
+    bone sh_l: parent: spine, at: 1.0, dir: (-1, 0, 0), length: 55, swing: 20.deg, twist: (-10.deg, 10.deg), radius: 10
+    bone sh_r: parent: spine, at: 1.0, dir: (1, 0, 0), length: 55, swing: 20.deg, twist: (-10.deg, 10.deg), radius: 10
+    bone upper_l: parent: sh_l, dir: (0, 1, 0), length: 85, swing: 150.deg, twist: (-60.deg, 60.deg), radius: 11
+    bone fore_l: parent: upper_l, length: 85, axis: (1, 0, 0), limits: (-150.deg, 0.deg), radius: 10
+    bone upper_r: parent: sh_r, dir: (0, 1, 0), length: 85, swing: 150.deg, twist: (-60.deg, 60.deg), radius: 11
+    bone fore_r: parent: upper_r, length: 85, axis: (1, 0, 0), limits: (-150.deg, 0.deg), radius: 10
+    bone hip_l: parent: spine, at: 0.0, dir: (-1, 0, 0), length: 28, swing: 15.deg, twist: (-10.deg, 10.deg), radius: 10
+    bone hip_r: parent: spine, at: 0.0, dir: (1, 0, 0), length: 28, swing: 15.deg, twist: (-10.deg, 10.deg), radius: 10
+    bone thigh_l: parent: hip_l, dir: (0, 1, 0), length: 100, swing: 100.deg, twist: (-35.deg, 35.deg), radius: 14
+    bone shin_l: parent: thigh_l, length: 100, axis: (1, 0, 0), limits: (0.deg, 150.deg), radius: 12
+    bone thigh_r: parent: hip_r, dir: (0, 1, 0), length: 100, swing: 100.deg, twist: (-35.deg, 35.deg), radius: 14
+    bone shin_r: parent: thigh_r, length: 100, axis: (1, 0, 0), limits: (0.deg, 150.deg), radius: 12
+    ik hand_r: chain: [upper_r, fore_r], bend: (760, 384, 60)
+    ik hand_l: chain: [upper_l, fore_l], bend: (520, 384, 60)
+
+# ---- the set
+shape sky = rectangle(width: 1500, height: 520, at: (640, 160))
+sky.fill = #b9d8e0
+sky.stroke_width = 0
+sky.z = -60
+shape floor = cube(width: 2600, height: 60, depth: 1800, at: (640, 630, 300))
+floor.fill = #c9ab7a
+floor.stroke = #3a3020
+floor.stroke_width = 3
+floor.body(kind: static, friction: 0.8)
+
+# ---- the puppet: parts, then bind or skin each to the bones
+shape torso = lathe(profile: [(0, 0), (34, 0), (40, 40), (38, 80), (30, 120), (0, 120)], segments: 24, at: (640, 324, 200))
+torso.fill = #d9534f
+torso.stroke = #3a1a18
+torso.stroke_width = 3
+torso.bind(puppet.spine)
+shape head = sphere(radius: 34, segments: 20, rings: 12, at: (640, 199, 200))
+head.fill = #f2c9a0
+head.stroke = #4a3320
+head.stroke_width = 3
+head.bind(puppet.head)
+shape cap = cone(radius: 36, height: 34, segments: 20, at: (640, 152, 200))
+cap.fill = #3d7fa3
+cap.stroke = #17313f
+cap.stroke_width = 3
+cap.bind(puppet.head)
+shape arm_l = lathe(profile: [(0, 0), (12, 0), (12, 42.5), (12, 85.0), (12, 127.5), (12, 170), (0, 170)], segments: 16, at: (585, 349.0, 200))
+arm_l.fill = #f2c9a0
+arm_l.stroke = #2a2218
+arm_l.stroke_width = 3
+arm_l.skin(puppet, blend: 16, bones: [puppet.upper_l, puppet.fore_l])
+shape arm_r = lathe(profile: [(0, 0), (12, 0), (12, 42.5), (12, 85.0), (12, 127.5), (12, 170), (0, 170)], segments: 16, at: (695, 349.0, 200))
+arm_r.fill = #f2c9a0
+arm_r.stroke = #2a2218
+arm_r.stroke_width = 3
+arm_r.skin(puppet, blend: 16, bones: [puppet.upper_r, puppet.fore_r])
+shape leg_l = lathe(profile: [(0, 0), (15, 0), (15, 50.0), (15, 100.0), (15, 150.0), (15, 200), (0, 200)], segments: 16, at: (612, 484.0, 200))
+leg_l.fill = #3d5a80
+leg_l.stroke = #2a2218
+leg_l.stroke_width = 3
+leg_l.skin(puppet, blend: 16, bones: [puppet.thigh_l, puppet.shin_l])
+shape leg_r = lathe(profile: [(0, 0), (15, 0), (15, 50.0), (15, 100.0), (15, 150.0), (15, 200), (0, 200)], segments: 16, at: (668, 484.0, 200))
+leg_r.fill = #3d5a80
+leg_r.stroke = #2a2218
+leg_r.stroke_width = 3
+leg_r.skin(puppet, blend: 16, bones: [puppet.thigh_r, puppet.shin_r])
+shape foot_l = cube(width: 30, height: 14, depth: 52, at: (612, 577, 178))
+foot_l.fill = #2b2b2b
+foot_l.stroke = #000000
+foot_l.stroke_width = 2
+foot_l.bind(puppet.shin_l)
+shape foot_r = cube(width: 30, height: 14, depth: 52, at: (668, 577, 178))
+foot_r.fill = #2b2b2b
+foot_r.stroke = #000000
+foot_r.stroke_width = 2
+foot_r.bind(puppet.shin_r)
+shape hand_l = sphere(radius: 15, segments: 12, rings: 8, at: (585, 446, 200))
+hand_l.fill = #f2c9a0
+hand_l.stroke = #4a3320
+hand_l.stroke_width = 3
+hand_l.bind(puppet.fore_l)
+shape hand_r = sphere(radius: 15, segments: 12, rings: 8, at: (695, 446, 200))
+hand_r.fill = #f2c9a0
+hand_r.stroke = #4a3320
+hand_r.stroke_width = 3
+hand_r.bind(puppet.fore_r)
+
+# the ball that knocks it over
+shape ball = sphere(radius: 46, segments: 18, rings: 11, at: (1500, 552, 200))
+ball.fill = #e07a3f
+ball.stroke = #5a2a0c
+ball.stroke_width = 3
+ball.body(density: 80, friction: 0.5, restitution: 0.2)
+
+scene "Puppet" for 14.seconds:
+    main:
+        start camera3.orbit(turns: 0.04, over: 14.seconds)
+        start camera3.crane(height: 70, pitch: 0.02, over: 14.seconds)
+        # a nod, then a wave: the hand reaches for points in space, the elbow bends towards its `bend:` point
+        puppet.head.rotate_to(8.deg, over: 0.4.seconds)
+        puppet.hand_r.reach((790, 234, 150), over: 0.8.seconds, ease: ease_in_out)
+        for i in 0..3:
+            puppet.hand_r.reach((830, 219, 150), over: 0.3.seconds, ease: ease_in_out)
+            puppet.hand_r.reach((760, 224, 150), over: 0.3.seconds, ease: ease_in_out)
+        puppet.hand_r.release(over: 0.6.seconds)
+        # the ball rolls in from the right
+        ball.set_velocity((-900, 0, 0))
+        wait 0.8.seconds
+        puppet.ragdoll(push: (-60, 0, 0))
+        wait 2.5.seconds
+        # stands up: muscles pull every joint back towards the standing pose
+        puppet.ragdoll(strength: 0.7)
+        wait 5.seconds
+        puppet.animate()
+        wait 5.seconds

@@ -322,6 +322,10 @@ pub struct Interp {
     pub transition: Option<crate::snapshot::Transition>,
     /// Last solved bone poses `(head, tip, angle)` keyed `armature.bone`.
     pub rig_live: BTreeMap<String, (P, P, f64)>,
+    pub rigs3: BTreeMap<String, crate::rig3::Rig3Def>,
+    pub rig3_sim: Option<crate::rig3::Rig3Sim>,
+    pub rig3_live: BTreeMap<String, ([f64; 3], [f64; 3])>,
+    pub ik3_live: BTreeMap<String, ([f64; 3], f64)>,
     pub derived: Vec<crate::derive::DerivedFlag>,
     pub flag_hist: BTreeMap<(String, String), crate::derive::FlagHist>,
     /// Last solved IK handles `(target, weight)` keyed `armature.handle`.
@@ -432,6 +436,10 @@ impl Interp {
             shot_name: None,
             transition: None,
             rig_live: BTreeMap::new(),
+            rigs3: BTreeMap::new(),
+            rig3_sim: None,
+            rig3_live: BTreeMap::new(),
+            ik3_live: BTreeMap::new(),
             derived: vec![],
             flag_hist: BTreeMap::new(),
             ik_live: BTreeMap::new(),
@@ -1846,7 +1854,7 @@ impl Interp {
         if self.fluid_cfg.contains_key(n) {
             return Ok(Value::Fluid(n.to_string()));
         }
-        if self.rigs.contains_key(n) {
+        if self.rigs.contains_key(n) || self.rigs3.contains_key(n) {
             return Ok(Value::Armature(n.to_string()));
         }
         if let Some(e) = Ease::from_name(n) {

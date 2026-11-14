@@ -159,7 +159,12 @@ impl Interp {
     }
 
     /// The vertices of a mesh shape (world pixels now) that satisfy a test.
-    fn select_vertices(&mut self, sn: &str, test: &Value, mode: Mode) -> Res<Vec<usize>> {
+    pub(crate) fn select_vertices(
+        &mut self,
+        sn: &str,
+        test: &Value,
+        mode: Mode,
+    ) -> Res<Vec<usize>> {
         let Value::Lambda(l) = test else {
             return Err(err("the test must be a function like `p -> p.y < 120`"));
         };
@@ -315,6 +320,9 @@ impl Interp {
                 }
                 if self.decls.bodies.iter().any(|d| d.1.shape == sn) {
                     return Err(err("a 2D body cannot be soft here"));
+                }
+                if self.decls.skins3.iter().any(|d| d.1.shape == sn) {
+                    return Err(Diagnostic::new("E-RIG-007", format!("`{sn}` is driven by a rig; a mesh is rigid, soft or rig-driven, not two of them")));
                 }
                 self.decls3.soft.push((mode == Mode::Setup, decl));
                 Ok(Value::None)
