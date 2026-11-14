@@ -275,7 +275,7 @@ impl Interp {
                     args,
                     &[
                         "spine", "width", "twist", "cup", "across", "facing", "around", "about",
-                        "phase", "tilt",
+                        "phase", "tilt", "spin",
                     ],
                     &["spine", "width"],
                 )?;
@@ -339,26 +339,41 @@ impl Interp {
                     }
                 };
                 let tilt = angle("tilt")?;
+                let spin = angle("spin")?;
                 let phase = angle("phase")?;
-                if m.contains_key("around") {
-                    let k = self.count(&m, "around", 1, 1)?;
-                    let about = self.point3(&m, "about")?.unwrap_or([0.0; 3]);
-                    if tilt == 0.0 {
-                        mesh = mesh.around_y(k, about[0], about[2], phase);
-                    } else {
-                        // each copy is turned about the vertical axis, then leaned about the z axis through its own base
-                        let parts: Vec<Mesh> = (0..k)
-                            .map(|i| {
-                                let turns = i as f64 / k as f64 + phase;
-                                let base = Mesh::turn_point_y(spine[0], about[0], about[2], turns);
-                                mesh.around_y(1, about[0], about[2], turns)
-                                    .tilt_z(tilt, base)
-                            })
-                            .collect();
-                        mesh = Mesh::join(&parts);
+                let k = if m.contains_key("around") {
+                    self.count(&m, "around", 1, 1)?
+                } else {
+                    1
+                };
+                let about = self.point3(&m, "about")?.unwrap_or([0.0; 3]);
+                if k == 1 && !m.contains_key("around") {
+                    if spin != 0.0 {
+                        mesh = mesh.around_y(1, spine[0][0], spine[0][2], spin);
                     }
-                } else if tilt != 0.0 {
-                    mesh = mesh.tilt_z(tilt, spine[0]);
+                    if tilt != 0.0 {
+                        mesh = mesh.tilt_z(tilt, spine[0]);
+                    }
+                } else if tilt == 0.0 && spin == 0.0 {
+                    mesh = mesh.around_y(k, about[0], about[2], phase);
+                } else {
+                    // each copy goes round the vertical axis, then turns about its own vertical axis (`spin`) and
+                    // leans about the z axis through its own base (`tilt`)
+                    let parts: Vec<Mesh> = (0..k)
+                        .map(|i| {
+                            let turns = i as f64 / k as f64 + phase;
+                            let base = Mesh::turn_point_y(spine[0], about[0], about[2], turns);
+                            let mut c = mesh.around_y(1, about[0], about[2], turns);
+                            if spin != 0.0 {
+                                c = c.around_y(1, base[0], base[2], spin);
+                            }
+                            if tilt != 0.0 {
+                                c = c.tilt_z(tilt, base);
+                            }
+                            c
+                        })
+                        .collect();
+                    mesh = Mesh::join(&parts);
                 }
                 // the points are scene points: the mesh stays where they are
                 let (lo, hi) = mesh.bbox();

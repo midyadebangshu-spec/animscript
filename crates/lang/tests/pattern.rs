@@ -153,3 +153,29 @@ fn each_petal_of_a_ring_can_lean_about_the_z_axis_through_its_own_base() {
     assert!((ys("plain").1 - ys("plain").0 - 100.0).abs() < 1e-6);
     assert!(ys("ring").1 - ys("ring").0 < 21.0, "{:?}", ys("ring"));
 }
+
+#[test]
+fn spin_turns_each_petal_about_its_own_vertical_axis() {
+    // a petal standing at x = 100 whose ribbon runs along z (facing +x); a quarter turn about its own axis lays it along x
+    let r = run("shape flat = sheet(spine: [(100, 300, 0), (100, 200, 0)], width: [10, 10], facing: (1, 0, 0))\nshape turned = sheet(spine: [(100, 300, 0), (100, 200, 0)], width: [10, 10], facing: (1, 0, 0), spin: 0.25.turns)\nshape ring = sheet(spine: [(100, 300, 0), (100, 200, 0)], width: [10, 10], facing: (1, 0, 0), around: 4, about: (0, 0), spin: 0.25.turns)\n").ok().unwrap();
+    let ext = |name: &str, k: usize| -> f64 {
+        let sh = r.snapshots[0]["shapes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == name)
+            .unwrap();
+        let v: Vec<f64> = sh["mesh"]["verts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v[k].as_f64().unwrap())
+            .collect();
+        v.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
+            - v.iter().cloned().fold(f64::INFINITY, f64::min)
+    };
+    assert!(ext("flat", 2) > 19.0 && ext("flat", 0) < 1.0);
+    assert!(ext("turned", 0) > 19.0 && ext("turned", 2) < 1.0);
+    // in a ring, the petal at the ring's 0 degrees is turned the same way, and the whole ring still spans 4 petals
+    assert!(ext("ring", 0) > 150.0);
+}
