@@ -394,6 +394,7 @@ impl Parser {
             soft_iterations: None,
             fluid_substeps: None,
             fluid_iterations: None,
+            fluid_threads: None,
             span: start,
         };
         self.attrs(|p, key, span| {
@@ -405,13 +406,14 @@ impl Parser {
                 "soft_iterations" => w.soft_iterations = Some(p.expr()?),
                 "fluid_substeps" => w.fluid_substeps = Some(p.expr()?),
                 "fluid_iterations" => w.fluid_iterations = Some(p.expr()?),
+                "fluid_threads" => w.fluid_threads = Some(p.expr()?),
                 _ => {
                     return Err(Diagnostic::new(
                         "E-SYN-001",
                         format!("`world` has no setting `{key}`"),
                     )
                     .at(span)
-                    .help("settings: gravity, scale, substeps, soft_substeps, soft_iterations, fluid_substeps, fluid_iterations"))
+                    .help("settings: gravity, scale, substeps, soft_substeps, soft_iterations, fluid_substeps, fluid_iterations, fluid_threads"))
                 }
             }
             Ok(())

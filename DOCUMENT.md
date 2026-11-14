@@ -2273,6 +2273,41 @@ flag.pin_where(p -> p.z < 190)                                      # hold the v
 - **Rules:** a shape is rigid or soft (`E-PHY-003` otherwise). `E-PHY-009`: bad `soft` arguments, `solid` or `pressure` on an open mesh, a solid mesh that cannot be filled or needs too many nodes, `pin_where`/`cut` on a shape that is not soft, `cut` on a solid body or outside a scene. `--debug-physics` draws pins (blue squares).
 - **Limits:** soft meshes that are very fast and thin can pass through each other's triangles; a large static triangle mesh is slow to collide with (use cubes and planes for the set); no cutting of solid bodies; no soft bodies in a 2D scene. Worked example: `examples/jelly.anim`. `world:` takes `soft_substeps` (16) and `soft_iterations` (4), as for 2D.
 
+## 13v. 3D fluids (round F3D)
+
+A `fluid` in a 3D scene is thousands of particles that pour, splash, pool and slosh like water. It collides with the rigid mesh bodies (a tank is a few static cubes), pushes them and buoys them (a light crate floats, a heavy ball sinks), and is drawn as a smooth, transparent, lit surface built from the particles.
+
+```anim
+world:
+    fluid_threads: 0            # worker threads for the solver (0 = the machine's); the result is the same for any number
+
+fluid water:
+    fill: box(342, 420, 66, 270, 180, 288)    # x, y, z of the near top-left corner, then width, height, depth (px)
+    spacing: 16                                # particle distance in px: smaller = finer and much slower
+    viscosity: 0.04
+    foam: 0.35
+    smoothness: 1.5
+    color: #72c6f890                           # at the surface (alpha allowed) ...
+    color_end: #2a6cc0ff                       # ... and deep down
+    max: 7000
+
+scene "s" for 8.seconds:
+    main:
+        water.pour(at: (780, 120, 210), speed: (0, 260, 0), width: 64)   # a jet 64 px across, falling
+        wait 2.seconds
+        water.stop()
+        water.add(box(400, 300, 100, 80, 80, 80))                         # drop in a block at once
+```
+
+- **3D or 2D:** a fluid is 3D when its `fill` is a `box(x, y, z, w, h, d)` or a mesh shape (its inside is filled), or when it says `space: "3d"` (a fluid that is only poured). A 3D fluid goes with mesh bodies (§13t) and the 3D camera; a scene's fluids may be 2D or 3D but not both kinds in one scene.
+- **Settings** are those of §13e (`spacing`, `density`, `viscosity`, `surface_tension`, `foam`, `smoothness`, `color`, `color_end`, `max`) plus `space`. `spacing` defaults to 12 px in 3D. `render: "dots"` draws every particle as a small ball instead of the surface. All fluids together hold at most 20000 particles.
+- **Operations:** `pour(at: (x, y, z), speed: (x, y, z), width:)` makes a jet whose cross-section is a disc `width` px across; `stop()`; `add(region)` drops in a block (`box(...)` or a mesh); `level(x, z)` is the surface height above that point (px, or none when there is no water there); `water.count` is the number of particles.
+- **Bodies:** containers are ordinary static bodies (cubes, planes; hide a wall you want to see through with `visible = false`, it still holds the water). Dynamic bodies are pushed and buoyed: give a body `density` below 1 to float it. Soft meshes are obstacles for water but are not pushed by it. A resting body keeps a thin layer of particles under it.
+- **The picture:** the renderer fills the particles' density on a grid and extracts a triangle mesh from it (marching cubes), draws it over the opaque meshes with transparency (bodies show through, the colour deepens with the thickness of water, the surface is toon-lit and has an inked silhouette), and draws thin jets, droplets and foam as small spheres. Foam and spray are decorative: they never push anything and are seeded, so the same program always throws the same foam.
+- **Cost and threads:** a few thousand particles is normal (the example is 4 to 7 thousand: under a second a frame); halving `spacing` is eight times the particles. The solver's per-particle loops run on several threads in fixed contiguous chunks that are joined in order, and the surface field is summed in a fixed order, so the same program gives the same frames on one thread or many. In `world:` the settings `fluid_substeps` (4), `fluid_iterations` (3) and `fluid_threads` (0) tune it. Render many frames at once with `anim frames` (it simulates once).
+- **Errors:** `E-FLD-004` (a 3D fluid fills a `box(...)` or a mesh, a pour needs a speed, the fill region does not fit under `max`), `E-FLD-001` (a bad setting). Worked example: `examples/splash.anim`.
+- **Limits:** no refraction or reflections; a very fast body can pass through a thin wall (no continuous collision); a large static triangle mesh is slow to collide with, use cubes and planes for the tank; water does not push soft bodies; a fluid is not coupled to the wave fields of §13r.
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,
@@ -2305,6 +2340,7 @@ help: did you mean `over: 1.second`?
 | Properties | `E-CON-001` constraint cycle, `E-PRP-002` two locks on one component, `-003` overlapping keyframes |
 | Fields | `E-FLD-001` bad field declaration, `-002` size limit, `-003` value became infinite or NaN |
 | 3D meshes | `E-MSH-001` bad mesh or stage3 arguments |
+| 3D fluids | `E-FLD-004` bad 3D fluid region, pour or fill that does not fit |
 | 3D physics | `E-PHY-007` bad mesh body or `float`, `-008` bad 3D joint, `-009` bad soft mesh, pin or cut |
 | Equations | `E-MTH-001` equation syntax, `-002` construct not allowed in an equation, `-003` bad arguments, `-004` unknown or mixed drive property, `-005` non-finite value |
 | Camera / assets | `E-CAM-001` zoom outside [1, 8], `E-AST-001` asset file not found |

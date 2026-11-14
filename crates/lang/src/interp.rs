@@ -296,6 +296,7 @@ pub struct Interp {
     pub decls3: crate::phys3::Decls3,
     pub phys3: Option<crate::phys3::Physics3>,
     pub soft3: Option<crate::soft3::Soft3Sim>,
+    pub fluid3: Option<crate::fluid3::FluidSim3>,
     pub emitters: BTreeMap<String, crate::particles::EmitterCfg>,
     pub fields: BTreeMap<String, crate::field::FieldCfg>,
     /// The lens and the light for 3D meshes (`stage3(...)`).
@@ -412,6 +413,7 @@ impl Interp {
             decls3: Default::default(),
             phys3: None,
             soft3: None,
+            fluid3: None,
             emitters: BTreeMap::new(),
             fields: BTreeMap::new(),
             stage3: Default::default(),
@@ -2506,6 +2508,20 @@ impl Interp {
                     return Err(type_err("a rectangle needs a positive width and height"));
                 }
                 Ok(Value::Rect([x, y, w, h]))
+            }
+            "box" => {
+                let m = self.bind(
+                    name,
+                    args,
+                    &["x", "y", "z", "w", "h", "d"],
+                    &["x", "y", "z", "w", "h", "d"],
+                )?;
+                let n = |k: &str| self.num(&m[k], "a box value");
+                let (x, y, z, w, h, d) = (n("x")?, n("y")?, n("z")?, n("w")?, n("h")?, n("d")?);
+                if !(w > 0.0 && h > 0.0 && d > 0.0) {
+                    return Err(type_err("a box needs a positive width, height and depth"));
+                }
+                Ok(Value::Box3([x, y, z, w, h, d]))
             }
             "noise" => {
                 let m = self.bind(name, args, &["seed_name", "t"], &["seed_name", "t"])?;

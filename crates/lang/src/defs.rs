@@ -170,7 +170,7 @@ impl Interp {
             | ("Entity", Value::Entity(_))
             | ("List", Value::List(_))
             | ("Easing", Value::Ease(_))
-            | ("Region", Value::Rect(_))
+            | ("Region", Value::Rect(_) | Value::Box3(_))
             | ("Handle", Value::Handle(_)) => true,
             ("Vertex", Value::Elem(_, r)) => r.kind == Kind::V,
             ("Edge", Value::Elem(_, r)) => r.kind == Kind::E,

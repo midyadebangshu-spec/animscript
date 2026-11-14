@@ -40,6 +40,8 @@ pub struct Resolved {
     pub physics3: Option<J>,
     /// Soft meshes (pins, sizes), when any exist.
     pub soft3: Option<J>,
+    /// 3D fluids (particles as packed floats), when any exist.
+    pub fluids3: Option<J>,
     /// Live particles per emitter, when the program declares emitters.
     pub particles: Option<J>,
     /// Soft bodies: volume, stretch and pinned points, when any exist.
@@ -172,6 +174,9 @@ pub fn build_snapshot(
     }
     if let Some(p) = &resolved.soft3 {
         snap["soft3"] = p.clone();
+    }
+    if let Some(p) = &resolved.fluids3 {
+        snap["fluids3"] = p.clone();
     }
     if let Some(p) = &resolved.soft {
         snap["soft"] = p.clone();

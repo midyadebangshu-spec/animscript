@@ -562,6 +562,8 @@ pub enum Value {
     Handle(u32),
     /// `rect(x, y, w, h)`.
     Rect([f64; 4]),
+    /// A box in a 3D scene: x, y, z of the near top-left corner, then width, height, depth.
+    Box3([f64; 6]),
     /// A physics joint, by index.
     Joint(usize),
     /// A particle emitter, by name.
@@ -623,7 +625,7 @@ impl Value {
             Value::Lambda(_) => "Lambda",
             Value::Modifier(_) => "Modifier",
             Value::Handle(_) => "Handle",
-            Value::Rect(_) => "Region",
+            Value::Rect(_) | Value::Box3(_) => "Region",
             Value::Joint(_) => "Joint",
             Value::Emitter(_) => "Emitter",
             Value::Fluid(_) => "Fluid",

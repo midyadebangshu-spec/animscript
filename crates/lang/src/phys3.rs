@@ -1054,14 +1054,42 @@ impl Interp {
             return;
         };
         if tick > 0 {
-            if let Some(mut sim) = self.soft3.take() {
-                let (n, it) = (sim.substeps_n(), sim.iterations_n());
-                p3::soft_step(&mut ph.world, &mut sim.bodies, 1.0 / fps, n, it);
-                self.soft3 = Some(sim);
+            let dt = 1.0 / fps;
+            self.fluid3_emit_for(dt);
+            let cfg = self.world_cfg.clone();
+            let soft = self.soft3.take();
+            let fluid = self.fluid3.take();
+            if soft.is_some() || fluid.is_some() {
+                let mut soft = soft;
+                let mut fluid = fluid;
+                let has_soft = soft.is_some();
+                let (mut empty_s, mut empty_f) = (vec![], vec![]);
+                let bodies = soft.as_mut().map(|s| &mut s.bodies).unwrap_or(&mut empty_s);
+                let fluids = fluid
+                    .as_mut()
+                    .map(|f| &mut f.fluids)
+                    .unwrap_or(&mut empty_f);
+                let substeps = if has_soft {
+                    cfg.soft_substeps
+                } else {
+                    cfg.fluid_substeps
+                };
+                p3::coupled_step3(
+                    &mut ph.world,
+                    bodies,
+                    fluids,
+                    dt,
+                    substeps,
+                    cfg.soft_iterations,
+                    cfg.fluid_iterations,
+                    cfg.fluid_substeps,
+                );
+                self.soft3 = soft;
+                self.fluid3 = fluid;
             } else {
                 for _ in 0..ph.steps {
                     self.apply_floats(&mut ph);
-                    ph.world.step(1.0 / fps / ph.steps as f64);
+                    ph.world.step(dt / ph.steps as f64);
                 }
             }
         }

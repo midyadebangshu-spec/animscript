@@ -16,6 +16,7 @@ const HARD_LIMIT: usize = 20_000;
 #[derive(Clone, Debug)]
 pub enum Region {
     Rect([f64; 4]),
+    Box3([f64; 6]),
     Shape(String),
 }
 
@@ -30,6 +31,10 @@ pub struct FluidCfg {
     pub behind: bool,
     /// Radius of the blob surface in spacings (smaller = crisper).
     pub smoothness: f64,
+    /// `space: "3d"`: a fluid of a scene with mesh bodies even if nothing else says so.
+    pub space3: bool,
+    /// Whether `spacing` was written (a 3D fluid defaults to a coarser 12 px).
+    pub spacing_given: bool,
 }
 
 struct Pour {
@@ -90,6 +95,8 @@ impl Interp {
                 blob: true,
                 behind: false,
                 smoothness: 1.4,
+                space3: false,
+                spacing_given: false,
             };
             let (mut color_end, mut spacing) = (None, 8.0);
             for (key, expr, span) in &d.attrs {
@@ -97,14 +104,21 @@ impl Interp {
                 let num =
                     |s: &Interp, what: &str| s.num(&v, what).map_err(|e| e1(e.message).at(*span));
                 match key.as_str() {
+                    "space" => match &v {
+                        Value::Str(s) if s == "3d" => cfg.space3 = true,
+                        Value::Str(s) if s == "2d" => cfg.space3 = false,
+                        _ => return Err(e1("`space` must be \"2d\" or \"3d\"").at(*span)),
+                    },
                     "fill" | "in" => {
                         cfg.fill = Some(match &v {
                             Value::Rect(r) => Region::Rect(*r),
+                            Value::Box3(b) => Region::Box3(*b),
                             Value::Shape(s) => Region::Shape(s.clone()),
                             other => return Err(e2(format!("`{key}` must be a `rect(x, y, w, h)` or a shape, found {}", other.type_name())).at(*span).help("write `fill: rect(60, 300, 240, 200)` or `fill: some_shape` (its faces are filled)")),
                         })
                     }
                     "spacing" => {
+                        cfg.spacing_given = true;
                         spacing = num(self, "`spacing`")?;
                         if spacing <= 0.5 {
                             return Err(e1("`spacing` (particle distance in px) must be above 0.5").at(*span));
@@ -164,10 +178,13 @@ impl Interp {
                         }
                         cfg.params.max = n as usize;
                     }
-                    other => return Err(e1(format!("a fluid has no setting `{other}`")).at(*span).help("settings: fill (or in), spacing, density, viscosity, surface_tension, foam, smoothness, color, color_end, render, behind, max")),
+                    other => return Err(e1(format!("a fluid has no setting `{other}`")).at(*span).help("settings: fill (or in), space, spacing, density, viscosity, surface_tension, foam, smoothness, color, color_end, render, behind, max")),
                 }
             }
             cfg.color_end = color_end.unwrap_or(cfg.color);
+            if !cfg.spacing_given && matches!(cfg.fill, Some(Region::Box3(_))) {
+                spacing = 12.0;
+            }
             cfg.spacing_px = spacing;
             cfg.params.spacing = spacing / ppm;
             total += cfg.params.max;
@@ -186,6 +203,7 @@ impl Interp {
     /// An empty fluid for every declaration (each scene starts dry until `fill_fluids`).
     pub fn reset_fluids(&mut self) {
         self.fluid = None;
+        self.fluid3 = None;
         if self.fluid_cfg.is_empty() {
             return;
         }
@@ -197,7 +215,11 @@ impl Interp {
             pours: vec![],
             ppm,
         };
+        self.reset_fluids3();
         for (name, cfg) in &self.fluid_cfg {
+            if self.fluid_is_3d(cfg) {
+                continue;
+            }
             let mut f = ph::Fluid::new(cfg.params.clone());
             f.set_seed(crate::procedural::stream_seed(
                 self.seed,
@@ -230,6 +252,7 @@ impl Interp {
                 }
                 out
             }
+            Region::Box3(_) => vec![],
             Region::Shape(name) => {
                 let sh = &self.shapes[name];
                 let t = sh.transform();
@@ -264,12 +287,19 @@ impl Interp {
 
     /// Put each fluid's `fill` region on the lattice (after `setup:`, so shapes are in place).
     pub fn fill_fluids(&mut self) -> Res<()> {
-        if self.fluid.is_none() {
-            return Ok(());
-        }
         let names: Vec<String> = self.fluid_cfg.keys().cloned().collect();
-        for (i, name) in names.iter().enumerate() {
+        if self.fluid.is_none() {
+            return self.fill_fluids3();
+        }
+        self.fill_fluids3()?;
+        let mut i2d = 0usize;
+        for name in names.iter() {
             let cfg = self.fluid_cfg[name].clone();
+            if self.fluid_is_3d(&cfg) {
+                continue;
+            }
+            let i = i2d;
+            i2d += 1;
             let Some(region) = &cfg.fill else { continue };
             let pts = self.region_points(&cfg, region);
             let sim = self.fluid.as_mut().expect("checked");
@@ -289,6 +319,13 @@ impl Interp {
     }
 
     pub fn fluid_method(&mut self, name: &str, method: &str, args: Args) -> Res<Value> {
+        if self
+            .fluid3
+            .as_ref()
+            .is_some_and(|s| s.names.iter().any(|n| n == name))
+        {
+            return self.fluid3_method(name, method, args);
+        }
         let cfg = self.fluid_cfg[name].clone();
         let ppm = self.world_cfg.scale;
         let Some(i) = self
@@ -346,6 +383,9 @@ impl Interp {
     }
 
     pub fn fluid_count(&self, name: &str) -> usize {
+        if let Some(n) = self.fluid3_count(name) {
+            return n;
+        }
         self.fluid
             .as_ref()
             .and_then(|s| {

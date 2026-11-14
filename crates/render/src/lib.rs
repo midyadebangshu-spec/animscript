@@ -1005,6 +1005,10 @@ fn render_view(
             }
         }
     }
+    // a scene whose only 3D thing is water has no mesh to trigger the 3D pass
+    if !meshes_drawn && snapshot["fluids3"].is_array() {
+        mesh3::draw_meshes(&mut pm, snapshot, &view);
+    }
     while next_field < fields.len() {
         draw_field(&mut pm, fields[next_field], &view);
         next_field += 1;

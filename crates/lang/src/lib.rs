@@ -8,6 +8,7 @@ pub mod defs;
 pub mod derive;
 pub mod field;
 pub mod fluid;
+pub mod fluid3;
 pub mod freehand;
 pub mod imports;
 pub mod interp;

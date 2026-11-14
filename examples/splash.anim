@@ -1,0 +1,98 @@
+project "Splash":
+    anim_version: "0.1"
+    canvas: 1280x720
+    fps: 24
+    background: #cfe6ee
+
+import "std/3d"
+
+# 3D water: a block of water in a tank collapses and sloshes, a light crate floats on it, a heavy ball drops in with
+# a splash and a jet pours in from above. The water is thousands of particles (position based fluids, solved on
+# several threads with the same result as on one); the picture builds a smooth transparent surface from them
+# (marching cubes), so the crate shows through it and the colour deepens with the water's thickness.
+world:
+    gravity: (0, 9.8, 0)
+    scale: 100
+    fluid_substeps: 4
+    fluid_iterations: 3
+
+stage3(fov: 30, light: (-0.7, 0.8, 0.45), ambient: 0.4, bands: 4, crease: 38.deg, smooth: 60.deg)
+
+# ---- 2D backdrop
+shape sky_top = rectangle(width: 1500, height: 340, at: (640, 130))
+sky_top.fill = #8fc7e6
+sky_top.stroke_width = 0
+sky_top.z = -60
+shape sky_low = rectangle(width: 1500, height: 260, at: (640, 400))
+sky_low.fill = #d9ecee
+sky_low.stroke_width = 0
+sky_low.z = -60
+shape hills = polygon([(0, 420), (160, 380), (340, 410), (560, 360), (780, 405), (980, 370), (1280, 415), (1280, 560), (0, 560)])
+hills.fill = #84ab72
+hills.stroke_width = 0
+hills.z = -50
+
+# ---- the table and the tank (static); the wall nearest the camera is there for the water but not drawn
+shape ground = cube(width: 2600, height: 60, depth: 1800, at: (640, 660, 300))
+ground.fill = #cdb97c
+ground.stroke = #3a3020
+ground.stroke_width = 3
+ground.body(kind: static, friction: 0.6)
+
+shape floor = cube(width: 680, height: 24, depth: 340, at: (640, 612, 210))
+floor.fill = #8a9aa8
+floor.stroke = #26323c
+floor.stroke_width = 3
+floor.body(kind: static, friction: 0.05)
+shape wall_l = cube(width: 24, height: 280, depth: 340, at: (328, 460, 210))
+wall_l.fill = #8a9aa8
+wall_l.stroke = #26323c
+wall_l.stroke_width = 3
+wall_l.body(kind: static, friction: 0.05)
+shape wall_r = cube(width: 24, height: 280, depth: 340, at: (952, 460, 210))
+wall_r.fill = #8a9aa8
+wall_r.stroke = #26323c
+wall_r.stroke_width = 3
+wall_r.body(kind: static, friction: 0.05)
+shape wall_back = cube(width: 680, height: 280, depth: 24, at: (640, 460, 368))
+wall_back.fill = #8a9aa8
+wall_back.stroke = #26323c
+wall_back.stroke_width = 3
+wall_back.body(kind: static, friction: 0.05)
+shape wall_near = cube(width: 680, height: 280, depth: 24, at: (640, 460, 52))
+wall_near.body(kind: static, friction: 0.05)
+wall_near.visible = false
+
+# ---- the water and what floats in it
+fluid water:
+    fill: box(342, 420, 66, 270, 180, 288)
+    spacing: 16
+    viscosity: 0.04
+    foam: 0.35
+    smoothness: 1.5
+    color: #72c6f890
+    color_end: #2a6cc0ff
+    max: 7000
+
+shape crate = cube(size: 70, at: (780, 330, 210))
+crate.fill = #c9944f
+crate.stroke = #4a3018
+crate.stroke_width = 3
+crate.body(density: 0.45, friction: 0.5)
+
+shape ball = sphere(radius: 38, segments: 20, rings: 12, at: (470, 60, 210))
+ball.fill = #d8503a
+ball.stroke = #4a1a12
+ball.stroke_width = 3
+ball.body(density: 3, restitution: 0.1)
+
+scene "Splash" for 11.seconds:
+    main:
+        start camera3.orbit(turns: 0.03, over: 11.seconds)
+        start camera3.crane(height: 140, pitch: 0.04, over: 11.seconds)
+        wait 6.seconds
+        # a jet from above, aimed at the middle of the tank
+        water.pour(at: (780, 120, 210), speed: (0, 260, 0), width: 64)
+        wait 2.seconds
+        water.stop()
+        wait 10.seconds

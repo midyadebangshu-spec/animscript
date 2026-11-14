@@ -3,6 +3,9 @@
 //! surfaces. Everything is drawn at twice the resolution and averaged down for smooth edges. It is a pure function of
 //! the snapshot: no threads, no randomness.
 use crate::{parse_hex, View};
+mod liquid;
+mod mc_table;
+
 use serde_json::Value;
 use std::collections::BTreeMap;
 use tiny_skia::{
@@ -270,7 +273,10 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View) {
             opacity: sh["opacity"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0),
         });
     }
-    if meshes.is_empty() {
+    let has_liquid = snapshot["fluids3"]
+        .as_array()
+        .is_some_and(|f| !f.is_empty());
+    if meshes.is_empty() && !has_liquid {
         return;
     }
     let (w, h) = (pm.width() as usize * SS, pm.height() as usize * SS);
@@ -494,6 +500,20 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View) {
             }
             flush(&mut run, &mut big);
         }
+    }
+
+    // liquids go over everything opaque (and its outlines), tinted by how deep the water is
+    if has_liquid {
+        liquid::composite(
+            &mut big,
+            &buf.depth,
+            w,
+            h,
+            &screen,
+            &light,
+            &snapshot["fluids3"],
+            0,
+        );
     }
 
     // average SS x SS blocks (premultiplied) and draw the result over the scene

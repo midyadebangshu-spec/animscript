@@ -202,6 +202,7 @@ pub struct WorldDecl {
     pub soft_iterations: Option<Expr>,
     pub fluid_substeps: Option<Expr>,
     pub fluid_iterations: Option<Expr>,
+    pub fluid_threads: Option<Expr>,
     pub span: Span,
 }
 

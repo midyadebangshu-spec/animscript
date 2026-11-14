@@ -2212,6 +2212,7 @@ impl Runtime {
         }
         let mut physics3 = None;
         let mut soft3_snap = None;
+        let mut fluid3_snap = None;
         let mut soft3_out = vec![];
         let mut q3_out = BTreeMap::new();
         if self.it.phys3.is_some() {
@@ -2262,6 +2263,7 @@ impl Runtime {
             self.it.physics3_advance(tick);
             soft3_out = self.it.soft3_collect();
             soft3_snap = self.it.soft3_snapshot();
+            fluid3_snap = self.it.fluid3_snapshot();
             let poses = self.it.physics3_collect();
             for (i, (n, pos, q)) in poses.dynamic.into_iter().enumerate() {
                 for (prop, value) in [
@@ -2310,6 +2312,7 @@ impl Runtime {
             physics,
             physics3,
             soft3: soft3_snap,
+            fluids3: fluid3_snap,
             q3: q3_out,
             rigs: rigs_snap,
             soft: soft_snap,

@@ -54,8 +54,6 @@ pub struct Soft3Sim {
     /// Per body: node -> (the shape it follows, the pin's place in that shape's mesh coordinates).
     pin_to: Vec<BTreeMap<usize, (String, [f64; 3])>>,
     ppm: f64,
-    substeps: usize,
-    iterations: usize,
 }
 
 fn compliance(stiffness: f64) -> f64 {
@@ -142,15 +140,6 @@ fn weld(mesh: &Mesh, t: &Transform3, ppm: f64) -> Welded {
         tris,
         groups,
         vmap,
-    }
-}
-
-impl Soft3Sim {
-    pub(crate) fn substeps_n(&self) -> usize {
-        self.substeps
-    }
-    pub(crate) fn iterations_n(&self) -> usize {
-        self.iterations
     }
 }
 
@@ -550,8 +539,6 @@ impl Interp {
             alive: vec![],
             pin_to: vec![],
             ppm,
-            substeps: self.world_cfg.soft_substeps,
-            iterations: self.world_cfg.soft_iterations,
         };
         for d in &decls {
             let t = self.mesh_transform(&d.shape);

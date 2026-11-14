@@ -394,6 +394,45 @@ impl SoftBody3 {
             .map(|d| (((self.pos[d.a] - self.pos[d.b]).len() - d.rest) / d.rest).abs())
             .fold(0.0, f64::max)
     }
+    /// Spheres that stand for the skin of this body inside the box `lo`-`hi`: the points of every
+    /// live triangle and samples across it about `spacing` apart (fluids treat them as obstacles).
+    pub fn obstacle_points(&self, spacing: f64, lo: V3, hi: V3) -> Vec<(V3, f64)> {
+        let r = self.params.radius.max(0.005);
+        let mut out = vec![];
+        for (i, t) in self.tris.iter().enumerate() {
+            if !self.tri_alive[i] {
+                continue;
+            }
+            let p = [
+                self.point_pos(t[0]),
+                self.point_pos(t[1]),
+                self.point_pos(t[2]),
+            ];
+            let (tl, th) = (p[0].min(p[1]).min(p[2]), p[0].max(p[1]).max(p[2]));
+            if th.x < lo.x
+                || tl.x > hi.x
+                || th.y < lo.y
+                || tl.y > hi.y
+                || th.z < lo.z
+                || tl.z > hi.z
+            {
+                continue;
+            }
+            let longest = (p[1] - p[0])
+                .len()
+                .max((p[2] - p[1]).len())
+                .max((p[0] - p[2]).len());
+            let k = ((longest / spacing).ceil() as usize).clamp(1, 12);
+            for a in 0..=k {
+                for b in 0..=(k - a) {
+                    let (u, v) = (a as f64 / k as f64, b as f64 / k as f64);
+                    out.push((p[0] + (p[1] - p[0]) * u + (p[2] - p[0]) * v, r));
+                }
+            }
+        }
+        out
+    }
+
     pub fn node_count(&self) -> usize {
         self.pos.len()
     }
@@ -899,37 +938,74 @@ pub fn soft_step(
     substeps: usize,
     iterations: usize,
 ) {
+    coupled_step3(world, bodies, &mut [], dt, substeps, iterations, 0, 1);
+}
+
+/// Step the rigid world, the soft bodies and the fluids together. The soft bodies step every
+/// substep; a fluid steps `fluid_substeps` times per frame (every `substeps / fluid_substeps`-th
+/// substep, with a step that long).
+#[allow(clippy::too_many_arguments)]
+pub fn coupled_step3(
+    world: &mut World,
+    bodies: &mut [SoftBody3],
+    fluids: &mut [crate::fluid::Fluid3],
+    dt: f64,
+    substeps: usize,
+    iterations: usize,
+    fluid_iterations: usize,
+    fluid_substeps: usize,
+) {
+    let substeps = if bodies.is_empty() {
+        fluid_substeps.max(1)
+    } else {
+        substeps.max(1)
+    };
+    let ratio = (substeps / fluid_substeps.max(1)).max(1);
     let h = dt / substeps as f64;
     let gravity = world.gravity;
     for s in 0..substeps {
         world.step(h);
         world.refresh_shapes();
-        let mut lams: Vec<Lambdas> = bodies
-            .iter()
-            .map(|b| Lambdas {
-                dist: vec![0.0; b.dist.len()],
-                tet: vec![0.0; b.tets.len()],
-                vol: 0.0,
-            })
-            .collect();
-        for b in bodies.iter_mut() {
-            b.predict(h, gravity, s, substeps);
-        }
-        for _ in 0..iterations {
-            for (b, l) in bodies.iter_mut().zip(lams.iter_mut()) {
-                b.solve(h, l);
+        if !bodies.is_empty() {
+            let mut lams: Vec<Lambdas> = bodies
+                .iter()
+                .map(|b| Lambdas {
+                    dist: vec![0.0; b.dist.len()],
+                    tet: vec![0.0; b.tets.len()],
+                    vol: 0.0,
+                })
+                .collect();
+            for b in bodies.iter_mut() {
+                b.predict(h, gravity, s, substeps);
+            }
+            for _ in 0..iterations {
+                for (b, l) in bodies.iter_mut().zip(lams.iter_mut()) {
+                    b.solve(h, l);
+                }
+            }
+            let mut contacts: Vec<Vec<RContact>> = vec![];
+            for b in bodies.iter_mut() {
+                contacts.push(b.collide_rigid(world));
+            }
+            collide_soft(bodies);
+            for b in bodies.iter_mut() {
+                b.finish(h);
+            }
+            for (b, c) in bodies.iter_mut().zip(contacts.iter()) {
+                b.contact_velocity(world, c, h);
             }
         }
-        let mut contacts: Vec<Vec<RContact>> = vec![];
-        for b in bodies.iter_mut() {
-            contacts.push(b.collide_rigid(world));
-        }
-        collide_soft(bodies);
-        for b in bodies.iter_mut() {
-            b.finish(h);
-        }
-        for (b, c) in bodies.iter_mut().zip(contacts.iter()) {
-            b.contact_velocity(world, c, h);
+        if !fluids.is_empty() && (s + 1) % ratio == 0 {
+            world.refresh_shapes();
+            for f in fluids.iter_mut() {
+                f.substep(
+                    h * ratio as f64,
+                    gravity,
+                    fluid_iterations,
+                    Some(world),
+                    bodies,
+                );
+            }
         }
     }
 }

@@ -26,6 +26,8 @@ pub struct WorldCfg {
     pub soft_iterations: usize,
     pub fluid_substeps: usize,
     pub fluid_iterations: usize,
+    /// Worker threads of 3D fluids (0 = the machine's); the result does not depend on it.
+    pub fluid_threads: usize,
 }
 
 impl Default for WorldCfg {
@@ -39,6 +41,7 @@ impl Default for WorldCfg {
             soft_iterations: 4,
             fluid_substeps: 4,
             fluid_iterations: 3,
+            fluid_threads: 0,
         }
     }
 }
@@ -312,6 +315,18 @@ impl Interp {
                     _ => cfg.fluid_iterations = n as usize,
                 }
             }
+        }
+        if let Some(e) = &w.fluid_threads {
+            let v = self.eval(e, &vars, Mode::Build)?;
+            let n = self.int(&v, "`fluid_threads`")?;
+            if !(0..=64).contains(&n) {
+                return Err(phys_err(
+                    "E-PHY-001",
+                    "`fluid_threads` must be between 0 (the machine's) and 64",
+                )
+                .at(e.span));
+            }
+            cfg.fluid_threads = n as usize;
         }
         self.world_cfg = cfg;
         Ok(())

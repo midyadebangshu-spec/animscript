@@ -15,7 +15,7 @@ pub struct Tets {
 }
 
 /// Is `p` inside the closed triangle mesh (ray parity along a fixed oblique direction)?
-fn inside(p: V3, verts: &[V3], tris: &[[usize; 3]]) -> bool {
+pub fn point_in_mesh(p: V3, verts: &[V3], tris: &[[usize; 3]]) -> bool {
     let d = v3(0.5772, 0.2137, 0.7891).normalized();
     let mut hits = 0;
     for t in tris {
@@ -85,7 +85,7 @@ pub fn tetrahedralize(verts: &[V3], tris: &[[usize; 3]], cells: usize) -> Option
     for k in 0..=nz {
         for j in 0..=ny {
             for i in 0..=nx {
-                inside_node[nid(i, j, k)] = inside(node_at(i, j, k), verts, tris);
+                inside_node[nid(i, j, k)] = point_in_mesh(node_at(i, j, k), verts, tris);
             }
         }
     }
