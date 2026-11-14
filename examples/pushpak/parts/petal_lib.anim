@@ -2,11 +2,12 @@
 ## repeated around the vertical axis; the three petal layers differ only in the numbers they pass.
 import "std/3d"
 
-# the spine of one petal in the plane z = 0 to the right of the axis, starting at radius r0: `lean` is how far the tip
-# ends up outside the base, and `s` makes the petal S-shaped (it leans out steeply at the base, straightens in the middle
+# the spine of one petal starting at radius r0 to the right of the axis: `lean` is how far the tip ends up outside the
+# base and `swirl` how far it ends up sideways (along the ring, so every petal slants the same way, to the right
+# as seen from the front), and `s` makes the petal S-shaped (it leans out steeply at the base, straightens in the middle
 # and flicks out again at the tip); s = 0 gives a plain slant.
-fn petal_spine(x: Number, base_y: Number, height: Number, r0: Number, lean: Number, s: Number, n: Int) -> List:
-    return (0..n).map(i -> (x + r0 + lean * i / n + s * sin(i / n * 1.turns), base_y - height * i / n, 0))
+fn petal_spine(x: Number, base_y: Number, height: Number, r0: Number, lean: Number, swirl: Number, s: Number, n: Int) -> List:
+    return (0..n).map(i -> (x + r0 + lean * i / n + s * sin(i / n * 1.turns), base_y - height * i / n, swirl * i / n))
 
 # half the width of the petal at t (0 at the base, 1 at the tip): broad low down, pointed at the tip
 fn petal_width(half_w: Number, t: Number) -> Number:
@@ -14,5 +15,5 @@ fn petal_width(half_w: Number, t: Number) -> Number:
     return half_w * (0.2 * (1 - t) * (1 - t) + sqrt(sn) * sqrt(sqrt(sn)))
 
 # one ring of `count` petals about the vertical line through x
-fn petal_ring(x: Number, base_y: Number, height: Number, r0: Number, lean: Number, s: Number, half_w: Number, cup: Number, count: Int, phase: Angle) -> Shape:
-    return sheet(spine: petal_spine(x, base_y, height, r0, lean, s, 14), width: (0..14).map(i -> petal_width(half_w, i / 14)), cup: cup, across: 8, facing: (1, 0, 0), around: count, about: (x, 0), phase: phase)
+fn petal_ring(x: Number, base_y: Number, height: Number, r0: Number, lean: Number, swirl: Number, s: Number, half_w: Number, cup: Number, count: Int, phase: Angle) -> Shape:
+    return sheet(spine: petal_spine(x, base_y, height, r0, lean, swirl, s, 14), width: (0..14).map(i -> petal_width(half_w, i / 14)), cup: cup, across: 8, facing: (1, 0, 0), around: count, about: (x, 0), phase: phase)
