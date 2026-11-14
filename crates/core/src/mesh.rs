@@ -5,6 +5,16 @@
 //! points out of the solid. Faces are convex (the builders triangulate anything concave).
 use crate::geometry::P;
 
+/// Extra options of `Mesh::sheet_opts`: a surface wave (`wave` px amplitude, `waves` cycles along the length) and a
+/// fixed `side` direction for the width of the ribbon (kept perpendicular to the spine), so a ribbon whose spine
+/// turns keeps its width across the same axis.
+#[derive(Clone, Debug, Default)]
+pub struct SheetOpts {
+    pub wave: f64,
+    pub waves: f64,
+    pub side: Option<[f64; 3]>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Mesh {
     pub verts: Vec<[f64; 3]>,
@@ -355,6 +365,53 @@ impl Mesh {
         Mesh::sheet_waved(spine, width, twist, cup, across, facing, 0.0, 0.0)
     }
 
+    /// A spine bent into an arc: the first point stays, the spine's length is kept, and its direction turns by `turns`
+    /// (a whole turn is 360 degrees) towards `toward` (the way the end bends to; it must not run along the spine).
+    pub fn curl_spine(
+        spine: &[[f64; 3]],
+        turns: f64,
+        toward: [f64; 3],
+    ) -> Result<Vec<[f64; 3]>, String> {
+        if turns == 0.0 || spine.len() < 2 {
+            return Ok(spine.to_vec());
+        }
+        let sub = |a: [f64; 3], b: [f64; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+        let len = |a: [f64; 3]| (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+        let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let first = sub(spine[spine.len() - 1], spine[0]);
+        let l = len(first);
+        if l < 1e-12 {
+            return Err("a curled spine needs a start and an end that differ".into());
+        }
+        let t0 = [first[0] / l, first[1] / l, first[2] / l];
+        let along = dot(toward, t0);
+        let perp = [
+            toward[0] - t0[0] * along,
+            toward[1] - t0[1] * along,
+            toward[2] - t0[2] * along,
+        ];
+        let pl = len(perp);
+        if pl < 1e-9 {
+            return Err("`toward` must point somewhere other than along the spine".into());
+        }
+        let b = [perp[0] / pl, perp[1] / pl, perp[2] / pl];
+        let ang = std::f64::consts::TAU * turns;
+        let r = l / ang;
+        // arc length of each point along the straight spine
+        let mut out = vec![spine[0]];
+        let mut s_acc = 0.0;
+        for i in 1..spine.len() {
+            s_acc += len(sub(spine[i], spine[i - 1]));
+            let phi = ang * s_acc / l;
+            out.push([
+                spine[0][0] + r * (t0[0] * phi.sin() + b[0] * (1.0 - phi.cos())),
+                spine[0][1] + r * (t0[1] * phi.sin() + b[1] * (1.0 - phi.cos())),
+                spine[0][2] + r * (t0[2] * phi.sin() + b[2] * (1.0 - phi.cos())),
+            ]);
+        }
+        Ok(out)
+    }
+
     /// `sheet` whose surface also ripples like a wave along its length: every row is moved along the face normal by
     /// `wave * sin(2 pi * waves * v)` (so the outline and the spine keep their shape; the amplitude is out of the
     /// face, `waves` cycles from base to tip).
@@ -369,6 +426,25 @@ impl Mesh {
         wave: f64,
         waves: f64,
     ) -> Result<Mesh, String> {
+        let opts = SheetOpts {
+            wave,
+            waves,
+            ..Default::default()
+        };
+        Mesh::sheet_opts(spine, width, twist, cup, across, facing, &opts)
+    }
+
+    /// `sheet` with every option: see `SheetOpts`.
+    pub fn sheet_opts(
+        spine: &[[f64; 3]],
+        width: &[f64],
+        twist: &[f64],
+        cup: f64,
+        across: usize,
+        facing: [f64; 3],
+        opts: &SheetOpts,
+    ) -> Result<Mesh, String> {
+        let (wave, waves) = (opts.wave, opts.waves);
         let n = spine.len();
         if n < 2 {
             return Err("a sheet needs a spine of at least two points".into());
@@ -417,7 +493,11 @@ impl Mesh {
             let t = unit([b[0] - a[0], b[1] - a[1], b[2] - a[2]])
                 .ok_or("two neighbouring spine points coincide")?;
             // the side direction: across the ribbon, perpendicular to the spine and to `facing`
-            let side = match unit(crs(t, face)) {
+            let fixed = opts.side.and_then(|sd| {
+                let d = sd[0] * t[0] + sd[1] * t[1] + sd[2] * t[2];
+                unit([sd[0] - t[0] * d, sd[1] - t[1] * d, sd[2] - t[2] * d])
+            });
+            let side = match fixed.or_else(|| unit(crs(t, face))) {
                 Some(s) => s,
                 None => {
                     // the spine runs along `facing`: any perpendicular will do

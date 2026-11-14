@@ -20,3 +20,9 @@ fn petal_width(half_w: Number, t: Number) -> Number:
 # (through its base), so the ring becomes a pinwheel
 fn petal_ring(x: Number, base_y: Number, height: Number, r0: Number, lean: Number, bulge: Number, flare: Number, spin: Angle, s: Number, sway: Number, wave: Number, waves: Number, half_w: Number, cup: Number, count: Int, phase: Angle) -> Shape:
     return sheet(spine: petal_spine(x, base_y, height, r0, lean, bulge, flare, s, sway, 14), width: (0..14).map(i -> petal_width(half_w, i / 14)), cup: cup, across: 8, facing: (1, 0, 0), around: count, about: (x, 0), phase: phase, spin: spin, wave: wave, waves: waves)
+
+# a ring of `count` petals that come out of the base flat and curl up in one curve: each starts at radius r0 heading
+# outwards and its tip points straight up. `length` is the petal's length along its curve (the tip ends about 0.64 of
+# it out and up); the width runs across z the whole way.
+fn petal_arc_ring(x: Number, base_y: Number, r0: Number, length: Number, half_w: Number, cup: Number, count: Int, phase: Angle) -> Shape:
+    return sheet(spine: (0..14).map(i -> (x + r0 + length * i / 14, base_y, 0)), width: (0..14).map(i -> petal_width(half_w, i / 14)), cup: cup, across: 8, side: (0, 0, 1), curl: 0.25.turns, toward: (0, -1, 0), around: count, about: (x, 0), phase: phase)

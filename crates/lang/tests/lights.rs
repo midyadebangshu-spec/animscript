@@ -185,7 +185,10 @@ fn a_mesh_has_a_surface() {
     let s = r.snapshots.last().unwrap();
     let shapes = s["shapes"].as_array().unwrap();
     let ball = shapes.iter().find(|x| x["id"] == "ball").unwrap();
-    assert_eq!(ball["mesh"]["surface"], serde_json::json!([0.2, 1.0, 2.0, 0.0]));
+    assert_eq!(
+        ball["mesh"]["surface"],
+        serde_json::json!([0.2, 1.0, 2.0, 0.0])
+    );
     let plain = shapes.iter().find(|x| x["id"] == "plain").unwrap();
     assert!(plain["mesh"].get("surface").is_none());
     assert_eq!(

@@ -215,3 +215,26 @@ fn surface_takes_a_transmission() {
         .unwrap();
     assert_eq!(e.code, "E-LIT-002");
 }
+
+#[test]
+fn sheet_curl_bends_the_spine_and_checks_its_arguments() {
+    // a straight spine along x bent a quarter turn up: the tip ends above the base, over by 2L/pi...
+    let r = run("shape petal = sheet(spine: [(100, 300, 0), (150, 300, 0), (200, 300, 0)], width: [10, 10, 10], curl: 0.25.turns, toward: (0, -1, 0), side: (0, 0, 1))\n").ok().unwrap();
+    let ys: Vec<f64> = r.snapshots[0]["shapes"][0]["mesh"]["verts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v[1].as_f64().unwrap())
+        .collect();
+    let (lo, hi) = (
+        ys.iter().cloned().fold(f64::INFINITY, f64::min),
+        ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+    );
+    assert!(hi - lo > 50.0 && hi <= 300.0 + 1e-6, "{lo} {hi}"); // it rises about 64 px
+    let e = run("shape p = sheet(spine: [(0, 0, 0), (50, 0, 0)], width: [5, 5], curl: 0.25.turns, toward: (1, 0, 0))\n").err().unwrap();
+    assert_eq!(e.code, "E-MSH-001");
+    let e = run("shape p = sheet(spine: [(0, 0, 0), (50, 0, 0)], width: [5, 5], curl: 3)\n")
+        .err()
+        .unwrap();
+    assert!(e.code == "E-MSH-001" || e.code == "E-TYP-001");
+}

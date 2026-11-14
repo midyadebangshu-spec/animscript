@@ -275,7 +275,7 @@ impl Interp {
                     args,
                     &[
                         "spine", "width", "twist", "cup", "across", "facing", "around", "about",
-                        "phase", "tilt", "spin", "wave", "waves",
+                        "phase", "tilt", "spin", "wave", "waves", "curl", "toward", "side",
                     ],
                     &["spine", "width"],
                 )?;
@@ -334,9 +334,26 @@ impl Interp {
                     Some(v) => self.num(v, "`waves`")?,
                     None => 1.0,
                 };
-                let mut mesh =
-                    Mesh::sheet_waved(&spine, &width, &twist, cup, across, facing, wave, waves)
-                        .map_err(msh)?;
+                // a straight spine can be bent into an arc: `curl` turns it, towards `toward` (default up the screen)
+                let curl = match m.get("curl") {
+                    Some(Value::Angle(t)) => *t,
+                    Some(o) => {
+                        return Err(msh(format!(
+                            "`curl` is an angle like 0.25.turns, found {}",
+                            o.type_name()
+                        )))
+                    }
+                    None => 0.0,
+                };
+                let toward = self.point3(&m, "toward")?.unwrap_or([0.0, -1.0, 0.0]);
+                let spine = Mesh::curl_spine(&spine, curl, toward).map_err(msh)?;
+                let opts = animscript_core::mesh::SheetOpts {
+                    wave,
+                    waves,
+                    side: self.point3(&m, "side")?,
+                };
+                let mut mesh = Mesh::sheet_opts(&spine, &width, &twist, cup, across, facing, &opts)
+                    .map_err(msh)?;
                 let angle = |key: &str| -> Res<f64> {
                     match m.get(key) {
                         Some(Value::Angle(t)) => Ok(*t),

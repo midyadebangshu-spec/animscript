@@ -514,3 +514,54 @@ fn a_sheet_wave_ripples_the_surface_along_its_face_normal_and_leaves_the_outline
         .fold(0.0, f64::max);
     assert!(mid < 1e-6, "{mid}");
 }
+
+#[test]
+fn curl_spine_bends_a_straight_spine_into_an_arc() {
+    // 100 long along +x, bent a quarter turn towards up the screen (-y): out, then up
+    let spine: Vec<[f64; 3]> = (0..=10).map(|i| [i as f64 * 10.0, 0.0, 0.0]).collect();
+    let bent = Mesh::curl_spine(&spine, 0.25, [0.0, -1.0, 0.0]).unwrap();
+    assert_eq!(bent.len(), spine.len());
+    let r = 100.0 / (std::f64::consts::PI / 2.0);
+    let end = bent[10];
+    assert!(
+        (end[0] - r).abs() < 1e-9 && (end[1] + r).abs() < 1e-9 && end[2].abs() < 1e-9,
+        "{end:?}"
+    );
+    // the arc length is kept: each step is 10 along the arc (chord a little shorter)
+    assert_eq!(bent[0], [0.0, 0.0, 0.0]);
+    // first tangent is (almost) along +x, last (almost) up
+    let t0 = [bent[1][0] - bent[0][0], bent[1][1] - bent[0][1]];
+    let t1 = [bent[10][0] - bent[9][0], bent[10][1] - bent[9][1]];
+    assert!(t0[0] > 9.5 && t0[1].abs() < 1.0, "{t0:?}");
+    assert!(t1[1] < -9.5 && t1[0].abs() < 1.0, "{t1:?}");
+    // no bend: unchanged; a direction along the spine is an error
+    assert_eq!(
+        Mesh::curl_spine(&spine, 0.0, [0.0, -1.0, 0.0]).unwrap(),
+        spine
+    );
+    assert!(Mesh::curl_spine(&spine, 0.25, [1.0, 0.0, 0.0]).is_err());
+}
+
+#[test]
+fn a_sheet_can_keep_its_width_across_a_fixed_side_while_the_spine_turns() {
+    let spine: Vec<[f64; 3]> = (0..=10).map(|i| [i as f64 * 10.0, 0.0, 0.0]).collect();
+    let bent = Mesh::curl_spine(&spine, 0.25, [0.0, -1.0, 0.0]).unwrap();
+    let opts = SheetOpts {
+        side: Some([0.0, 0.0, 1.0]),
+        ..Default::default()
+    };
+    let m = Mesh::sheet_opts(&bent, &[8.0; 11], &[], 0.0, 2, [0.0, 0.0, -1.0], &opts).unwrap();
+    // every row spans z in [-8, 8] and the x, y of its centre vertex are on the arc
+    for row in 0..11 {
+        let verts: Vec<_> = m
+            .verts
+            .iter()
+            .filter(|v| (v[0] - bent[row][0]).abs() < 1e-9 && (v[1] - bent[row][1]).abs() < 1e-9)
+            .collect();
+        let zs: Vec<f64> = verts.iter().map(|v| v[2]).collect();
+        assert!(
+            zs.iter().any(|z| (z - 8.0).abs() < 1e-9) && zs.iter().any(|z| (z + 8.0).abs() < 1e-9),
+            "row {row}: {zs:?}"
+        );
+    }
+}

@@ -1,28 +1,20 @@
-## Pushpak Viman: the middle petals. Twelve broad petals that lean outward from the hub with their tips curled
-## back, a translucent membrane with a dark lace frame and ribs.  Shape: `petals_mid`.
+## Pushpak Viman: the second layer of petals, `petals_mid`. Each comes out of the base flat, heading outwards, and
+## curls up in ONE curve until its tip points straight up. They stand between the inner petals (the ring is turned half a
+## step), a translucent lavender membrane with a dark lace frame, a vein and ribs.
 import "petal_lib"
 
 param axis_x = 640
 param base_y = 506
-param height = 205
-param r_base = 92
-param lean = 170
-param bulge = 50
-param flare = 0
-param spin = 0.09.turns
-param s_bend = 0
-param sway = 0
-param wave = 12
-param waves = 1.5
-param count = 14
-param half_w = 52
+param r_base = 100
+param length = 300
+param half_w = 50
+param count = 11
 
-shape petals_mid = petal_ring(axis_x, base_y, height, r_base, lean, bulge, flare, spin, s_bend, sway, wave, waves, half_w, -0.3, count, 0.036.turns)
-petals_mid.fill = #c9b0a4
-petals_mid.opacity = 0.4
-petals_mid.surface(roughness: 0.55, emissive: 0.45)
-petals_mid.pattern(mask: "(abs(u - 0.5) * 2 > 0.84) || (abs(u - 0.5) * 2 < 0.03) || (abs(fract(v * 11 + abs(u - 0.5) * 3) - 0.5) > 0.46 && abs(u - 0.5) * 2 < 0.84)", color: #34200f, alpha: 0.95)
-
+shape petals_mid = petal_arc_ring(axis_x, base_y, r_base, length, half_w, -0.2, count, 0.04545.turns)
+petals_mid.fill = #c9a7d8
+petals_mid.opacity = 0.62
+petals_mid.surface(roughness: 0.4, metallic: 0.3, emissive: 0.1, transmission: 2.2)
+petals_mid.pattern(mask: "(abs(u - 0.5) * 2 > 0.86) || (abs(u - 0.5) * 2 < 0.035) || (abs(fract(v * 11 + abs(u - 0.5) * 2 + abs(u - 0.5) * abs(u - 0.5) * 2.4) - 0.5) > 0.455 && abs(u - 0.5) * 2 < 0.86)", color: #3a2414, alpha: 0.95)
 petals_mid.stroke_width = 0.35
 
 project "Pushpak middle petals":
