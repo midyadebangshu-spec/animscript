@@ -9,10 +9,11 @@ param dome_top = 150
 param dome_h = 340
 param dome_r = 172
 
-# the outline: t = 0 at the top of the body, 1 at the bottom. Fullest about a third of the way down, narrowing to the neck.
+# the outline: t = 0 at the top of the body, 1 at the bottom: a circle (radius dome_r when dome_h is twice that), a touch
+# fuller above the middle.
 # (A lathe profile is (radius, height) with height going UP, so the screen y is negated in `strip`.)
 fn egg(t: Number) -> Number:
-    return dome_r * sin(0.5.turns * t) * (1.03 - 0.06 * t)
+    return dome_r * 2 * sqrt(t * (1 - t)) * (1.03 - 0.06 * t)
 
 fn egg_y(t: Number) -> Number:
     return dome_top + dome_h * t

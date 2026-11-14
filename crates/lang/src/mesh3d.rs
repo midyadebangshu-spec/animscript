@@ -275,7 +275,7 @@ impl Interp {
                     args,
                     &[
                         "spine", "width", "twist", "cup", "across", "facing", "around", "about",
-                        "phase",
+                        "phase", "tilt",
                     ],
                     &["spine", "width"],
                 )?;
@@ -328,20 +328,37 @@ impl Interp {
                 let facing = self.point3(&m, "facing")?.unwrap_or([0.0, 0.0, -1.0]);
                 let mut mesh =
                     Mesh::sheet(&spine, &width, &twist, cup, across, facing).map_err(msh)?;
+                let angle = |key: &str| -> Res<f64> {
+                    match m.get(key) {
+                        Some(Value::Angle(t)) => Ok(*t),
+                        Some(o) => Err(msh(format!(
+                            "`{key}` is an angle like 0.05.turns, found {}",
+                            o.type_name()
+                        ))),
+                        None => Ok(0.0),
+                    }
+                };
+                let tilt = angle("tilt")?;
+                let phase = angle("phase")?;
                 if m.contains_key("around") {
                     let k = self.count(&m, "around", 1, 1)?;
                     let about = self.point3(&m, "about")?.unwrap_or([0.0; 3]);
-                    let phase = match m.get("phase") {
-                        Some(Value::Angle(t)) => *t,
-                        Some(o) => {
-                            return Err(msh(format!(
-                                "`phase` is an angle like 0.05.turns, found {}",
-                                o.type_name()
-                            )))
-                        }
-                        None => 0.0,
-                    };
-                    mesh = mesh.around_y(k, about[0], about[2], phase);
+                    if tilt == 0.0 {
+                        mesh = mesh.around_y(k, about[0], about[2], phase);
+                    } else {
+                        // each copy is turned about the vertical axis, then leaned about the z axis through its own base
+                        let parts: Vec<Mesh> = (0..k)
+                            .map(|i| {
+                                let turns = i as f64 / k as f64 + phase;
+                                let base = Mesh::turn_point_y(spine[0], about[0], about[2], turns);
+                                mesh.around_y(1, about[0], about[2], turns)
+                                    .tilt_z(tilt, base)
+                            })
+                            .collect();
+                        mesh = Mesh::join(&parts);
+                    }
+                } else if tilt != 0.0 {
+                    mesh = mesh.tilt_z(tilt, spine[0]);
                 }
                 // the points are scene points: the mesh stays where they are
                 let (lo, hi) = mesh.bbox();

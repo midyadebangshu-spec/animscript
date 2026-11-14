@@ -5,15 +5,15 @@ import "petal_lib"
 
 param axis_x = 640
 param base_y = 596
-param height = 250
-param r_base = 170
-param lean = 45
-param swirl = 150
+param height = 205
+param r_base = 215
+param lean = 25
+param tilt = 0.045.turns
 param s_bend = 16
 param count = 10
 param half_w = 50
 
-shape petals_inner = petal_ring(axis_x, base_y, height, r_base, lean, swirl, s_bend, half_w, -0.2, count, 0.turns)
+shape petals_inner = petal_ring(axis_x, base_y, height, r_base, lean, tilt, s_bend, half_w, -0.2, count, 0.turns)
 petals_inner.fill = #d8c2b4
 petals_inner.surface(roughness: 0.55, emissive: 0.5)
 # the lace: a frame along the edges, a central vein and ribs that sweep up from the vein

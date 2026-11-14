@@ -424,3 +424,58 @@ fn around_y_repeats_a_mesh_in_turns_about_a_vertical_axis() {
     let mean = off.verts[n..].iter().map(|v| v[0]).sum::<f64>() / n as f64;
     assert!((mean - 10.0).abs() < 1e-9, "{mean}");
 }
+
+#[test]
+fn tilt_z_leans_a_mesh_to_the_right_about_a_point_on_the_screen_plane() {
+    // a spine straight up (y decreasing) from the base (10, 0, 0)
+    let spine = [[10.0, 0.0, 0.0], [10.0, -20.0, 0.0]];
+    let m = Mesh::sheet(&spine, &[1.0, 1.0], &[], 0.0, 1, [0.0, 0.0, -1.0]).unwrap();
+    let t = m.tilt_z(0.25, [10.0, 0.0, 0.0]);
+    // a quarter turn to the right: the top, 20 above the base, is now 20 to the right of it, at the same height
+    let top = t.verts.iter().cloned().fold(
+        [f64::NEG_INFINITY; 3],
+        |a, v| if v[0] > a[0] { v } else { a },
+    );
+    assert!(
+        (top[0] - 30.0).abs() < 1e-9 && top[1].abs() < 1.01,
+        "{top:?}"
+    );
+    // the base stays where it is
+    assert!(t
+        .verts
+        .iter()
+        .any(|v| (v[0] - 10.0).abs() < 1.01 && v[1].abs() < 1.01));
+    // z and the surface coordinates are untouched
+    assert!(t.verts.iter().all(|v| v[2].abs() < 1e-9));
+    assert_eq!(t.uv, m.uv);
+    // a small tilt keeps the height nearly the same and leans the top right
+    let s = m.tilt_z(0.05, [10.0, 0.0, 0.0]);
+    let top = s
+        .verts
+        .iter()
+        .cloned()
+        .fold([0.0; 3], |a, v| if v[1] < a[1] { v } else { a });
+    assert!(top[0] > 10.0 + 5.0 && top[1] < -18.0, "{top:?}");
+}
+
+#[test]
+fn join_merges_meshes_into_one() {
+    let a = Mesh::cube(1.0, 1.0, 1.0);
+    let b = Mesh::plane(2.0, 2.0, 1, 1);
+    let j = Mesh::join(&[a.clone(), b.clone()]);
+    assert_eq!(j.verts.len(), a.verts.len() + b.verts.len());
+    assert_eq!(j.faces.len(), a.faces.len() + b.faces.len());
+    assert_eq!(j.uv.len(), j.faces.len());
+    assert!(j
+        .faces
+        .iter()
+        .flatten()
+        .all(|i| (*i as usize) < j.verts.len()));
+}
+
+#[test]
+fn turn_point_y_matches_around_y() {
+    let p = [10.0, 5.0, 0.0];
+    let q = Mesh::turn_point_y(p, 0.0, 0.0, 0.25);
+    assert!(q[0].abs() < 1e-9 && (q[2] - 10.0).abs() < 1e-9 && q[1] == 5.0);
+}

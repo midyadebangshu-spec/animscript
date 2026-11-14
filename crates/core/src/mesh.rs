@@ -502,6 +502,47 @@ impl Mesh {
         out
     }
 
+    /// A point turned about the vertical line through `(cx, cz)` by `turns` (the same turn `around_y` gives a copy).
+    pub fn turn_point_y(p: [f64; 3], cx: f64, cz: f64, turns: f64) -> [f64; 3] {
+        let th = std::f64::consts::TAU * turns;
+        let (c, s) = (th.cos(), th.sin());
+        let (dx, dz) = (p[0] - cx, p[2] - cz);
+        [cx + dx * c - dz * s, p[1], cz + dx * s + dz * c]
+    }
+
+    /// The mesh turned about the z axis (the line of sight) through `pivot`, by `turns`: positive leans what stands
+    /// up the screen to the right.
+    pub fn tilt_z(&self, turns: f64, pivot: [f64; 3]) -> Mesh {
+        let th = std::f64::consts::TAU * turns;
+        let (c, s) = (th.cos(), th.sin());
+        let mut out = self.clone();
+        for v in &mut out.verts {
+            let (dx, dy) = (v[0] - pivot[0], v[1] - pivot[1]);
+            v[0] = pivot[0] + dx * c - dy * s;
+            v[1] = pivot[1] + dx * s + dy * c;
+        }
+        out
+    }
+
+    /// Several meshes joined into one (surface coordinates are kept when every part has them).
+    pub fn join(parts: &[Mesh]) -> Mesh {
+        let mut out = Mesh {
+            double_sided: parts.iter().any(|p| p.double_sided),
+            ..Default::default()
+        };
+        let all_uv = parts.iter().all(|p| p.uv.len() == p.faces.len());
+        for p in parts {
+            let base = out.verts.len() as u32;
+            out.verts.extend(p.verts.iter().cloned());
+            out.faces
+                .extend(p.faces.iter().map(|f| f.iter().map(|i| i + base).collect()));
+            if all_uv {
+                out.uv.extend(p.uv.iter().cloned());
+            }
+        }
+        out
+    }
+
     pub fn sphere(radius: f64, segments: usize, rings: usize) -> Mesh {
         let rings = rings.max(2);
         let profile: Vec<P> = (0..=rings)

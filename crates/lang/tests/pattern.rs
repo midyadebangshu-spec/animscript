@@ -127,3 +127,29 @@ fn a_fn_may_build_and_return_a_shape() {
     let r = run("fn leaf(w: Number) -> Shape:\n    return sheet(spine: [(0, 0, 0), (0, -20, 0)], width: [w, w])\nshape a = leaf(5)\nshape b = leaf(9)\n").ok().unwrap();
     assert_eq!(r.snapshots[0]["shapes"].as_array().unwrap().len(), 2);
 }
+
+#[test]
+fn each_petal_of_a_ring_can_lean_about_the_z_axis_through_its_own_base() {
+    // a petal rising from (100, 300) and a ring of four of them, every one leaning right by a quarter turn
+    let r = run("shape ring = sheet(spine: [(100, 300, 0), (100, 200, 0)], width: [10, 10], around: 4, about: (0, 0), tilt: 0.25.turns)\nshape plain = sheet(spine: [(100, 300, 0), (100, 200, 0)], width: [10, 10], around: 4, about: (0, 0))\n").ok().unwrap();
+    let ys = |name: &str| -> (f64, f64) {
+        let sh = r.snapshots[0]["shapes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == name)
+            .unwrap();
+        let v = sh["mesh"]["verts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v[1].as_f64().unwrap())
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |a, y| {
+                (a.0.min(y), a.1.max(y))
+            });
+        v
+    };
+    // untilted, the ring stands 100 tall; tilted a quarter turn, each petal lies flat at its base height
+    assert!((ys("plain").1 - ys("plain").0 - 100.0).abs() < 1e-6);
+    assert!(ys("ring").1 - ys("ring").0 < 21.0, "{:?}", ys("ring"));
+}
