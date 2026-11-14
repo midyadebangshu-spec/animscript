@@ -1,23 +1,23 @@
-## Pushpak Viman: the base, a round walkway (deck) below the dome with a rim and a railing of balusters. The petals
-## grow from its edge and the dome floats above it with a gap between (where the gondola goes).
+## Pushpak Viman: the walkway (deck): a small round platform attached to the bottom of the dome, with a rim and a low
+## railing of balusters. Its top touches the underside of the dome (the dome's bottom is at y = 490).
 ## Shapes: deck, rim, railing.
 import "std/3d"
 
 param axis_x = 640
-param deck_y = 602
-param deck_r = 205
+param deck_y = 498
+param deck_r = 72
 
-shape deck = lathe(profile: [(0, 0), (deck_r, 0), (deck_r + 8, 5), (deck_r + 8, 12), (deck_r, 18), (0, 18)], segments: 96, at: (axis_x, deck_y, 0))
+shape deck = lathe(profile: [(0, 0), (deck_r, 0), (deck_r + 8, 5), (deck_r + 8, 12), (deck_r, 18), (0, 18)], segments: 64, at: (axis_x, deck_y, 0))
 deck.fill = #8a5a2a
 deck.surface(roughness: 0.45, metallic: 0.5, emissive: 0.1)
-shape rim = lathe(profile: [(deck_r - 8, 0), (deck_r - 3, 4), (deck_r - 3, 9), (deck_r - 8, 13)], segments: 96, at: (axis_x, deck_y - 15, 0), double_sided: true)
+shape rim = lathe(profile: [(deck_r - 8, 0), (deck_r - 3, 4), (deck_r - 3, 9), (deck_r - 8, 13)], segments: 64, at: (axis_x, deck_y - 15, 0), double_sided: true)
 rim.fill = #e9c25a
 rim.surface(roughness: 0.3, metallic: 1, emissive: 0.3)
 # a railing: a thin wall with its gaps cut out, leaving balusters between a rail at the top and a rail at the foot
-shape railing = lathe(profile: [(deck_r - 14, 0), (deck_r - 14, 40)], segments: 96, at: (axis_x, deck_y - 38, 0), double_sided: true)
+shape railing = lathe(profile: [(deck_r - 8, 0), (deck_r - 8, 26)], segments: 48, at: (axis_x, deck_y - 22, 0), double_sided: true)
 railing.fill = #e9c25a
 railing.surface(roughness: 0.3, metallic: 1, emissive: 0.3)
-railing.pattern(hole: "(fract(u * 64) > 0.3) && v > 0.1 && v < 0.88")
+railing.pattern(hole: "(fract(u * 28) > 0.3) && v > 0.1 && v < 0.88")
 
 project "Pushpak base":
     anim_version: "0.1"
