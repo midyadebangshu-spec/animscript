@@ -6,8 +6,8 @@ import "petal_lib"
 param axis_x = 640
 param base_y = 506
 param r_base = 100
-param length = 300
-param half_w = 50
+param length = 160
+param half_w = 36
 param count = 11
 
 shape petals_mid = petal_arc_ring(axis_x, base_y, r_base, length, half_w, -0.2, count, 0.04545.turns)
