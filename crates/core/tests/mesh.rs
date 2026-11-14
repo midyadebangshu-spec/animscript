@@ -479,3 +479,38 @@ fn turn_point_y_matches_around_y() {
     let q = Mesh::turn_point_y(p, 0.0, 0.0, 0.25);
     assert!(q[0].abs() < 1e-9 && (q[2] - 10.0).abs() < 1e-9 && q[1] == 5.0);
 }
+
+#[test]
+fn a_sheet_wave_ripples_the_surface_along_its_face_normal_and_leaves_the_outline_straight() {
+    // a straight vertical ribbon facing -z: a wave of amplitude 5 and two cycles along its length moves rows in z only
+    let spine: Vec<[f64; 3]> = (0..=16).map(|i| [0.0, -(i as f64) * 10.0, 0.0]).collect();
+    let w = vec![10.0; 17];
+    let flat = Mesh::sheet(&spine, &w, &[], 0.0, 2, [0.0, 0.0, -1.0]).unwrap();
+    let waved = Mesh::sheet_waved(&spine, &w, &[], 0.0, 2, [0.0, 0.0, -1.0], 5.0, 2.0).unwrap();
+    assert_eq!(flat.verts.len(), waved.verts.len());
+    assert_eq!(flat.faces, waved.faces);
+    for (a, b) in flat.verts.iter().zip(&waved.verts) {
+        assert!(
+            (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9,
+            "x and y are not moved"
+        );
+    }
+    let zs: Vec<f64> = waved.verts.iter().map(|v| v[2]).collect();
+    let (lo, hi) = (
+        zs.iter().cloned().fold(f64::INFINITY, f64::min),
+        zs.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+    );
+    assert!(
+        (hi - 5.0).abs() < 1e-6 && (lo + 5.0).abs() < 1e-6,
+        "{lo} {hi}"
+    );
+    // the wave starts at 0, so the base is not displaced, and it has two full cycles (it is back at 0 at the middle)
+    assert!(waved.verts[0][2].abs() < 1e-9);
+    let mid = waved
+        .verts
+        .iter()
+        .filter(|v| (v[1] + 80.0).abs() < 1e-9)
+        .map(|v| v[2].abs())
+        .fold(0.0, f64::max);
+    assert!(mid < 1e-6, "{mid}");
+}

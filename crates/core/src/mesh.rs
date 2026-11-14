@@ -352,6 +352,23 @@ impl Mesh {
         across: usize,
         facing: [f64; 3],
     ) -> Result<Mesh, String> {
+        Mesh::sheet_waved(spine, width, twist, cup, across, facing, 0.0, 0.0)
+    }
+
+    /// `sheet` whose surface also ripples like a wave along its length: every row is moved along the face normal by
+    /// `wave * sin(2 pi * waves * v)` (so the outline and the spine keep their shape; the amplitude is out of the
+    /// face, `waves` cycles from base to tip).
+    #[allow(clippy::too_many_arguments)]
+    pub fn sheet_waved(
+        spine: &[[f64; 3]],
+        width: &[f64],
+        twist: &[f64],
+        cup: f64,
+        across: usize,
+        facing: [f64; 3],
+        wave: f64,
+        waves: f64,
+    ) -> Result<Mesh, String> {
         let n = spine.len();
         if n < 2 {
             return Err("a sheet needs a spine of at least two points".into());
@@ -426,7 +443,12 @@ impl Mesh {
                 nrm[2] * c - side[2] * sn,
             ];
             let w = width[i];
-            let p = spine[i];
+            let ripple = wave * (std::f64::consts::TAU * waves * i as f64 / (n - 1) as f64).sin();
+            let p = [
+                spine[i][0] + n2[0] * ripple,
+                spine[i][1] + n2[1] * ripple,
+                spine[i][2] + n2[2] * ripple,
+            ];
             if w == 0.0 {
                 verts.push(p);
                 rows.push(vec![verts.len() as u32 - 1; across + 1]);

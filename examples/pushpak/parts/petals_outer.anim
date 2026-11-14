@@ -9,11 +9,13 @@ param r_base = 235
 param lean = 230
 param spin = 0.07.turns
 param s_bend = 0
-param sway = 8
+param sway = 0
+param wave = 6
+param waves = 1
 param count = 18
 param half_w = 44
 
-shape petals_outer = petal_ring(axis_x, base_y, height, r_base, lean, spin, s_bend, sway, half_w, -0.12, count, 0.0.turns)
+shape petals_outer = petal_ring(axis_x, base_y, height, r_base, lean, spin, s_bend, sway, wave, waves, half_w, -0.12, count, 0.0.turns)
 petals_outer.fill = #5b4129
 petals_outer.surface(roughness: 0.5, metallic: 0.3, emissive: 0.2)
 # gold glowing edges and a pale vein; fine veins sweep out from the centre

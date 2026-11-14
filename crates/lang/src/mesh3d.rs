@@ -275,7 +275,7 @@ impl Interp {
                     args,
                     &[
                         "spine", "width", "twist", "cup", "across", "facing", "around", "about",
-                        "phase", "tilt", "spin",
+                        "phase", "tilt", "spin", "wave", "waves",
                     ],
                     &["spine", "width"],
                 )?;
@@ -326,8 +326,17 @@ impl Interp {
                 };
                 let across = self.count(&m, "across", 6, 1)?;
                 let facing = self.point3(&m, "facing")?.unwrap_or([0.0, 0.0, -1.0]);
+                let wave = match m.get("wave") {
+                    Some(v) => self.num(v, "`wave`")?,
+                    None => 0.0,
+                };
+                let waves = match m.get("waves") {
+                    Some(v) => self.num(v, "`waves`")?,
+                    None => 1.0,
+                };
                 let mut mesh =
-                    Mesh::sheet(&spine, &width, &twist, cup, across, facing).map_err(msh)?;
+                    Mesh::sheet_waved(&spine, &width, &twist, cup, across, facing, wave, waves)
+                        .map_err(msh)?;
                 let angle = |key: &str| -> Res<f64> {
                     match m.get(key) {
                         Some(Value::Angle(t)) => Ok(*t),

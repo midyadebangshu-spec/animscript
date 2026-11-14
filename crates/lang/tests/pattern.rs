@@ -179,3 +179,13 @@ fn spin_turns_each_petal_about_its_own_vertical_axis() {
     // in a ring, the petal at the ring's 0 degrees is turned the same way, and the whole ring still spans 4 petals
     assert!(ext("ring", 0) > 150.0);
 }
+
+#[test]
+fn a_sheet_wave_is_accepted_and_checked() {
+    let r = run("shape w = sheet(spine: [(0, 0, 0), (0, -50, 0), (0, -100, 0)], width: [5, 5, 5], wave: 8, waves: 1.5)\n").ok().unwrap();
+    assert_eq!(r.snapshots[0]["shapes"].as_array().unwrap().len(), 1);
+    let e = run("shape w = sheet(spine: [(0, 0, 0), (0, -50, 0)], width: [5, 5], wave: \"x\")\n")
+        .err()
+        .unwrap();
+    assert_eq!(e.code, "E-TYP-001");
+}
