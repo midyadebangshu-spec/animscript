@@ -220,6 +220,8 @@ pub struct Shape {
     pub light: Option<LightDef>,
     /// How a mesh answers light: roughness, metalness and emission (0 to 1; emission may exceed 1).
     pub surface: Option<Surface>,
+    /// A sculpt (`sculpt(...)`): the index of its volume in the interpreter; the mesh is rebuilt from it after every operation.
+    pub sculpt: Option<u32>,
     /// A 2D shape that is lit by the scene's lights (`shape.lit(...)`).
     pub lit: Option<Lit2D>,
     /// A physics body's orientation as a quaternion `[w, x, y, z]`; replaces the three turns when set.
@@ -513,6 +515,7 @@ impl Shape {
             material: None,
             light: None,
             surface: None,
+            sculpt: None,
             lit: None,
             orient: None,
             uv: BTreeMap::new(),

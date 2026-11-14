@@ -1,0 +1,73 @@
+project "Sculpt":
+    anim_version: "0.1"
+    canvas: 1280x720
+    fps: 24
+    background: #151829
+
+import "std/3d"
+
+# The sculpting engine: four sculpts, each a signed-distance volume turned into a mesh after every operation.
+#   left:        mathematical sculpting: a rounded cube cut by three cylinders and a smoothly blended ball
+#   second:      brushes: a head from a sphere (draw, inflate, clay, a dug mouth, smoothing)
+#   third:       noise: a rocky planet (ridged and fractal noise)
+#   right:       a vortex: a tower stirred into a spiral and a ball swept round it
+stage3(fov: 40, ao: 70, exposure: 1.15, smooth: 70.deg, crease: 85.deg, quality: "medium")
+shape sun = sun_light(dir: (0.45, 0.65, 0.6), color: #fff0d8, intensity: 3.2, size: 2)
+shape sky = ambient_light(color: #8fa8e8, ground: #3a3048, intensity: 0.5)
+shape lamp = point_light(at: (640, 120, -200), color: #ffb070, intensity: 1.2, reach: 500, size: 30)
+
+shape floor = cube(width: 2600, height: 60, depth: 1800, at: (640, 520, 300))
+floor.fill = #2a2d46
+floor.stroke_width = 0
+floor.surface(roughness: 0.7)
+
+# ---- mathematical
+shape maths = sculpt(size: (280, 280, 280), voxel: 4, at: (170, 350, 100))
+maths.add(sdf_box(size: (190, 190, 190), round: 14).at((170, 350, 100)))
+maths.subtract(sdf_cylinder(radius: 42, height: 400).at((170, 350, 100)))
+maths.subtract(sdf_cylinder(radius: 42, height: 400).rotate((90.deg, 0.deg, 0.deg)).at((170, 350, 100)))
+maths.subtract(sdf_cylinder(radius: 42, height: 400).rotate((0.deg, 0.deg, 90.deg)).at((170, 350, 100)))
+maths.add(sdf_sphere(radius: 58).at((170, 350, 100)), smooth: 16)
+maths.fill = #6ac7d9
+maths.stroke_width = 0
+maths.surface(roughness: 0.35)
+
+# ---- brushes: a head
+shape head = sculpt(size: (280, 280, 280), voxel: 4, at: (470, 350, 100))
+head.add(sdf_ellipsoid(radii: (92, 112, 98)).at((470, 350, 100)))
+head.brush("inflate", at: (470, 362, 4), radius: 34, strength: 1, passes: 6)
+head.brush("draw", at: (437, 322, 12), radius: 26, strength: 1)
+head.brush("draw", at: (503, 322, 12), radius: 26, strength: 1)
+head.brush("clay", along: [(420, 300, 22), (470, 292, 8), (520, 300, 22)], radius: 20, strength: 1)
+head.brush("draw", along: [(436, 410, 12), (504, 410, 12)], radius: 14, strength: 1, invert: true)
+head.brush("inflate", at: (425, 372, 24), radius: 28, strength: 0.7, passes: 2)
+head.brush("inflate", at: (515, 372, 24), radius: 28, strength: 0.7, passes: 2)
+head.brush("grease", along: [(430, 258, 70), (470, 250, 60), (510, 258, 70)], radius: 26, strength: 1)
+head.brush("smooth", at: (470, 350, 8), radius: 40, strength: 0.5, passes: 1)
+head.fill = #d9a07a
+head.stroke_width = 0
+head.surface(roughness: 0.55)
+
+# ---- noise
+shape planet = sculpt(size: (280, 280, 280), voxel: 4, at: (770, 350, 100))
+planet.add(sdf_sphere(radius: 105).at((770, 350, 100)))
+planet.noise(kind: "ridged", scale: 90, amount: 20, seed: 4)
+planet.noise(kind: "fbm", scale: 28, amount: 5, seed: 9, octaves: 4)
+planet.fill = #b9a58a
+planet.stroke_width = 0
+planet.surface(roughness: 0.9)
+
+# ---- vortex
+shape swirl = sculpt(size: (280, 280, 280), voxel: 4, at: (1070, 350, 100))
+swirl.add(sdf_box(size: (46, 200, 46), round: 8).at((1070, 350, 100)))
+swirl.add(sdf_sphere(radius: 26).at((1070, 232, 100)), smooth: 14)
+swirl.add(sdf_sphere(radius: 24).at((1160, 430, 100)))
+swirl.vortex(at: (1070, 350, 100), axis: (0, 1, 0), speed: 2.6, radius: 90, time: 1, steps: 14)
+swirl.fill = #d98aa8
+swirl.stroke_width = 0
+swirl.surface(roughness: 0.4)
+
+scene "Sculpt" for 1.second:
+    main:
+        start camera3.orbit(turns: 0.0, over: 1.second)
+        wait 1.second

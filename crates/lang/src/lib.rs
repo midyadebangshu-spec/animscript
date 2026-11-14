@@ -30,6 +30,7 @@ pub mod ragdoll3;
 pub mod rig;
 pub mod rig3;
 pub mod runtime;
+pub mod sculpt;
 pub mod snapshot;
 pub mod soft;
 pub mod soft3;

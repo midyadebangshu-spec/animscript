@@ -2423,6 +2423,32 @@ scene "Night" for 14.seconds:
 
 Examples: `examples/nocturne.anim` (strings, bass, drums and bells; lit orbs and a glow that follow the music) and `examples/etude.anim` (a violin line with dynamics, slurs, a glissando and a grace note, a pad whose filter sweeps, bells that brighten and pan, a reverb send that opens); both videos have their soundtrack.
 
+## 13aa. Sculpting (round S)
+
+A `sculpt` is a shape made of a signed-distance volume (negative inside, the distance to the surface near it). You build it with mathematical shapes, brushes, noise and flows; after every operation the shape's mesh is rebuilt (surface nets), so it is lit, shadowed and drawn like any 3D mesh. The engine is Rust (`crates/sculpt`), deterministic, with no C++ libraries.
+
+```
+shape rock = sculpt(size: (280, 280, 280), voxel: 4, at: (400, 350, 100))
+rock.add(sdf_box(size: (190, 190, 190), round: 14).at((400, 350, 100)))
+rock.subtract(sdf_cylinder(radius: 42, height: 400).at((400, 350, 100)))
+rock.add(sdf_sphere(radius: 58).at((400, 350, 100)), smooth: 16)
+rock.brush("clay", along: [(340, 280, 60), (460, 280, 60)], radius: 30, strength: 1)
+rock.noise(kind: "ridged", scale: 90, amount: 20, seed: 4)
+rock.vortex(at: (400, 350, 100), axis: (0, 1, 0), speed: 2.6, radius: 90, time: 1)
+rock.fill = #b9a58a
+```
+
+- **The sculpt:** `sculpt(size: (w, h, d), voxel: 4, at: (x, y, z), band: 3)`: the box it can occupy (world px, centred on `at`), the voxel size and the narrow band of stored distances (in voxels). Grids over 400 voxels a side or 20 million voxels are refused (`E-SCL-004`); the volume is sparse (8x8x8 blocks, uniform blocks are not stored in detail). A sculpt is an ordinary mesh shape: `fill`, `surface(...)`, position, rotation (about `at`) and lights work on it.
+- **Mathematical shapes:** `sdf_sphere(radius)`, `sdf_box(size, round)`, `sdf_torus(major, minor)`, `sdf_capsule(a, b, radius)`, `sdf_cylinder(radius, height)`, `sdf_cone(radius, height, top)`, `sdf_ellipsoid(radii)`, `sdf_plane(normal, offset)` and `sdf_expr("equation of x, y, z")` (the value is the distance; for example `"sqrt(x*x + y*y + z*z) - 50"`). They are made at the origin and moved with methods that return a new shape: `.at((x, y, z))`, `.rotate((90.deg, 0.deg, 0.deg))`, `.scale(k)`, `.twist(turns: 0.004, axis: "y")` (turns per px along the axis), `.bend(curvature)`, `.repeat(every: (x, y, z))`, `.mirror(axis)`, `.shell(thickness)`, `.offset(by)`, `.noise(kind, scale, amount, seed, octaves)`, and combinations `.union(other, smooth)`, `.subtract(other, smooth)`, `.intersect(other, smooth)`.
+- **Putting shapes in:** `sculpt.add(shape, smooth: 0)`, `.subtract(...)`, `.intersect(...)`; `smooth` is the width (px) over which the join is rounded. Whatever leaves the sculpt's box is cut off.
+- **Brushes:** `sculpt.brush(kind, along: [(x, y, z), ...] | at: (x, y, z), radius: 20, strength: 0.5, falloff: "smooth", invert: false, spacing: 0.25, mirror: "x", mirror_at: (x, y, z), passes: 1, part: (0, 1))`. Kinds: `draw` (a rounded blob of material), `clay` (builds a flat layer; overlapping dabs build up), `smooth` (relaxes the surface), `inflate` (pushes out along the normal), `flatten` (pulls onto the plane through the dab), `pinch` (draws the surface in towards the stroke), `scrape` (cuts away what stands above the plane) and `grease` (smears material along the stroke). `invert` does the opposite (dig, deflate, pull). `falloff` is `smooth`, `linear`, `sharp` or `constant`; `spacing` is the distance between dabs as a share of the radius; `mirror` repeats the stroke across planes through `mirror_at` (default the centre) for the axes named; `passes` repeats each dab. A dab finds the surface near its point; if there is none within the radius it does nothing. `part: (a, b)` applies only that share of the stroke, so a stroke can be spread over time: `for i in 0..3: sculpt.brush(..., part: (i * 0.25, (i + 1) * 0.25)); wait 2.frames` (ranges include their end).
+- **Noise:** `sculpt.noise(kind: "fbm", scale: 20, amount: 3, seed: 0, octaves: 3)` displaces the surface by `amount` px of noise (`perlin`, `value`, `worley`, `fbm`, `ridged`, `billow`; `scale` is the size of the features) and then restores the distance field. The same seed always gives the same noise.
+- **Vortex and flows:** `sculpt.vortex(at:, axis: (0, 1, 0), speed: 1, radius: 60, time: 1, steps: 6)` swirls the material around an axis through `at` at `speed` radians per second at the centre, fading with a Gaussian of width `radius`; points orbit at a constant angular speed (`speed * exp(-r^2 / 2 radius^2)`) for `time` seconds of flow. `sculpt.flow(kind: "perlin", scale:, amount:, time:, seed:)` stirs with curl noise (divergence free, so it swirls without compressing) and `sculpt.wind(by: (vx, vy, vz), time:)` carries it along. `sculpt.reinit(iterations: 8)` restores the distance property; vortex, flow and noise do it themselves. `sculpt.clear()` empties the sculpt and `sculpt.volume()` is its volume in px cubed.
+- **Errors:** `E-SCL-001` missing or wrong arguments, `E-SCL-002` bad values (unknown brush, noise or falloff, bad equation, bad `part`), `E-SCL-004` grid too big.
+- **Limits:** advection reads values with trilinear interpolation, so fine features (a few voxels thick) lose volume in a long flow: use fewer, larger steps, bigger features or a finer voxel. Sculpting is by script; there is no mouse sculpting yet, no import of meshes, no mesh-topology sculpting (dynamic topology) and no undo. Each operation rebuilds the mesh (a 280-px sculpt at 4 px voxels takes a few milliseconds to tens of milliseconds).
+
+Example: `examples/sculpt.anim` (pictures: `examples/sculpt.png`, `examples/sculpt_closeups.png`, `examples/sculpt_head_stages.png`).
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,

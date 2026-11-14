@@ -218,6 +218,7 @@ dependencies = [
  "animscript-math",
  "animscript-physics",
  "animscript-physics3",
+ "animscript-sculpt",
  "serde_json",
 ]
 
@@ -251,6 +252,13 @@ dependencies = [
  "png 0.18.1",
  "serde_json",
  "tiny-skia",
+]
+
+[[package]]
+name = "animscript-sculpt"
+version = "0.1.0"
+dependencies = [
+ "animscript-math",
 ]
 
 [[package]]

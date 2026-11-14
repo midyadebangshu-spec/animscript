@@ -578,6 +578,8 @@ pub enum Value {
     Image(ImageFill),
     /// An armature, by name; its bones and IK handles are members.
     Armature(String),
+    /// A shape written as a distance function (`sdf_sphere(...)`), for sculpting.
+    Sdf(Rc<crate::sculpt::SdfBox>),
     /// A score declared with `score name:`, by name; `play` and `stop` are its methods.
     Score(String),
     /// A call of a user-defined `action`, ready to run (see `defs.rs`).
@@ -635,6 +637,7 @@ impl Value {
             Value::Image(_) => "Image",
             Value::Armature(_) => "Armature",
             Value::Score(_) => "Score",
+            Value::Sdf(_) => "Sdf",
             Value::Call(_) => "Action call",
         }
     }

@@ -323,6 +323,7 @@ pub struct Interp {
     /// Last solved bone poses `(head, tip, angle)` keyed `armature.bone`.
     pub rig_live: BTreeMap<String, (P, P, f64)>,
     pub scores: BTreeMap<String, crate::audio::ScoreDef>,
+    pub sculpts: Vec<crate::sculpt::SculptState>,
     pub audio_cues: Vec<crate::audio::AudioCue>,
     /// Ticks since the project began (scene ticks restart; this does not).
     pub project_tick: i64,
@@ -441,6 +442,7 @@ impl Interp {
             transition: None,
             rig_live: BTreeMap::new(),
             scores: BTreeMap::new(),
+            sculpts: vec![],
             audio_cues: vec![],
             project_tick: 0,
             rigs3: BTreeMap::new(),
@@ -2382,6 +2384,7 @@ impl Interp {
             "cube" | "sphere" | "cylinder" | "cone" | "plane" | "lathe" | "extrude" | "stage3" | "focal3" => self.mesh_builtin(name, args),
             "sun_light" | "point_light" | "spot_light" | "ambient_light" => self.light_builtin(name, args),
             "play" | "stop" => self.audio_call(name, None, args, _mode),
+            "sculpt" | "sdf_sphere" | "sdf_box" | "sdf_torus" | "sdf_capsule" | "sdf_cylinder" | "sdf_cone" | "sdf_ellipsoid" | "sdf_plane" | "sdf_expr" => self.sculpt_builtin(name, args),
             "line" => {
                 let m = self.bind(name, args, &["a", "b"], &["a", "b"])?;
                 Ok(Value::Fresh(Box::new(line(self.point(&m["a"], "`a`")?, self.point(&m["b"], "`b`")?))))
@@ -2616,6 +2619,18 @@ impl Interp {
                 self.pick_overload(name, &cands, &obj)?
             };
             return self.call_def(&def, args, Some(obj), mode);
+        }
+        if let Value::Sdf(s) = &obj {
+            let s = Rc::clone(s);
+            return self.sdf_method(s, name, args);
+        }
+        if let Value::Shape(sn) = &obj {
+            if self.shapes.get(sn).is_some_and(|s| s.sculpt.is_some())
+                && crate::sculpt::SCULPT_METHODS.contains(&name)
+            {
+                let sn = sn.clone();
+                return self.sculpt_method(&sn, name, args, mode);
+            }
         }
         if let (Value::SceneObj, "ends_in") = (&obj, name) {
             let m = self.bind(name, args, &["d"], &["d"])?;
