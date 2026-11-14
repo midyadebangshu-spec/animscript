@@ -227,9 +227,23 @@ fn run_in_here(
     opts: &RunOptions,
     base: &std::path::Path,
 ) -> Res<(RunResult, Option<Diagnostic>)> {
-    let own_lines = src.lines().count() as u32;
-    let src = &crate::imports::expand_imports(src, base)?;
-    let program = parse(src)?;
+    let ex = crate::imports::expand_full(src, base)?;
+    run_expanded(&ex, opts, base)
+        .map(|(mut r, e)| {
+            r.diagnostics = r.diagnostics.into_iter().map(|d| ex.remap(d)).collect();
+            (r, e.map(|d| ex.remap(d)))
+        })
+        .map_err(|d| ex.remap(d))
+}
+
+fn run_expanded(
+    ex: &crate::imports::Expanded,
+    opts: &RunOptions,
+    base: &std::path::Path,
+) -> Res<(RunResult, Option<Diagnostic>)> {
+    let (own_lines, src) = (ex.own_lines, &ex.text);
+    let mut program = parse(src)?;
+    crate::imports::arrange(&mut program, own_lines);
     if program.project.is_none() {
         return Err(
             Diagnostic::new("E-PRJ-001", "a runnable program needs a `project` block").help(

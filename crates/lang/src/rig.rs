@@ -107,6 +107,18 @@ fn name_of(e: &crate::ast::Expr) -> Option<String> {
     }
 }
 
+/// An expression with no calls, members or lambdas: safe to evaluate ahead of time.
+fn is_constant(e: &crate::ast::Expr) -> bool {
+    use crate::ast::ExprKind::*;
+    match &e.kind {
+        Num(_) | Unit { .. } | Str(_) | Bool(_) | Color(_) | Name(_) => true,
+        Unary(_, a) => is_constant(a),
+        Binary(_, a, b) | Range(a, b) => is_constant(a) && is_constant(b),
+        Tuple(v) | List(v) => v.iter().all(is_constant),
+        _ => false,
+    }
+}
+
 fn e4(msg: impl Into<String>) -> Diagnostic {
     Diagnostic::new("E-RIG-004", msg)
 }
@@ -116,10 +128,28 @@ fn lerp_angle(a: f64, b: f64, t: f64) -> f64 {
 }
 
 impl Interp {
+    /// Armatures are built before the top-level statements run, so the constants they may use (`let` of
+    /// plain numbers, strings, tuples and arithmetic, such as a limb length from a part file) are worked
+    /// out first.
+    pub(crate) fn armature_constants(&mut self) -> crate::interp::Vars {
+        let mut vars = crate::interp::Vars::new();
+        let tops: Vec<_> = self.program.top.clone();
+        for st in &tops {
+            if let crate::ast::StmtKind::Let(name, e) = &st.kind {
+                if is_constant(e) {
+                    if let Ok(v) = self.eval(e, &vars, crate::interp::Mode::Build) {
+                        vars.define(name, v);
+                    }
+                }
+            }
+        }
+        vars
+    }
+
     /// Build the armatures declared in the program (at the start of the build phase).
     pub fn eval_armatures(&mut self) -> Res<()> {
         let decls = self.program.armatures.clone();
-        let vars = crate::interp::Vars::new(); // armatures come first, so no names are defined yet
+        let vars = self.armature_constants();
         for d in &decls {
             if Interp::armature_is_3d(&d.items) {
                 self.eval_armature3(d)?;

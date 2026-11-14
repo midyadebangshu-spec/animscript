@@ -2449,6 +2449,24 @@ rock.fill = #b9a58a
 
 Example: `examples/sculpt.anim` (pictures: `examples/sculpt.png`, `examples/sculpt_closeups.png`, `examples/sculpt_head_stages.png`).
 
+## 13ab. Working in parts (round P)
+
+A character can live in many files: `parts/head.anim`, `parts/leg.anim` and so on, put together in a `main.anim` that adds the rigging and the animation. Worked example: `examples/walker/` (`main.anim` plus `parts/head.anim`, `parts/torso.anim`, `parts/leg.anim`; pictures `walker_t0.png`, `walker_t60.png`, `walker_t140.png`).
+
+```
+import "parts/head"                              # a folder is fine, and `.anim` may be left out
+import "parts/torso" as torso                    # a namespace: its names are reached as torso.name
+import "parts/leg" as left(dx: -5, shade: #35507a)   # an instance with settings
+import "parts/leg" as right(dx: 5, shade: #4a6a9a)   # the same file again, set differently
+```
+
+- **Order.** Whatever an imported file does at its top level (declare shapes, set fills, `let`) runs *before* the importing file's own statements, so `main.anim` can use and change what the parts made (`head.stroke_width = 0`). Armatures may use plain constants from a part (`let thigh = 60`; numbers, strings, tuples and arithmetic).
+- **Namespaces.** `import "x" as n` renames the file's top-level `shape`, `let`, `param`, `armature`, `field`, `emitter`, `fluid` and `score` names to `n__name` and lets you write `n.name`. Two parts that both declare `box` no longer clash. `action`s, `fn`s and `clip`s are not renamed (they are called as methods), so a file you instance twice should not define them.
+- **Instances.** A file may start with `param name = default`: it is a `let`. `as left(name: value)` sets it for that instance, so one file makes both legs. The values are written in the importing file's terms. An unknown name is `E-AST-001` and lists the file's params.
+- **Previews.** An imported file's `project` and top-level `scene` blocks are dropped. Open the part on its own (`anim run parts/leg.anim`, or in the editor) and its own scene runs, so each part can carry a small preview.
+- **Errors** in a part name the file and the part's own line (`parts/leg.anim:2:1`). The editor lists them in the console as `(in parts/leg.anim, line 2)`.
+- **Limits:** a part that is imported twice under different names repeats its `fn`s and `action`s (`E-DEF-001`); a shape's snapshot id is its mangled name (`left__thigh`); rewriting is by name, so a local variable with the same name as a top-level one in a namespaced part is renamed too.
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,

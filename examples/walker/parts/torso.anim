@@ -1,0 +1,15 @@
+## The chest and the arms. The arms are two instances of one shape each, so they are plain shapes here.
+let chest_color = #4f8fe0
+
+shape chest = rectangle(width: 40, height: 100, at: (230, 390))
+chest.fill = chest_color
+
+project "Torso":
+    anim_version: "0.1"
+    canvas: 800x600
+    fps: 24
+    background: #eef1f6
+
+scene "preview" for 1.second:
+    main:
+        wait 1.second

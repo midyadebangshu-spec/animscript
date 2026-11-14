@@ -1,0 +1,14 @@
+## The head. Opened on its own it previews itself; imported, the project and scene below are ignored.
+shape face = circle(20, radius: 24, at: (230, 322))
+face.fill = #f2c9a0
+
+project "Head":
+    anim_version: "0.1"
+    canvas: 800x600
+    fps: 24
+    background: #eef1f6
+
+scene "preview" for 1.second:
+    main:
+        face.pulse(1.2, over: 0.5.seconds)
+        wait 1.second

@@ -41,6 +41,9 @@ pub struct Diagnostic {
     pub helps: Vec<String>,
     pub notes: Vec<String>,
     pub label: String,
+    /// Set when the diagnostic is in an imported file: its path and full text (the span's line is then a line
+    /// of that file).
+    pub file: Option<(String, String)>,
 }
 
 pub type Res<T> = Result<T, Diagnostic>;
@@ -59,6 +62,7 @@ impl Diagnostic {
             helps: vec![],
             notes: vec![],
             label: String::new(),
+            file: None,
         }
     }
     pub fn help(mut self, h: impl Into<String>) -> Self {
@@ -97,6 +101,10 @@ impl Diagnostic {
 
     /// Render like the examples in spec §13.1.
     pub fn render(&self, source: Option<&str>, filename: &str) -> String {
+        let (source, filename) = match &self.file {
+            Some((f, t)) => (Some(t.as_str()), f.as_str()),
+            None => (source, filename),
+        };
         let sev = if self.is_error() { "error" } else { "warning" };
         let mut out = format!("{sev}[{}]: {}\n", self.code, self.message);
         if let Some(sp) = self.span {

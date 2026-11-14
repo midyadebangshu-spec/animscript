@@ -50,11 +50,13 @@ pub fn load(src: &str) -> Res<Interp> {
 
 /// Like `load`, with the folder that relative asset paths are resolved from.
 pub fn load_in(src: &str, base: &std::path::Path) -> Res<Interp> {
-    let src = &imports::expand_imports(src, base)?;
-    let program = parser::parse(src)?;
-    let mut it = Interp::new(src, program)?;
+    let ex = imports::expand_full(src, base)?;
+    let src = &ex.text;
+    let mut program = parser::parse(src).map_err(|d| ex.remap(d))?;
+    imports::arrange(&mut program, ex.own_lines);
+    let mut it = Interp::new(src, program).map_err(|d| ex.remap(d))?;
     it.base_dir = base.to_path_buf();
-    it.build()?;
+    it.build().map_err(|d| ex.remap(d))?;
     Ok(it)
 }
 

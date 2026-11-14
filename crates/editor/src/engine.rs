@@ -36,7 +36,10 @@ impl RunOutput {
 }
 
 fn same(a: &Diagnostic, b: &Diagnostic) -> bool {
-    a.code == b.code && a.message == b.message && a.span == b.span
+    a.code == b.code
+        && a.message == b.message
+        && a.span == b.span
+        && a.file.as_ref().map(|f| &f.0) == b.file.as_ref().map(|f| &f.0)
 }
 
 fn project_of(src: &str, base: &Path) -> (f64, (u32, u32)) {
@@ -81,6 +84,13 @@ pub fn run_source(src: &str, base: &Path, trace: bool, generation: u64) -> RunOu
     };
     // imported text is appended after the program, and "end of file" errors point there: show them on the
     // last line of what the user sees
+    // a problem inside a part file has no line in this one: it is listed (with its file and line) in the console
+    for d in &mut diagnostics {
+        if let Some((file, _)) = d.file.take() {
+            let line = d.span.take().map_or(0, |s| s.line);
+            d.message = format!("{} (in {file}, line {line})", d.message);
+        }
+    }
     let lines: Vec<&str> = src.lines().collect();
     let last = lines.len().max(1) as u32;
     for d in &mut diagnostics {

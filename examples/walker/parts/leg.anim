@@ -1,0 +1,22 @@
+## One leg. `dx` and `shade` are the settings an importer can change, so the same file makes both legs:
+##     import "parts/leg" as left(dx: -5, shade: #35507a)
+##     import "parts/leg" as right(dx: 5, shade: #4a6a9a)
+## and the main file reaches the shapes as `left.thigh`, `right.shin`.
+param dx = 0
+param shade = #35507a
+
+shape thigh = rectangle(width: 14, height: 62, at: (230 + dx, 470))
+shape shin = rectangle(width: 12, height: 62, at: (226 + dx, 530))
+thigh.fill = shade
+shin.fill = shade
+
+project "Leg":
+    anim_version: "0.1"
+    canvas: 800x600
+    fps: 24
+    background: #eef1f6
+
+scene "preview" for 1.second:
+    main:
+        thigh.pulse(1.1, over: 0.5.seconds)
+        wait 1.second

@@ -136,7 +136,7 @@ impl Interp {
     }
 
     pub fn eval_armature3(&mut self, d: &crate::ast::ArmatureDecl) -> Res<()> {
-        let vars = crate::interp::Vars::new();
+        let vars = self.armature_constants();
         if self.rigs.contains_key(&d.name) || self.rigs3.contains_key(&d.name) {
             return Err(e5(format!("there is already an armature named `{}`", d.name)).at(d.span));
         }

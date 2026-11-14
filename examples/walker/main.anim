@@ -1,0 +1,43 @@
+## A walking figure built from parts. Each body part lives in its own file under parts/; this file puts
+## them together, builds the skeleton, binds the shapes to it and animates the walk.
+project "Walker":
+    anim_version: "0.1"
+    canvas: 800x600
+    fps: 24
+    background: #eef1f6
+
+world:
+    gravity: (0, 9.8)
+    scale: 100
+
+import "std/gait"
+import "parts/head" as head
+import "parts/torso" as torso
+import "parts/leg" as left(dx: -5, shade: #35507a)
+import "parts/leg" as right(dx: 5, shade: #4a6a9a)
+
+shape ground = rectangle(width: 800, height: 40, at: (400, 580))
+ground.fill = #6b5b4b
+ground.body(kind: static)
+
+# the skeleton: hips are the root bone `torso`, each leg is a two-bone IK chain
+armature hero:
+    bone torso:   at: (230, 440), length: 100, angle: -90.deg
+    bone thigh_l: parent: torso, at: 0.0, length: 60, angle: -175.deg
+    bone shin_l:  parent: thigh_l, length: 60
+    bone thigh_r: parent: torso, at: 0.0, length: 60, angle: 175.deg
+    bone shin_r:  parent: thigh_r, length: 60
+    ik foot_l: chain: [thigh_l, shin_l], bend: negative
+    ik foot_r: chain: [thigh_r, shin_r], bend: negative
+
+# rigging: every part follows its bone
+left.thigh.bind(hero.thigh_l)
+left.shin.bind(hero.shin_l)
+right.thigh.bind(hero.thigh_r)
+right.shin.bind(hero.shin_r)
+torso.chest.bind(hero.torso)
+head.face.bind(hero.torso)
+
+scene "Walk" for 6.seconds:
+    main:
+        hero.walk_to(700, speed: 105)

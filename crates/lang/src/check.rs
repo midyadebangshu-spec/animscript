@@ -15,14 +15,23 @@ pub fn check_in(src: &str, base: &std::path::Path) -> Vec<Diagnostic> {
 }
 
 fn check_here(src: &str, base: &std::path::Path) -> Vec<Diagnostic> {
-    let src = &match crate::imports::expand_imports(src, base) {
+    let ex = match crate::imports::expand_full(src, base) {
         Ok(s) => s,
         Err(d) => return vec![d],
     };
-    let program = match parse(src) {
+    check_expanded(&ex, base)
+        .into_iter()
+        .map(|d| ex.remap(d))
+        .collect()
+}
+
+fn check_expanded(ex: &crate::imports::Expanded, base: &std::path::Path) -> Vec<Diagnostic> {
+    let src = &ex.text;
+    let mut program = match parse(src) {
         Ok(p) => p,
         Err(d) => return vec![d],
     };
+    crate::imports::arrange(&mut program, ex.own_lines);
     let mut it = match Interp::new(src, program) {
         Ok(i) => i,
         Err(d) => return vec![d],
