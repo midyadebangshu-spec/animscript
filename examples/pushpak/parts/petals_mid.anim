@@ -23,6 +23,8 @@ petals_mid.opacity = 0.4
 petals_mid.surface(roughness: 0.55, emissive: 0.45)
 petals_mid.pattern(mask: "(abs(u - 0.5) * 2 > 0.84) || (abs(u - 0.5) * 2 < 0.03) || (abs(fract(v * 11 + abs(u - 0.5) * 3) - 0.5) > 0.46 && abs(u - 0.5) * 2 < 0.84)", color: #34200f, alpha: 0.95)
 
+petals_mid.stroke_width = 0.35
+
 project "Pushpak middle petals":
     anim_version: "0.1"
     canvas: 1280x720

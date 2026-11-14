@@ -24,7 +24,8 @@ fn strip(t0: Number, t1: Number, n: Int, gain: Number) -> List:
 shape body = lathe(profile: strip(0.02, 0.98, 32, 1), segments: 64, at: (dome_x, egg_y(0.5), 0))
 body.fill = #e8a24a
 body.fill = #e8b030
-body.surface(roughness: 0.28, metallic: 0.9, emissive: 0.9)
+body.opacity = 0.9
+body.surface(roughness: 0.28, metallic: 0.9, emissive: 0.9, transmission: 1.2)
 body.mirror(reflect: 0.25)
 # the sun side glows: a warm emission strongest where the dome faces the low sun (behind and to the left)
 body.pattern(mask: "(0.5 + 0.5 * cos(tau * (u - 0.375))) ^ 2", color: #ffc060, glow: 2.4)
@@ -83,10 +84,23 @@ crown_a.fill = #d8a63e
 crown_b.fill = #e9c25a
 crown_c.fill = #d8a63e
 tip.fill = #f2d27a
-crown_a.surface(roughness: 0.3, metallic: 0.7, emissive: 0.4)
-crown_b.surface(roughness: 0.3, metallic: 0.7, emissive: 0.4)
-crown_c.surface(roughness: 0.3, metallic: 0.7, emissive: 0.4)
-tip.surface(roughness: 0.2, metallic: 0.7, emissive: 0.4)
+crown_a.surface(roughness: 0.3, metallic: 0.7, emissive: 1.1)
+crown_b.surface(roughness: 0.3, metallic: 0.7, emissive: 1.1)
+crown_c.surface(roughness: 0.3, metallic: 0.7, emissive: 1.1)
+tip.surface(roughness: 0.2, metallic: 0.7, emissive: 1.1)
+
+body.stroke_width = 0
+band_a.stroke_width = 0
+band_b.stroke_width = 0
+band_c.stroke_width = 0
+band_d.stroke_width = 0
+band_e.stroke_width = 0
+waist.stroke_width = 0
+belt.stroke_width = 0
+crown_a.stroke_width = 0
+crown_b.stroke_width = 0
+crown_c.stroke_width = 0
+tip.stroke_width = 0
 
 project "Pushpak dome":
     anim_version: "0.1"

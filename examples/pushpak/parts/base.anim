@@ -19,6 +19,10 @@ railing.fill = #e9c25a
 railing.surface(roughness: 0.3, metallic: 1, emissive: 0.3)
 railing.pattern(hole: "(fract(u * 28) > 0.3) && v > 0.1 && v < 0.88")
 
+deck.stroke_width = 0
+rim.stroke_width = 0
+railing.stroke_width = 0
+
 project "Pushpak base":
     anim_version: "0.1"
     canvas: 1280x720
