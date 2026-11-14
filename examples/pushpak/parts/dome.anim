@@ -110,11 +110,11 @@ tip.stroke_width = 0
 
 # a red triangular flag on a thin pole at the very top: the pole stands on the crown's tip and the flag is a pennant, wide
 # at the pole and narrowing to a point, rippling a little
-shape pole = lathe(profile: [(1.6, 0), (1.6, 72)], segments: 8, at: (dome_x, dome_top - 104 - 36, 0))
+shape pole = lathe(profile: [(2.2, 0), (2.2, 72)], segments: 8, at: (dome_x, dome_top - 104 - 36, 0))
 pole.fill = #e9c25a
 pole.surface(roughness: 0.3, metallic: 1, emissive: 0.6)
 pole.stroke_width = 0
-shape flag = sheet(spine: (0..10).map(i -> (dome_x + 1.6 + 78 * i / 10, dome_top - 104 - 54 + 7 * sin(i / 10 * 0.5.turns), 0)), width: (0..10).map(i -> 17 * (1 - i / 10)), facing: (0, 0, -1), across: 1, wave: 7, waves: 1.5)
+shape flag = sheet(spine: (0..10).map(i -> (dome_x + 78 * i / 10, dome_top - 104 - 54 + 7 * sin(i / 10 * 0.5.turns), 0)), width: (0..10).map(i -> 19 * (1 - i / 10)), facing: (0, 0, -1), across: 1, wave: 7, waves: 1.5)
 flag.fill = #d4201c
 flag.opacity = 0.96
 flag.surface(roughness: 0.6, emissive: 0.7, transmission: 1.6)
