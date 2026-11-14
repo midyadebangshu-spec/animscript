@@ -5,9 +5,9 @@
 import "std/3d"
 
 param dome_x = 640
-param dome_top = 150
-param dome_h = 340
-param dome_r = 172
+param dome_top = 200
+param dome_h = 290
+param dome_r = 132
 
 # the outline: t = 0 at the top of the body, 1 at the bottom: a diamond-like lens, fullest in the middle, a touch fuller above.
 # (A lathe profile is (radius, height) with height going UP, so the screen y is negated in `strip`.)
