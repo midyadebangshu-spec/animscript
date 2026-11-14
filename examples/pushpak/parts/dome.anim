@@ -43,31 +43,31 @@ fn aspect(t0: Number, t1: Number, n: Int) -> Number:
 
 shape band_a = lathe(profile: strip(0.06, 0.34, 12, 1.012), segments: 128, at: (dome_x, egg_y(0.2), 0), double_sided: true)
 band_a.fill = #2c1608
-band_a.pattern(hole: "1 - (" + fans + ")", n: cells(0.06, 0.34, 0.85), a: aspect(0.06, 0.34, cells(0.06, 0.34, 0.85)))
+band_a.pattern(hole: "1 - (" + fans + ")", n: cells(0.06, 0.34, 0.85), a: aspect(0.06, 0.34, cells(0.06, 0.34, 0.85)), lw: 0.5)
 band_a.surface(roughness: 0.35, metallic: 0.7, emissive: 0.1)
 shape band_b = lathe(profile: strip(0.34, 0.365, 3, 1.016), segments: 64, at: (dome_x, egg_y(0.35), 0), double_sided: true)
 band_b.fill = #f2c56b
 band_b.surface(roughness: 0.22, metallic: 1, emissive: 0.7)
 shape band_c = lathe(profile: strip(0.375, 0.5, 8, 1.012), segments: 128, at: (dome_x, egg_y(0.44), 0), double_sided: true)
 band_c.fill = #2c1608
-band_c.pattern(hole: "1 - (" + tulips + ")", n: cells(0.375, 0.5, 0.6), a: aspect(0.375, 0.5, cells(0.375, 0.5, 0.6)))
+band_c.pattern(hole: "1 - (" + tulips + ")", n: cells(0.375, 0.5, 0.6), a: aspect(0.375, 0.5, cells(0.375, 0.5, 0.6)), lw: 0.6)
 band_c.surface(roughness: 0.35, metallic: 0.7, emissive: 0.1)
 shape band_d = lathe(profile: strip(0.51, 0.535, 3, 1.016), segments: 64, at: (dome_x, egg_y(0.52), 0), double_sided: true)
 band_d.fill = #f2c56b
 band_d.surface(roughness: 0.22, metallic: 1, emissive: 0.7)
 shape band_e = lathe(profile: strip(0.545, 0.72, 10, 1.012), segments: 128, at: (dome_x, egg_y(0.63), 0), double_sided: true)
 band_e.fill = #3a1a08
-band_e.pattern(hole: "1 - (" + shells + ")", n: cells(0.545, 0.72, 1.05), a: aspect(0.545, 0.72, cells(0.545, 0.72, 1.05)))
+band_e.pattern(hole: "1 - (" + shells + ")", n: cells(0.545, 0.72, 1.05), a: aspect(0.545, 0.72, cells(0.545, 0.72, 1.05)), lw: 0.8)
 band_e.surface(roughness: 0.35, metallic: 0.7, emissive: 0.1)
 
 # two more narrow bands of fine lattice: one near the crown and one above the waist
 shape band_t = lathe(profile: strip(0.03, 0.075, 4, 1.014), segments: 128, at: (dome_x, egg_y(0.052), 0), double_sided: true)
 band_t.fill = #2c1608
-band_t.pattern(hole: "1 - (" + stripes + ")", n: cells(0.03, 0.075, 0.55), a: aspect(0.03, 0.075, cells(0.03, 0.075, 0.55)))
+band_t.pattern(hole: "1 - (" + stripes + ")", n: cells(0.03, 0.075, 0.55), a: aspect(0.03, 0.075, cells(0.03, 0.075, 0.55)), lw: 0.55)
 band_t.surface(roughness: 0.35, metallic: 0.7, emissive: 0.1)
 shape band_g = lathe(profile: strip(0.725, 0.752, 3, 1.016), segments: 128, at: (dome_x, egg_y(0.738), 0), double_sided: true)
 band_g.fill = #2c1608
-band_g.pattern(hole: "1 - (" + rainbow + ")", n: cells(0.725, 0.752, 0.6), a: aspect(0.725, 0.752, cells(0.725, 0.752, 0.6)))
+band_g.pattern(hole: "1 - (" + rainbow + ")", n: cells(0.725, 0.752, 0.6), a: aspect(0.725, 0.752, cells(0.725, 0.752, 0.6)), lw: 1)
 band_g.surface(roughness: 0.35, metallic: 0.7, emissive: 0.1)
 
 # the waist: a gold band where the ropes hang, and the darker belt below it
@@ -76,7 +76,7 @@ waist.fill = #e9c25a
 waist.surface(roughness: 0.22, metallic: 1, emissive: 0.7)
 shape belt = lathe(profile: strip(0.80, 0.97, 8, 1.01), segments: 64, at: (dome_x, egg_y(0.885), 0), double_sided: true)
 belt.fill = #4a200c
-belt.pattern(hole: "1 - (" + lace_edge + ")", n: cells(0.8, 0.97, 1.0), a: aspect(0.8, 0.97, cells(0.8, 0.97, 1.0)))
+belt.pattern(hole: "1 - (" + lace_edge + ")", n: cells(0.8, 0.97, 1.0), a: aspect(0.8, 0.97, cells(0.8, 0.97, 1.0)), lw: 1)
 belt.surface(roughness: 0.35, metallic: 0.7, emissive: 0.1)
 
 # the crown: three stacked tiers and a spike
@@ -107,6 +107,18 @@ crown_a.stroke_width = 0
 crown_b.stroke_width = 0
 crown_c.stroke_width = 0
 tip.stroke_width = 0
+
+# a red triangular flag on a thin pole at the very top: the pole stands on the crown's tip and the flag is a pennant, wide
+# at the pole and narrowing to a point, rippling a little
+shape pole = lathe(profile: [(1.6, 0), (1.6, 72)], segments: 8, at: (dome_x, dome_top - 104 - 36, 0))
+pole.fill = #e9c25a
+pole.surface(roughness: 0.3, metallic: 1, emissive: 0.6)
+pole.stroke_width = 0
+shape flag = sheet(spine: (0..10).map(i -> (dome_x + 1.6 + 78 * i / 10, dome_top - 104 - 54 + 7 * sin(i / 10 * 0.5.turns), 0)), width: (0..10).map(i -> 17 * (1 - i / 10)), facing: (0, 0, -1), across: 1, wave: 7, waves: 1.5)
+flag.fill = #d4201c
+flag.opacity = 0.96
+flag.surface(roughness: 0.6, emissive: 0.7, transmission: 1.6)
+flag.stroke_width = 0
 
 project "Pushpak dome":
     anim_version: "0.1"

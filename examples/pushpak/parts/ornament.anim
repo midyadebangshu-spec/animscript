@@ -3,7 +3,8 @@
 ## in the cell coordinates
 ##     X   across one cell, from -0.5 to 0.5 (the motif's centre is X = 0)
 ##     Y   up the band measured in cell widths, from 0 at the bottom (`a` cell widths tall in all)
-## and uses the named numbers `n` (cells around) and `a` (band height over cell width). On the dome a band's holes are
+## and uses the named numbers `n` (cells around), `a` (band height over cell width) and `lw` (line weight: 1 as drawn,
+## 0.5 for lines half as thick). On the dome a band's holes are
 ## everything that is not ink (`hole: "1 - (" + design + ")"`), so the gold body shows through the lace.
 ##   lace_edge   a scalloped lace edge with pointed tips      fans     big half-circle fans with a dotted ring
 ##   shells      shells standing on a row of arches            tulips   a row of small solid trefoils
@@ -20,33 +21,33 @@ fn ang(cx: String, cy: String) -> String:
 
 # an arc of radius r about (cx, cy), upper half only, w thick
 fn arc(cx: String, cy: String, r: String, w: String) -> String:
-    return "(abs(" + dist(cx, cy) + " - " + r + ") < " + w + " && " + Y + " > " + cy + ")"
+    return "(abs(" + dist(cx, cy) + " - " + r + ") < (" + w + ") * lw && " + Y + " > " + cy + ")"
 
 # a filled disc
 fn disc(cx: String, cy: String, r: String) -> String:
     return "(" + dist(cx, cy) + " < " + r + ")"
 
-# k dots of radius rad on the arc of radius r (upper half only)
-fn ring_dots(cx: String, cy: String, r: String, k: String, rad: String) -> String:
-    return "(((((fract(" + ang(cx, cy) + " * " + k + " / 6.2832) - 0.5) * 6.2832 * " + r + " / " + k + ") ^ 2 + (" + dist(cx, cy) + " - " + r + ") ^ 2) < (" + rad + ") ^ 2) && " + Y + " > " + cy + ")"
+# k small diamonds of half-size rad along the arc of radius r (upper half only)
+fn ring_diamonds(cx: String, cy: String, r: String, k: String, rad: String) -> String:
+    return "((abs((fract(" + ang(cx, cy) + " * " + k + " / 6.2832) - 0.5) * 6.2832 * " + r + " / " + k + ") + abs(" + dist(cx, cy) + " - " + r + ") < (" + rad + ") * 1.7) && " + Y + " > " + cy + ")"
 
 # k thin spokes between radii r0 and r1 (upper half only)
 fn spokes(cx: String, cy: String, k: String, r0: String, r1: String, w: String) -> String:
-    return "(" + dist(cx, cy) + " > " + r0 + " && " + dist(cx, cy) + " < " + r1 + " && " + Y + " > " + cy + " && abs((fract(" + ang(cx, cy) + " * " + k + " / 6.2832 + 0.5) - 0.5) * 6.2832 * " + dist(cx, cy) + " / " + k + ") < " + w + ")"
+    return "(" + dist(cx, cy) + " > " + r0 + " && " + dist(cx, cy) + " < " + r1 + " && " + Y + " > " + cy + " && abs((fract(" + ang(cx, cy) + " * " + k + " / 6.2832 + 0.5) - 0.5) * 6.2832 * " + dist(cx, cy) + " / " + k + ") < (" + w + ") * lw)"
 
 # a ring of k rounded petals between radii r0 and r1: their scalloped outline (upper half only)
 fn petals(cx: String, cy: String, k: String, r0: String, r1: String, w: String) -> String:
-    return "(abs(" + dist(cx, cy) + " - (" + r0 + " + (" + r1 + " - " + r0 + ") * abs(sin(" + ang(cx, cy) + " * " + k + " / 2)))) < " + w + " && " + Y + " > " + cy + ")"
+    return "(abs(" + dist(cx, cy) + " - (" + r0 + " + (" + r1 + " - " + r0 + ") * abs(sin(" + ang(cx, cy) + " * " + k + " / 2)))) < (" + w + ") * lw && " + Y + " > " + cy + ")"
 
 fn hline(y: String, w: String) -> String:
-    return "(abs(" + Y + " - (" + y + ")) < " + w + ")"
+    return "(abs(" + Y + " - (" + y + ")) < (" + w + ") * lw)"
 
 fn any3(a: String, b: String, c: String) -> String:
     return "(" + a + " || " + b + " || " + c + ")"
 
 # a fan: a half-circle with an outer double arc, a dotted ring, a scalloped petal ring, spokes and a centre
 fn fan(cx: String, cy: String, r: String, k: String) -> String:
-    return "(" + arc(cx, cy, r, "0.02") + " || " + arc(cx, cy, r + " - 0.065", "0.014") + " || " + ring_dots(cx, cy, r + " - 0.13", "22", "0.022") + " || " + petals(cx, cy, k, r + " * 0.3", r + " * 0.7", "0.018") + " || " + spokes(cx, cy, k, "0.03", r + " * 0.3", "0.011") + " || " + disc(cx, cy, r + " * 0.07") + ")"
+    return "(" + arc(cx, cy, r, "0.02") + " || " + arc(cx, cy, r + " - 0.065", "0.014") + " || " + ring_diamonds(cx, cy, r + " - 0.13", "22", "0.03") + " || " + petals(cx, cy, k, r + " * 0.3", r + " * 0.7", "0.018") + " || " + spokes(cx, cy, k, "0.03", r + " * 0.3", "0.011") + " || " + arc(cx, cy, r + " * 0.1", "0.012") + " || " + arc(cx, cy, r + " * 0.05", "0.01") + ")"
 
 # ---- the designs ---------------------------------------------------------------------------------------------------
 fn or2(a: String, b: String) -> String:
@@ -60,17 +61,17 @@ fn or4(a: String, b: String, c: String, d: String) -> String:
 
 # a spike rising towards the cell edge on both sides (so two cells make a pointed tip), `h` high at the edge
 fn spike(y0: String, rise: String, w: String) -> String:
-    return "(abs(" + X + ") > 0.22 && abs(" + Y + " - (" + y0 + " + " + rise + " * (abs(" + X + ") - 0.22))) < " + w + ")"
+    return "(abs(" + X + ") > 0.22 && abs(" + Y + " - (" + y0 + " + " + rise + " * (abs(" + X + ") - 0.22))) < (" + w + ") * lw)"
 
 # a solid ellipse centred (cx, cy) with half-sizes (rx, ry)
 fn blob(cx: String, cy: String, rx: String, ry: String) -> String:
-    return "(((" + X + " - (" + cx + ")) / " + rx + ") ^ 2 + ((" + Y + " - (" + cy + ")) / " + ry + ") ^ 2 < 1)"
+    return "(((" + X + " - (" + cx + ")) / ((" + rx + ") * (0.55 + 0.45 * lw))) ^ 2 + ((" + Y + " - (" + cy + ")) / ((" + ry + ") * (0.55 + 0.45 * lw))) ^ 2 < 1)"
 
 # lace_edge: scalloped lace, a = 1.0
-let lace_edge = or4(fan("0", "0.05", "0.46", "12"), arc("0", "0.05", "0.5", "0.022"), or2(spike("0.47", "1.5", "0.02"), spike("0.40", "1.5", "0.02")), or3(hline("0.014", "0.018"), hline("0.07", "0.016"), ring_dots("0", "0.05", "0.55", "28", "0.02")))
+let lace_edge = or4(fan("0", "0.05", "0.46", "12"), arc("0", "0.05", "0.5", "0.022"), or2(spike("0.47", "1.5", "0.02"), spike("0.40", "1.5", "0.02")), or3(hline("0.014", "0.018"), hline("0.07", "0.016"), ring_diamonds("0", "0.05", "0.55", "24", "0.026")))
 
 # fans: big half-circle fans with small shells at the cusps and dots round the top, a = 0.85
-let fans = or4(fan("0", "0.08", "0.48", "18"), or2(fan("0.5", "0.5", "0.27", "9"), fan("-0.5", "0.5", "0.27", "9")), or2(ring_dots("0", "0.08", "0.535", "46", "0.012"), arc("0.5", "0.5", "0.3", "0.016")), or3(hline("0.015", "0.014"), hline("0.06", "0.006"), arc("-0.5", "0.5", "0.3", "0.016")))
+let fans = or4(fan("0", "0.08", "0.48", "18"), or2(fan("0.5", "0.5", "0.27", "9"), fan("-0.5", "0.5", "0.27", "9")), or2(ring_diamonds("0", "0.08", "0.56", "38", "0.022"), arc("0.5", "0.5", "0.3", "0.016")), or3(hline("0.015", "0.014"), hline("0.06", "0.006"), arc("-0.5", "0.5", "0.3", "0.016")))
 
 # shells: arches (three lines each) with shells standing on the cusps, a = 1.05
 let shells = or4(arc("0", "0.02", "0.49", "0.012"), or2(arc("0", "0.02", "0.41", "0.015"), arc("0", "0.02", "0.33", "0.015")), or2(fan("0.5", "0.5", "0.3", "11"), fan("-0.5", "0.5", "0.3", "11")), or2(hline("0.012", "0.012"), hline("0.05", "0.006")))

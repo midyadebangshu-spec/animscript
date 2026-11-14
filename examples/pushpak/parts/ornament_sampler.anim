@@ -8,22 +8,22 @@ fn strip_of(design: String, y: Number, w: Number, h: Number) -> Shape:
 
 shape s1 = strip_of(lace_edge, 90, 1200, 133)
 s1.fill = #ffffff
-s1.pattern(mask: lace_edge, color: #000000, n: 9, a: 1.0)
+s1.pattern(mask: lace_edge, color: #000000, n: 9, a: 1.0, lw: 1)
 shape s2 = strip_of(shells, 238, 1200, 157)
 s2.fill = #ffffff
-s2.pattern(mask: shells, color: #000000, n: 8, a: 1.05)
+s2.pattern(mask: shells, color: #000000, n: 8, a: 1.05, lw: 1)
 shape s3 = strip_of(tulips, 342, 1200, 52)
 s3.fill = #ffffff
-s3.pattern(mask: tulips, color: #000000, n: 14, a: 0.6)
+s3.pattern(mask: tulips, color: #000000, n: 14, a: 0.6, lw: 1)
 shape s4 = strip_of(rainbow, 408, 1200, 40)
 s4.fill = #ffffff
-s4.pattern(mask: rainbow, color: #000000, n: 18, a: 0.6)
+s4.pattern(mask: rainbow, color: #000000, n: 18, a: 0.6, lw: 1)
 shape s5 = strip_of(fans, 530, 1200, 204)
 s5.fill = #ffffff
-s5.pattern(mask: fans, color: #000000, n: 5, a: 0.85)
+s5.pattern(mask: fans, color: #000000, n: 5, a: 0.85, lw: 1)
 shape s6 = strip_of(stripes, 664, 1200, 28)
 s6.fill = #ffffff
-s6.pattern(mask: stripes, color: #000000, n: 24, a: 0.55)
+s6.pattern(mask: stripes, color: #000000, n: 24, a: 0.55, lw: 1)
 
 project "Ornament sampler":
     anim_version: "0.1"
