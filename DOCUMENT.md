@@ -2385,6 +2385,40 @@ shape room = ambient_light(color: #5a6a9a, ground: #3a2a20, intensity: 0.32)
 
 Example: `examples/lamplight.anim` (a swinging soft-shadow lamp, a 2D figure lit and casting a shadow on a 3D wall, emissive bulb with bloom, ambient occlusion).
 
+## 13z. Music as code (round A)
+
+A `score` describes music: a tempo, a key and tracks that play notes, chords or drum patterns. `play(score)` puts it on the project's timeline and the picture can listen to it. Sound is rendered by `anim audio`, entirely in Rust and deterministically (the same program gives the same WAV bytes).
+
+```
+score night:
+    tempo: 96, meter: "4/4", key: "A minor", reverb: 0.3, delay: 0.12, swing: 0.15
+    track strings: instrument: "pad", chords: "i | VI | III | VII", repeat: 3, volume: 0.55, pan: -0.15
+    track bass: instrument: "synth_bass", notes: ["A2:1/8 . A2:1/8 A2:1/8 . E3:1/8 . A2:1/8", "F2:1/8 ..."], bars: 1
+    track drums: instrument: "drumkit", beat: "k...h...s...h..h", steps: 16, repeat: 12, bars: 2
+    track bells: instrument: "bell", chords: "i | VI | III | VII", style: "arp_up", rate: "1/8", octave: 5
+
+scene "Night" for 14.seconds:
+    main:
+        play(night, fade_in: 1.second)
+        wait 12.seconds
+        stop(night, fade_out: 2.seconds)
+```
+
+- **Score settings:** `tempo` (bpm, 20 to 400), `meter` (`"4/4"`, `"3/4"`, `"6/8"`), `key` (`"A minor"`, `"F# major"`), `swing` (0 to 1: delays the off-beat eighths), `reverb`, `room`, `delay`, `delay_time`, `delay_feedback` (0 to 1 unless noted), `master` (gain), `rate` (sample rate, default 44100), `library` (folder of sample libraries, below).
+- **Tracks:** `instrument` plus exactly one of `notes`, `chords` or `beat` (a text, or a list of texts that are joined as separate bars); `volume`, `pan` (-1 to 1), `repeat` (how many times to play it), `bars` (bars of silence before it starts), `transpose` (semitones), `vel` (0 to 1).
+- **Notes:** `C4:1/4 E4 G4:1/2 .:1/4 [C4 E4 G4]:1/2 | D4:1`. A pitch is a letter, `#` or `b`, and an octave (C4 is middle C); `:` gives the length as a fraction of a whole note (`1/4`; a trailing `.` dots it and `t` makes a triplet); a missing length repeats the last one; `.` or `r` is a rest; `[...]` plays together; `!90` sets a velocity, `^` accents; `|` is a bar line, checked against the meter.
+- **Chords:** bars separated by `|`, the chords of a bar sharing it equally. Symbols are letters (`Am`, `G7`, `Cmaj7`, `Dm7b5`, `Csus4`, `F#dim`, `C/E` with a bass note) or roman numerals in the score's key (`i`, `VI`, `V7`, `bVII`: capital is major, small is minor). `%` repeats the last chord and `.` is a rest. `style` is `block` (default), `arp_up`, `arp_down` (one note per `rate`, such as `"1/8"`) or `strum` (`strum:` ticks apart); `hold` is how much of its time a chord sounds; `octave` is where the root sits (default 3).
+- **Drums:** a grid of `steps` per bar (default 16): `k` kick, `s` snare, `h` closed hat, `o` open hat, `c` crash, `t` tom, `r` rim, `p` clap; a capital is accented, `.` a rest, spaces are ignored, `|` ends a bar.
+- **Instruments:** built in: `sine`, `saw_lead`, `square_lead`, `pad` (`strings`, `synth_strings`), `synth_bass` (`bass`), `brass`, `flute`, `violin`, `cello`, `pluck` (`guitar`, `harp`), `bell`, `epiano`, `organ`, `piano`, `drumkit` (`drums`). They are synthesised (oscillators, envelopes, filters, plucked strings, FM, additive and noise drums); they sound like synths, not recordings.
+- **Sample libraries:** `library: "samples/vsco2"` makes an instrument name that is not built in load `<library>/<name>.sfz`; `sfz: "path/Violin.sfz"` on a track names a file directly. SFZ files map WAV recordings over keys and velocities (`sample`, `key`, `lokey`, `hikey`, `pitch_keycenter`, `lovel`, `hivel`, `loop_mode`, `loop_start`, `loop_end`, `volume`, `<control> default_path`); loops stored in a WAV are used when the SFZ gives none. Samples must be WAV (PCM 8/16/24/32 bit or float): convert FLAC first. Libraries such as VSCO 2 and the Sonatina orchestra are not shipped here: download them, check their licences, and point `library:` at them (paths are relative to the program file).
+- **Playing:** `play(score, volume: 1, fade_in: 0.s, fade_out: 0.s, loop: false, offset: 0.s)` and `stop(score, fade_out: 0.s)`, or `score.play(...)` and `score.stop(...)`, while a scene runs. A looped score repeats every whole number of bars. Scenes continue one project clock.
+- **Listening:** a score has members: `playing`, `time` (seconds into it), `beat` and `bar` (phase 0 to 1), `pulse` (1 at each beat, fading), `beat_now` and `bar_now` (true for the one tick a beat or bar starts, so `whenever night.beat_now:` fires on every beat), and a level from 0 to 1 for each track by its name (`night.drums` jumps when that track plays a note). They are computed from the score, not from the rendered sound.
+- **Rendering:** `anim audio program.anim -o sound.wav [--rate 48000]` writes the soundtrack, exactly as long as the project. To join it to frames: `anim frames program.anim -o frames` then `ffmpeg -framerate 24 -i frames/f%04d.png -i sound.wav -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest out.mp4`.
+- **Errors:** `E-AUD-001` bad score or track setting, `E-AUD-002` notation error (names the track and the bad token), `E-AUD-003` unknown instrument, `E-AUD-004` bad `play` or `stop`.
+- **Limits:** no MIDI import, no realtime playback (render, then listen), tempo is constant, no per-note articulation or dynamics curves, sample libraries must be WAV, and the synthesised instruments are approximations.
+
+Example: `examples/nocturne.anim` (strings, bass, drums and bells; lit orbs and a glow that follow the music; the video has the soundtrack).
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,

@@ -35,7 +35,10 @@ fn notes_follow_each_other_with_their_durations() {
 #[test]
 fn a_missing_duration_repeats_the_last_one() {
     let e = notes("C4:1/8 D4 E4");
-    assert_eq!(e.iter().map(|x| x.start).collect::<Vec<_>>(), vec![0, 480, 960]);
+    assert_eq!(
+        e.iter().map(|x| x.start).collect::<Vec<_>>(),
+        vec![0, 480, 960]
+    );
     // the very first note without a duration is a quarter
     assert_eq!(notes("C4")[0].len, 960);
 }
@@ -114,7 +117,10 @@ fn roman_numerals_follow_the_key() {
     assert_eq!(sp("III"), vec![48, 52, 55]);
     assert_eq!(sp("VII"), vec![55, 59, 62]);
     let c = Key::parse("C major").unwrap();
-    assert_eq!(parse_chord_symbol("V7", &c, 3).unwrap(), vec![55, 59, 62, 65]);
+    assert_eq!(
+        parse_chord_symbol("V7", &c, 3).unwrap(),
+        vec![55, 59, 62, 65]
+    );
     assert_eq!(parse_chord_symbol("ii", &c, 3).unwrap(), vec![50, 53, 57]);
 }
 
@@ -127,7 +133,14 @@ fn bad_chords_and_keys_are_errors() {
 
 #[test]
 fn a_progression_splits_each_bar_among_its_chords() {
-    let ev = parse_progression("C | Am F", Meter::new(4, 4), &Key::default(), &ChordStyle::block()).unwrap();
+    let ev = parse_progression(
+        "C | Am F",
+        Meter::new(4, 4),
+        &Key::default(),
+        &ChordStyle::block(),
+        3,
+    )
+    .unwrap();
     // C for a bar (3 notes), then Am and F for half a bar each
     assert_eq!(ev.len(), 9);
     assert!(ev[..3].iter().all(|e| e.start == 0));
@@ -137,20 +150,47 @@ fn a_progression_splits_each_bar_among_its_chords() {
 
 #[test]
 fn percent_repeats_and_a_dot_rests() {
-    let ev = parse_progression("C | % | . | G", Meter::new(4, 4), &Key::default(), &ChordStyle::block()).unwrap();
+    let ev = parse_progression(
+        "C | % | . | G",
+        Meter::new(4, 4),
+        &Key::default(),
+        &ChordStyle::block(),
+        3,
+    )
+    .unwrap();
     let starts: std::collections::BTreeSet<u64> = ev.iter().map(|e| e.start).collect();
-    assert_eq!(starts.into_iter().collect::<Vec<_>>(), vec![0, BAR, 3 * BAR]);
+    assert_eq!(
+        starts.into_iter().collect::<Vec<_>>(),
+        vec![0, BAR, 3 * BAR]
+    );
 }
 
 #[test]
 fn arpeggio_and_strum_styles() {
-    let arp = parse_progression("C", Meter::new(4, 4), &Key::default(), &ChordStyle::arp_up(1, 8)).unwrap();
+    let arp = parse_progression(
+        "C",
+        Meter::new(4, 4),
+        &Key::default(),
+        &ChordStyle::arp_up(1, 8),
+        3,
+    )
+    .unwrap();
     assert_eq!(arp.len(), 8); // eight eighths in the bar
     assert_eq!(arp[0].note, 48);
     assert_eq!(arp[1].note, 52);
     assert_eq!(arp[3].note, 48); // cycles
-    let strum = parse_progression("C", Meter::new(4, 4), &Key::default(), &ChordStyle::strum(30)).unwrap();
-    assert_eq!(strum.iter().map(|e| e.start).collect::<Vec<_>>(), vec![0, 30, 60]);
+    let strum = parse_progression(
+        "C",
+        Meter::new(4, 4),
+        &Key::default(),
+        &ChordStyle::strum(30),
+        3,
+    )
+    .unwrap();
+    assert_eq!(
+        strum.iter().map(|e| e.start).collect::<Vec<_>>(),
+        vec![0, 30, 60]
+    );
 }
 
 #[test]
@@ -207,7 +247,8 @@ fn swing_delays_the_off_beat_eighths() {
 #[test]
 fn a_score_has_a_length() {
     let mut s = Score::new(120.0, Meter::new(4, 4));
-    s.tracks.push(Track::new("lead", "piano", notes("C4:1 D4:1")));
+    s.tracks
+        .push(Track::new("lead", "piano", notes("C4:1 D4:1")));
     assert_eq!(s.length_ticks(), 2 * BAR);
     assert!((s.length_seconds() - 4.0).abs() < 1e-9);
 }

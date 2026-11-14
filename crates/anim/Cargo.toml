@@ -14,5 +14,6 @@ jit = ["animscript-lang/jit"]
 animscript-core.workspace = true
 animscript-lang.workspace = true
 animscript-render.workspace = true
+animscript-audio.workspace = true
 clap.workspace = true
 serde_json.workspace = true

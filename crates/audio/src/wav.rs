@@ -17,7 +17,10 @@ impl Wav {
     /// One channel as a mono signal (the mean of all channels when `channel` is `None`).
     pub fn mono(&self) -> Vec<f32> {
         let c = self.channels.max(1);
-        self.data.chunks(c).map(|f| f.iter().sum::<f32>() / c as f32).collect()
+        self.data
+            .chunks(c)
+            .map(|f| f.iter().sum::<f32>() / c as f32)
+            .collect()
     }
 }
 
@@ -52,7 +55,8 @@ pub fn read_wav(bytes: &[u8]) -> Result<Wav, String> {
         return Err("not a WAV file".into());
     }
     let u16_at = |i: usize| u16::from_le_bytes([bytes[i], bytes[i + 1]]);
-    let u32_at = |i: usize| u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
+    let u32_at =
+        |i: usize| u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
     let (mut fmt, mut data): (Option<(u16, usize, u32, u16)>, Option<&[u8]>) = (None, None);
     let mut loop_points = None;
     let mut i = 12;
@@ -67,11 +71,19 @@ pub fn read_wav(bytes: &[u8]) -> Result<Wav, String> {
                 if tag == 0xFFFE && end - body >= 26 {
                     tag = u16_at(body + 24); // WAVE_FORMAT_EXTENSIBLE: the sub-format's first two bytes
                 }
-                fmt = Some((tag, u16_at(body + 2) as usize, u32_at(body + 4), u16_at(body + 14)));
+                fmt = Some((
+                    tag,
+                    u16_at(body + 2) as usize,
+                    u32_at(body + 4),
+                    u16_at(body + 14),
+                ));
             }
             b"data" => data = Some(&bytes[body..end]),
             b"smpl" if end - body >= 36 + 24 && u32_at(body + 28) >= 1 => {
-                loop_points = Some((u32_at(body + 36 + 8) as usize, u32_at(body + 36 + 12) as usize));
+                loop_points = Some((
+                    u32_at(body + 36 + 8) as usize,
+                    u32_at(body + 36 + 12) as usize,
+                ));
             }
             _ => {}
         }
@@ -84,11 +96,32 @@ pub fn read_wav(bytes: &[u8]) -> Result<Wav, String> {
     }
     let samples: Vec<f32> = match (tag, bits) {
         (1, 8) => data.iter().map(|b| (*b as f32 - 128.0) / 128.0).collect(),
-        (1, 16) => data.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0).collect(),
-        (1, 24) => data.chunks_exact(3).map(|c| (i32::from_le_bytes([0, c[0], c[1], c[2]]) >> 8) as f32 / 8_388_608.0).collect(),
-        (1, 32) => data.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f32 / 2_147_483_648.0).collect(),
-        (3, 32) => data.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect(),
-        _ => return Err(format!("unsupported WAV format (tag {tag}, {bits} bits); use PCM 8/16/24/32 or float32")),
+        (1, 16) => data
+            .chunks_exact(2)
+            .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0)
+            .collect(),
+        (1, 24) => data
+            .chunks_exact(3)
+            .map(|c| (i32::from_le_bytes([0, c[0], c[1], c[2]]) >> 8) as f32 / 8_388_608.0)
+            .collect(),
+        (1, 32) => data
+            .chunks_exact(4)
+            .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f32 / 2_147_483_648.0)
+            .collect(),
+        (3, 32) => data
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect(),
+        _ => {
+            return Err(format!(
+                "unsupported WAV format (tag {tag}, {bits} bits); use PCM 8/16/24/32 or float32"
+            ))
+        }
     };
-    Ok(Wav { rate, channels, data: samples, loop_points })
+    Ok(Wav {
+        rate,
+        channels,
+        data: samples,
+        loop_points,
+    })
 }

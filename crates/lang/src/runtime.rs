@@ -27,6 +27,8 @@ pub struct RunResult {
     pub trace: Vec<String>,
     /// Scenes, timed items, notes and declarations with their source lines (see `journal.rs`).
     pub journal: crate::journal::Journal,
+    /// Scores and the `play`/`stop` cues of the run (see `audio.rs`).
+    pub audio: crate::audio::AudioOut,
 }
 
 struct ActComp {
@@ -280,13 +282,23 @@ fn run_in_here(
             break;
         }
     }
+    let nticks;
     Ok((
         RunResult {
-            snapshots: rt.snapshots,
+            snapshots: {
+                nticks = rt.snapshots.len();
+                rt.snapshots
+            },
             hashes: rt.hashes,
             diagnostics: rt.it.diagnostics,
             trace: rt.it.trace,
             journal: rt.it.journal,
+            audio: crate::audio::AudioOut {
+                scores: rt.it.scores,
+                cues: rt.it.audio_cues,
+                fps: rt.it.fps.to_f64(),
+                ticks: nticks,
+            },
         },
         err,
     ))
@@ -408,6 +420,7 @@ impl Runtime {
         let mut n = 0i64;
         loop {
             self.it.tick = n;
+            self.it.project_tick = self.project_tick;
             self.it.delta = 0;
             self.ingest();
             if frames.is_some_and(|f| n >= f) {

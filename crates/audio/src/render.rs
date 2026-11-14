@@ -28,7 +28,10 @@ impl Bank {
         Ok(())
     }
     pub fn names(&self) -> Vec<String> {
-        let mut v: Vec<String> = crate::synth::BUILTIN_NAMES.iter().map(|s| s.to_string()).collect();
+        let mut v: Vec<String> = crate::synth::BUILTIN_NAMES
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         v.extend(self.extra.keys().cloned());
         v.sort();
         v.dedup();
@@ -50,7 +53,15 @@ pub struct Mix {
 }
 impl Default for Mix {
     fn default() -> Mix {
-        Mix { rate: 44100, reverb: 0.0, room: 0.6, delay: 0.0, delay_time: 0.375, delay_feedback: 0.4, master: 1.0 }
+        Mix {
+            rate: 44100,
+            reverb: 0.0,
+            room: 0.6,
+            delay: 0.0,
+            delay_time: 0.375,
+            delay_feedback: 0.4,
+            master: 1.0,
+        }
     }
 }
 
@@ -64,15 +75,28 @@ pub struct Stereo {
 /// An unknown instrument name is the only way rendering fails.
 pub fn render_score(score: &Score, mix: &Mix, bank: &Bank) -> Result<Stereo, String> {
     let rate = mix.rate as f64;
-    let tail = if mix.reverb > 0.0 { 2.5 } else if mix.delay > 0.0 { 1.5 } else { 0.6 };
+    let tail = if mix.reverb > 0.0 {
+        2.5
+    } else if mix.delay > 0.0 {
+        1.5
+    } else {
+        0.6
+    };
     let n = ((score.length_seconds() + tail) * rate).ceil() as usize;
     let (mut l, mut r) = (vec![0.0f32; n], vec![0.0f32; n]);
     for (ti, tr) in score.tracks.iter().enumerate() {
         let inst = bank.get(&tr.instrument).ok_or_else(|| {
-            format!("unknown instrument `{}` (built in: {})", tr.instrument, bank.names().join(", "))
+            format!(
+                "unknown instrument `{}` (built in: {})",
+                tr.instrument,
+                bank.names().join(", ")
+            )
         })?;
         let ang = (tr.pan.clamp(-1.0, 1.0) + 1.0) * std::f64::consts::FRAC_PI_4;
-        let (gl, gr) = ((ang.cos() * tr.volume * 0.9) as f32, (ang.sin() * tr.volume * 0.9) as f32);
+        let (gl, gr) = (
+            (ang.cos() * tr.volume * 0.9) as f32,
+            (ang.sin() * tr.volume * 0.9) as f32,
+        );
         for (ei, e) in tr.events.iter().enumerate() {
             let start = (ticks_to_seconds(e.start, score.tempo) * rate).round() as usize;
             let len = ticks_to_seconds(e.len, score.tempo);
@@ -89,7 +113,10 @@ pub fn render_score(score: &Score, mix: &Mix, bank: &Bank) -> Result<Stereo, Str
         }
     }
     if mix.delay > 0.0 {
-        let (dl, dr) = (delay(&l, rate, mix.delay_time, mix.delay_feedback), delay(&r, rate, mix.delay_time * 1.5, mix.delay_feedback));
+        let (dl, dr) = (
+            delay(&l, rate, mix.delay_time, mix.delay_feedback),
+            delay(&r, rate, mix.delay_time * 1.5, mix.delay_feedback),
+        );
         for i in 0..n {
             l[i] += dl[i] * mix.delay as f32;
             r[i] += dr[i] * mix.delay as f32;
@@ -108,7 +135,11 @@ pub fn render_score(score: &Score, mix: &Mix, bank: &Bank) -> Result<Stereo, Str
         l[i] = (l[i] * m).tanh();
         r[i] = (r[i] * m).tanh();
     }
-    Ok(Stereo { rate: mix.rate, left: l, right: r })
+    Ok(Stereo {
+        rate: mix.rate,
+        left: l,
+        right: r,
+    })
 }
 
 impl Stereo {
@@ -120,11 +151,16 @@ impl Stereo {
     }
     /// The root mean square of both channels over a time window (seconds).
     pub fn rms(&self, from: f64, to: f64) -> f64 {
-        let (a, b) = ((from * self.rate as f64) as usize, ((to * self.rate as f64) as usize).min(self.left.len()));
+        let (a, b) = (
+            (from * self.rate as f64) as usize,
+            ((to * self.rate as f64) as usize).min(self.left.len()),
+        );
         if b <= a {
             return 0.0;
         }
-        let s: f64 = (a..b).map(|i| (self.left[i] as f64).powi(2) + (self.right[i] as f64).powi(2)).sum();
+        let s: f64 = (a..b)
+            .map(|i| (self.left[i] as f64).powi(2) + (self.right[i] as f64).powi(2))
+            .sum();
         (s / (2 * (b - a)) as f64).sqrt()
     }
 }

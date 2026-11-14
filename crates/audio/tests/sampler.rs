@@ -10,7 +10,9 @@ const SR: u32 = 22050;
 /// A mono sine of `hz` lasting `secs`, as 16-bit WAV bytes (the stereo writer with both channels equal).
 fn sine_wav(hz: f64, secs: f64) -> Vec<u8> {
     let n = (SR as f64 * secs) as usize;
-    let x: Vec<f32> = (0..n).map(|i| (i as f64 / SR as f64 * hz * std::f64::consts::TAU).sin() as f32 * 0.8).collect();
+    let x: Vec<f32> = (0..n)
+        .map(|i| (i as f64 / SR as f64 * hz * std::f64::consts::TAU).sin() as f32 * 0.8)
+        .collect();
     write_wav16(SR, &x, &x)
 }
 fn crossings(x: &[f32], rate: f64) -> f64 {
@@ -18,7 +20,17 @@ fn crossings(x: &[f32], rate: f64) -> f64 {
 }
 fn zone(lo: u8, hi: u8, root: u8, hz: f64, lovel: u8, hivel: u8) -> Zone {
     let w = read_wav(&sine_wav(hz, 1.0)).unwrap();
-    Zone { lo_key: lo, hi_key: hi, lo_vel: lovel, hi_vel: hivel, root, rate: w.rate, data: Arc::new(w.mono()), loop_range: None, gain: 1.0 }
+    Zone {
+        lo_key: lo,
+        hi_key: hi,
+        lo_vel: lovel,
+        hi_vel: hivel,
+        root,
+        rate: w.rate,
+        data: Arc::new(w.mono()),
+        loop_range: None,
+        gain: 1.0,
+    }
 }
 
 #[test]
@@ -27,7 +39,10 @@ fn a_sample_is_played_at_the_pitch_of_the_note() {
     let set = SampleSet::new(vec![zone(0, 127, 57, 220.0, 0, 127)]);
     let same = set.render(57, 1.0, 0.5, 44100.0);
     let up = set.render(69, 1.0, 0.5, 44100.0);
-    let (f1, f2) = (crossings(&same[..22000], 44100.0), crossings(&up[..22000], 44100.0));
+    let (f1, f2) = (
+        crossings(&same[..22000], 44100.0),
+        crossings(&up[..22000], 44100.0),
+    );
     assert!((f1 - 220.0).abs() < 6.0, "{f1}");
     assert!((f2 - 440.0).abs() < 10.0, "{f2}");
 }
@@ -46,7 +61,10 @@ fn zones_are_chosen_by_key_and_velocity() {
     let loud = set.pick(70, 0.9).unwrap().data.as_ptr();
     assert_ne!(soft, loud);
     // a key outside every zone takes the nearest root
-    let only_low = SampleSet::new(vec![zone(0, 50, 48, 130.0, 0, 127), zone(51, 60, 55, 196.0, 0, 127)]);
+    let only_low = SampleSet::new(vec![
+        zone(0, 50, 48, 130.0, 0, 127),
+        zone(51, 60, 55, 196.0, 0, 127),
+    ]);
     assert_eq!(only_low.pick(100, 0.5).unwrap().root, 55);
 }
 
@@ -58,7 +76,9 @@ fn a_loop_sustains_a_held_note_and_a_release_fades_it() {
     // the recording is one second; held for three, the loop keeps it going
     let long = set.render(60, 1.0, 3.0, 22050.0);
     assert!(long.len() as f64 / 22050.0 > 3.0);
-    let late: f32 = long[(2.8 * 22050.0) as usize..(2.9 * 22050.0) as usize].iter().fold(0.0, |m, v| m.max(v.abs()));
+    let late: f32 = long[(2.8 * 22050.0) as usize..(2.9 * 22050.0) as usize]
+        .iter()
+        .fold(0.0, |m, v| m.max(v.abs()));
     assert!(late > 0.3, "{late}");
     // without the loop it ends with the recording
     let set2 = SampleSet::new(vec![zone(0, 127, 60, 262.0, 0, 127)]);
@@ -70,7 +90,11 @@ fn a_loop_sustains_a_held_note_and_a_release_fades_it() {
 #[test]
 fn velocity_scales_a_sample() {
     let set = SampleSet::new(vec![zone(0, 127, 60, 262.0, 0, 127)]);
-    let pk = |v: f64| set.render(60, v, 0.2, 22050.0).iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    let pk = |v: f64| {
+        set.render(60, v, 0.2, 22050.0)
+            .iter()
+            .fold(0.0f32, |m, s| m.max(s.abs()))
+    };
     assert!(pk(1.0) > pk(0.4) * 2.0);
 }
 
@@ -102,11 +126,17 @@ fn an_sfz_file_maps_wavs_over_keys_and_velocities() {
     assert_eq!((low.lo_key, low.hi_key, low.root), (12, 59, 48));
     assert!((low.gain - 10f64.powf(-6.0 / 20.0)).abs() < 1e-9);
     let soft = &set.zones[1];
-    assert_eq!((soft.lo_key, soft.hi_key, soft.root, soft.hi_vel), (60, 108, 72, 64));
+    assert_eq!(
+        (soft.lo_key, soft.hi_key, soft.root, soft.hi_vel),
+        (60, 108, 72, 64)
+    );
     let loud = &set.zones[2];
     assert_eq!(loud.lo_vel, 65);
     assert_eq!(loud.loop_range, Some((1000, 9000)));
-    assert!((loud.gain - 1.0).abs() < 1e-9, "a region overrides its group's volume");
+    assert!(
+        (loud.gain - 1.0).abs() < 1e-9,
+        "a region overrides its group's volume"
+    );
     // a played note sounds
     let note = set.render(72, 0.5, 0.3, 44100.0);
     assert!(note.iter().any(|v| v.abs() > 0.05));
@@ -120,10 +150,16 @@ fn sfz_errors_say_what_is_wrong() {
     let e = load_sfz(&dir.join("missing.sfz")).err().unwrap();
     assert!(e.contains("nope.wav"), "{e}");
     std::fs::write(dir.join("empty.sfz"), "<region> key=c4\n").unwrap();
-    assert!(load_sfz(&dir.join("empty.sfz")).err().unwrap().contains("no regions"));
+    assert!(load_sfz(&dir.join("empty.sfz"))
+        .err()
+        .unwrap()
+        .contains("no regions"));
     std::fs::write(dir.join("a.wav"), sine_wav(100.0, 0.1)).unwrap();
     std::fs::write(dir.join("badkey.sfz"), "<region> sample=a.wav key=zz9\n").unwrap();
-    assert!(load_sfz(&dir.join("badkey.sfz")).err().unwrap().contains("key"));
+    assert!(load_sfz(&dir.join("badkey.sfz"))
+        .err()
+        .unwrap()
+        .contains("key"));
     assert!(load_sfz(&dir.join("absent.sfz")).is_err());
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -163,9 +199,16 @@ fn a_sampled_instrument_plays_in_a_score() {
     bank.load_sfz("my_sine", &dir.join("a.sfz")).unwrap();
     assert!(bank.names().contains(&"my_sine".to_string()));
     let mut s = Score::new(120.0, Meter::new(4, 4));
-    s.tracks.push(Track::new("t", "my_sine", parse_notes("A4:1/4", Meter::new(4, 4)).unwrap()));
+    s.tracks.push(Track::new(
+        "t",
+        "my_sine",
+        parse_notes("A4:1/4", Meter::new(4, 4)).unwrap(),
+    ));
     let st = render_score(&s, &Mix::default(), &bank).unwrap();
     assert!(st.rms(0.05, 0.4) > 0.05);
-    assert_eq!(st.to_wav(), render_score(&s, &Mix::default(), &bank).unwrap().to_wav());
+    assert_eq!(
+        st.to_wav(),
+        render_score(&s, &Mix::default(), &bank).unwrap().to_wav()
+    );
     std::fs::remove_dir_all(&dir).ok();
 }

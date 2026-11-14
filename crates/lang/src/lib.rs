@@ -2,6 +2,7 @@
 #![allow(clippy::result_large_err)]
 
 pub mod ast;
+pub mod audio;
 pub mod check;
 pub mod color;
 pub mod defs;

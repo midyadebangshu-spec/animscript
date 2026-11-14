@@ -202,6 +202,14 @@ impl Parser {
                         span: start,
                     });
                 }
+                T::Ident(s)
+                    if s == "score"
+                        && matches!(&self.peek_at(1).t, T::Ident(_))
+                        && matches!(&self.peek_at(2).t, T::Op(":")) =>
+                {
+                    let sc = self.score()?;
+                    prog.scores.push(sc);
+                }
                 T::Ident(s) if s == "armature" && matches!(&self.peek_at(1).t, T::Ident(_)) => {
                     let a = self.armature()?;
                     prog.armatures.push(a);
@@ -419,6 +427,68 @@ impl Parser {
             Ok(())
         })?;
         Ok(w)
+    }
+
+    /// `score name:` then indented settings lines (`tempo: 96, key: "A minor"`) and `track name: key: value, ...` lines.
+    fn score(&mut self) -> Res<ScoreDecl> {
+        let start = self.next().span;
+        let name = self.ident("a score name")?;
+        self.expect_op(":")?;
+        if !matches!(self.peek().t, T::Newline) {
+            return self.err("expected an indented block of settings and `track` lines");
+        }
+        self.next();
+        if !matches!(self.peek().t, T::Indent) {
+            return self.err("expected an indented block");
+        }
+        self.next();
+        let (mut settings, mut tracks) = (vec![], vec![]);
+        loop {
+            self.skip_newlines();
+            if matches!(self.peek().t, T::Dedent | T::Eof) {
+                break;
+            }
+            let span = self.peek().span;
+            let is_track = matches!(&self.peek().t, T::Ident(s) if s == "track")
+                && matches!(&self.peek_at(1).t, T::Ident(_));
+            let mut tname = String::new();
+            if is_track {
+                self.next();
+                tname = self.ident("a track name")?;
+                self.expect_op(":")?;
+            }
+            let mut attrs = vec![];
+            loop {
+                let aspan = self.peek().span;
+                let key = self.ident("a setting name")?;
+                self.expect_op(":")?;
+                let e = self.expr()?;
+                attrs.push((key, e, aspan));
+                if !self.eat_op(",") {
+                    break;
+                }
+            }
+            self.end_stmt()?;
+            if is_track {
+                tracks.push(ArmItem {
+                    kind: "track".into(),
+                    name: tname,
+                    attrs,
+                    span,
+                });
+            } else {
+                settings.extend(attrs);
+            }
+        }
+        if matches!(self.peek().t, T::Dedent) {
+            self.next();
+        }
+        Ok(ScoreDecl {
+            name,
+            settings,
+            tracks,
+            span: start,
+        })
     }
 
     /// `armature name:` then indented `bone name: key: value, key: value` and `ik name: ...` lines.

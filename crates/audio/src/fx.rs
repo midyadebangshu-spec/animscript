@@ -7,7 +7,11 @@ struct Comb {
 }
 impl Comb {
     fn new(n: usize) -> Comb {
-        Comb { buf: vec![0.0; n.max(1)], i: 0, store: 0.0 }
+        Comb {
+            buf: vec![0.0; n.max(1)],
+            i: 0,
+            store: 0.0,
+        }
     }
     fn process(&mut self, x: f64, feedback: f64, damp: f64) -> f64 {
         let y = self.buf[self.i];
@@ -23,7 +27,10 @@ struct Allpass {
 }
 impl Allpass {
     fn new(n: usize) -> Allpass {
-        Allpass { buf: vec![0.0; n.max(1)], i: 0 }
+        Allpass {
+            buf: vec![0.0; n.max(1)],
+            i: 0,
+        }
     }
     fn process(&mut self, x: f64) -> f64 {
         let b = self.buf[self.i];
@@ -49,13 +56,24 @@ impl Reverb {
         let ap_len = [556, 441, 341, 225];
         let mk = |spread: usize| {
             (
-                combs_len.iter().map(|n| Comb::new(((n + spread) as f64 * scale) as usize)).collect::<Vec<_>>(),
-                ap_len.iter().map(|n| Allpass::new(((n + spread) as f64 * scale) as usize)).collect::<Vec<_>>(),
+                combs_len
+                    .iter()
+                    .map(|n| Comb::new(((n + spread) as f64 * scale) as usize))
+                    .collect::<Vec<_>>(),
+                ap_len
+                    .iter()
+                    .map(|n| Allpass::new(((n + spread) as f64 * scale) as usize))
+                    .collect::<Vec<_>>(),
             )
         };
         let (cl, al) = mk(0);
         let (cr, ar) = mk(23);
-        Reverb { combs: [cl, cr], allpass: [al, ar], feedback: 0.7 + 0.28 * room.clamp(0.0, 1.0), damp: damp.clamp(0.0, 0.95) }
+        Reverb {
+            combs: [cl, cr],
+            allpass: [al, ar],
+            feedback: 0.7 + 0.28 * room.clamp(0.0, 1.0),
+            damp: damp.clamp(0.0, 0.95),
+        }
     }
 
     /// Reverberate a stereo signal; returns the wet signal only.

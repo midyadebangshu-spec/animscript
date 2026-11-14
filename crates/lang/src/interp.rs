@@ -322,6 +322,10 @@ pub struct Interp {
     pub transition: Option<crate::snapshot::Transition>,
     /// Last solved bone poses `(head, tip, angle)` keyed `armature.bone`.
     pub rig_live: BTreeMap<String, (P, P, f64)>,
+    pub scores: BTreeMap<String, crate::audio::ScoreDef>,
+    pub audio_cues: Vec<crate::audio::AudioCue>,
+    /// Ticks since the project began (scene ticks restart; this does not).
+    pub project_tick: i64,
     pub rigs3: BTreeMap<String, crate::rig3::Rig3Def>,
     pub rig3_sim: Option<crate::rig3::Rig3Sim>,
     pub rig3_live: BTreeMap<String, ([f64; 3], [f64; 3])>,
@@ -436,6 +440,9 @@ impl Interp {
             shot_name: None,
             transition: None,
             rig_live: BTreeMap::new(),
+            scores: BTreeMap::new(),
+            audio_cues: vec![],
+            project_tick: 0,
             rigs3: BTreeMap::new(),
             rig3_sim: None,
             rig3_live: BTreeMap::new(),
@@ -496,6 +503,7 @@ impl Interp {
     pub fn build(&mut self) -> Res<()> {
         self.eval_world()?;
         self.eval_armatures()?; // before the top-level code, which binds shapes to bones
+        self.eval_scores()?;
         let block: Block = Rc::new(self.program.top.clone());
         let mut t = Task::new(0, block, Vars::new(), Mode::Build, false);
         self.run_sync(&mut t)?;
@@ -1857,6 +1865,9 @@ impl Interp {
         if self.rigs.contains_key(n) || self.rigs3.contains_key(n) {
             return Ok(Value::Armature(n.to_string()));
         }
+        if self.scores.contains_key(n) {
+            return Ok(Value::Score(n.to_string()));
+        }
         if let Some(e) = Ease::from_name(n) {
             return Ok(Value::Ease(e));
         }
@@ -2053,6 +2064,7 @@ impl Interp {
                 ),
             },
             Value::Armature(arm) => self.armature_member(&arm, name),
+            Value::Score(sc) => self.score_member(&sc, name),
             Value::Fluid(fname) if name == "count" => {
                 Ok(Value::Int(self.fluid_count(&fname) as i64))
             }
@@ -2369,6 +2381,7 @@ impl Interp {
             "plot" | "curve" | "polar" | "implicit" => self.math_shape(name, args),
             "cube" | "sphere" | "cylinder" | "cone" | "plane" | "lathe" | "extrude" | "stage3" | "focal3" => self.mesh_builtin(name, args),
             "sun_light" | "point_light" | "spot_light" | "ambient_light" => self.light_builtin(name, args),
+            "play" | "stop" => self.audio_call(name, None, args, _mode),
             "line" => {
                 let m = self.bind(name, args, &["a", "b"], &["a", "b"])?;
                 Ok(Value::Fresh(Box::new(line(self.point(&m["a"], "`a`")?, self.point(&m["b"], "`b`")?))))
@@ -2649,6 +2662,10 @@ impl Interp {
         if let (Value::Shape(sn), true) = (&obj, Interp::is_rig_method(name)) {
             let sn = sn.clone();
             return self.rig_method(&sn, name, args, mode, span);
+        }
+        if let (Value::Score(sc), "play" | "stop") = (&obj, name) {
+            let sc = sc.clone();
+            return self.audio_call(name, Some(sc), args, mode);
         }
         if let (Value::Armature(arm), "ragdoll" | "animate") = (&obj, name) {
             let arm = arm.clone();

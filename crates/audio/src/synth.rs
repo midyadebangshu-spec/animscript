@@ -152,28 +152,72 @@ pub struct SubDef {
 pub enum Instrument {
     Sub(SubDef),
     /// A plucked string (Karplus-Strong): `decay` per round trip (0.99 rings long), `bright` 0 to 1.
-    Pluck { decay: f64, bright: f64 },
+    Pluck {
+        decay: f64,
+        bright: f64,
+    },
     /// Frequency modulation: carrier at the note, modulator at `ratio` times it, modulation `index` fading with `fade` seconds.
-    Fm { ratio: f64, index: f64, fade: f64, amp: Adsr },
+    Fm {
+        ratio: f64,
+        index: f64,
+        fade: f64,
+        amp: Adsr,
+    },
     /// Partials as (multiple of the note, gain, decay seconds; 0 = held).
-    Additive { partials: Vec<(f64, f64, f64)>, amp: Adsr },
+    Additive {
+        partials: Vec<(f64, f64, f64)>,
+        amp: Adsr,
+    },
     Drums,
     /// Recorded notes (see `sampler`).
     Sampled(crate::sampler::SampleSet),
 }
 
-fn sub(layers: Vec<Layer>, amp: Adsr, cutoff: f64, key_track: f64, q: f64, filt_env: f64, filt_adsr: Adsr) -> SubDef {
-    SubDef { layers, amp, cutoff, key_track, q, filt_env, filt_adsr, vib_rate: 0.0, vib_cents: 0.0, vib_delay: 0.0, noise: 0.0 }
+fn sub(
+    layers: Vec<Layer>,
+    amp: Adsr,
+    cutoff: f64,
+    key_track: f64,
+    q: f64,
+    filt_env: f64,
+    filt_adsr: Adsr,
+) -> SubDef {
+    SubDef {
+        layers,
+        amp,
+        cutoff,
+        key_track,
+        q,
+        filt_env,
+        filt_adsr,
+        vib_rate: 0.0,
+        vib_cents: 0.0,
+        vib_delay: 0.0,
+        noise: 0.0,
+    }
 }
 fn l(wave: Wave, detune: f64, gain: f64, octave: i32) -> Layer {
-    Layer { wave, detune_cents: detune, gain, octave }
+    Layer {
+        wave,
+        detune_cents: detune,
+        gain,
+        octave,
+    }
 }
 
 /// The built-in instruments by name.
 pub fn builtin(name: &str) -> Option<Instrument> {
     let flat = Adsr::new(0.0, 0.0, 1.0, 0.0);
     Some(match name {
-        "sine" => Instrument::Sub(sub(vec![l(Wave::Sine, 0.0, 1.0, 0)], Adsr::new(0.01, 0.0, 1.0, 0.15), 20000.0, 0.0, 0.7, 0.0, flat)),
+        "sine" => Instrument::Sub(sub(
+            vec![l(Wave::Sine, 0.0, 1.0, 0)],
+            Adsr::new(0.01, 0.0, 1.0, 0.15),
+            20000.0,
+            0.0,
+            0.7,
+            0.0,
+            flat,
+        )),
         "saw_lead" => Instrument::Sub(sub(
             vec![l(Wave::Saw, -7.0, 0.5, 0), l(Wave::Saw, 7.0, 0.5, 0)],
             Adsr::new(0.01, 0.1, 0.8, 0.2),
@@ -183,13 +227,25 @@ pub fn builtin(name: &str) -> Option<Instrument> {
             1.5,
             Adsr::new(0.01, 0.25, 0.4, 0.2),
         )),
-        "square_lead" => Instrument::Sub(sub(vec![l(Wave::Square, 0.0, 1.0, 0)], Adsr::new(0.01, 0.1, 0.8, 0.15), 3000.0, 0.7, 1.0, 1.0, Adsr::new(0.0, 0.2, 0.5, 0.15))),
+        "square_lead" => Instrument::Sub(sub(
+            vec![l(Wave::Square, 0.0, 1.0, 0)],
+            Adsr::new(0.01, 0.1, 0.8, 0.15),
+            3000.0,
+            0.7,
+            1.0,
+            1.0,
+            Adsr::new(0.0, 0.2, 0.5, 0.15),
+        )),
         "pad" | "strings" | "synth_strings" => Instrument::Sub(SubDef {
             vib_rate: 5.0,
             vib_cents: 6.0,
             vib_delay: 0.3,
             ..sub(
-                vec![l(Wave::Saw, -9.0, 0.35, 0), l(Wave::Saw, 0.0, 0.35, 0), l(Wave::Saw, 9.0, 0.35, 0)],
+                vec![
+                    l(Wave::Saw, -9.0, 0.35, 0),
+                    l(Wave::Saw, 0.0, 0.35, 0),
+                    l(Wave::Saw, 9.0, 0.35, 0),
+                ],
                 Adsr::new(0.5, 0.4, 0.85, 0.7),
                 2200.0,
                 0.6,
@@ -199,7 +255,11 @@ pub fn builtin(name: &str) -> Option<Instrument> {
             )
         }),
         "synth_bass" | "bass" => Instrument::Sub(sub(
-            vec![l(Wave::Saw, 0.0, 0.6, 0), l(Wave::Square, 0.0, 0.3, -1), l(Wave::Sine, 0.0, 0.5, -1)],
+            vec![
+                l(Wave::Saw, 0.0, 0.6, 0),
+                l(Wave::Square, 0.0, 0.3, -1),
+                l(Wave::Sine, 0.0, 0.5, -1),
+            ],
             Adsr::new(0.005, 0.15, 0.7, 0.1),
             900.0,
             0.5,
@@ -211,37 +271,97 @@ pub fn builtin(name: &str) -> Option<Instrument> {
             vib_rate: 5.5,
             vib_cents: 5.0,
             vib_delay: 0.4,
-            ..sub(vec![l(Wave::Saw, -4.0, 0.5, 0), l(Wave::Saw, 4.0, 0.5, 0)], Adsr::new(0.08, 0.15, 0.8, 0.15), 1800.0, 0.8, 0.9, 2.0, Adsr::new(0.08, 0.2, 0.6, 0.15))
+            ..sub(
+                vec![l(Wave::Saw, -4.0, 0.5, 0), l(Wave::Saw, 4.0, 0.5, 0)],
+                Adsr::new(0.08, 0.15, 0.8, 0.15),
+                1800.0,
+                0.8,
+                0.9,
+                2.0,
+                Adsr::new(0.08, 0.2, 0.6, 0.15),
+            )
         }),
         "flute" => Instrument::Sub(SubDef {
             vib_rate: 5.0,
             vib_cents: 8.0,
             vib_delay: 0.25,
             noise: 0.04,
-            ..sub(vec![l(Wave::Tri, 0.0, 1.0, 0)], Adsr::new(0.06, 0.05, 0.9, 0.12), 4000.0, 1.0, 0.8, 0.0, flat)
+            ..sub(
+                vec![l(Wave::Tri, 0.0, 1.0, 0)],
+                Adsr::new(0.06, 0.05, 0.9, 0.12),
+                4000.0,
+                1.0,
+                0.8,
+                0.0,
+                flat,
+            )
         }),
         "violin" => Instrument::Sub(SubDef {
             vib_rate: 5.8,
             vib_cents: 14.0,
             vib_delay: 0.2,
             noise: 0.01,
-            ..sub(vec![l(Wave::Saw, -3.0, 0.5, 0), l(Wave::Saw, 3.0, 0.5, 0)], Adsr::new(0.09, 0.1, 0.85, 0.2), 3200.0, 0.9, 0.8, 1.0, Adsr::new(0.09, 0.2, 0.7, 0.2))
+            ..sub(
+                vec![l(Wave::Saw, -3.0, 0.5, 0), l(Wave::Saw, 3.0, 0.5, 0)],
+                Adsr::new(0.09, 0.1, 0.85, 0.2),
+                3200.0,
+                0.9,
+                0.8,
+                1.0,
+                Adsr::new(0.09, 0.2, 0.7, 0.2),
+            )
         }),
         "cello" => Instrument::Sub(SubDef {
             vib_rate: 5.2,
             vib_cents: 12.0,
             vib_delay: 0.25,
-            ..sub(vec![l(Wave::Saw, -3.0, 0.5, 0), l(Wave::Saw, 3.0, 0.5, 0)], Adsr::new(0.1, 0.1, 0.85, 0.25), 1500.0, 0.8, 0.8, 1.0, Adsr::new(0.1, 0.2, 0.7, 0.25))
+            ..sub(
+                vec![l(Wave::Saw, -3.0, 0.5, 0), l(Wave::Saw, 3.0, 0.5, 0)],
+                Adsr::new(0.1, 0.1, 0.85, 0.25),
+                1500.0,
+                0.8,
+                0.8,
+                1.0,
+                Adsr::new(0.1, 0.2, 0.7, 0.25),
+            )
         }),
-        "pluck" | "guitar" | "harp" => Instrument::Pluck { decay: 0.996, bright: 0.6 },
-        "bell" => Instrument::Fm { ratio: 3.5, index: 5.0, fade: 1.2, amp: Adsr::new(0.002, 1.5, 0.0, 0.5) },
-        "epiano" => Instrument::Fm { ratio: 1.0, index: 2.0, fade: 0.6, amp: Adsr::new(0.003, 1.0, 0.2, 0.3) },
+        "pluck" | "guitar" | "harp" => Instrument::Pluck {
+            decay: 0.996,
+            bright: 0.6,
+        },
+        "bell" => Instrument::Fm {
+            ratio: 3.5,
+            index: 5.0,
+            fade: 1.2,
+            amp: Adsr::new(0.002, 1.5, 0.0, 0.5),
+        },
+        "epiano" => Instrument::Fm {
+            ratio: 1.0,
+            index: 2.0,
+            fade: 0.6,
+            amp: Adsr::new(0.003, 1.0, 0.2, 0.3),
+        },
         "organ" => Instrument::Additive {
-            partials: vec![(0.5, 0.6, 0.0), (1.0, 1.0, 0.0), (2.0, 0.8, 0.0), (3.0, 0.5, 0.0), (4.0, 0.4, 0.0), (6.0, 0.25, 0.0), (8.0, 0.2, 0.0)],
+            partials: vec![
+                (0.5, 0.6, 0.0),
+                (1.0, 1.0, 0.0),
+                (2.0, 0.8, 0.0),
+                (3.0, 0.5, 0.0),
+                (4.0, 0.4, 0.0),
+                (6.0, 0.25, 0.0),
+                (8.0, 0.2, 0.0),
+            ],
             amp: Adsr::new(0.01, 0.0, 1.0, 0.08),
         },
         "piano" => Instrument::Additive {
-            partials: vec![(1.0, 1.0, 1.8), (2.0, 0.55, 1.2), (3.0, 0.35, 0.9), (4.0, 0.25, 0.7), (5.0, 0.15, 0.5), (6.0, 0.1, 0.4)],
+            partials: vec![
+                (1.0, 1.0, 1.8),
+                (2.0, 0.55, 1.2),
+                (3.0, 0.35, 0.9),
+                (4.0, 0.25, 0.7),
+                (5.0, 0.15, 0.5),
+                (6.0, 0.1, 0.4),
+            ],
             amp: Adsr::new(0.003, 0.0, 1.0, 0.25),
         },
         "drumkit" | "drums" => Instrument::Drums,
@@ -250,8 +370,27 @@ pub fn builtin(name: &str) -> Option<Instrument> {
 }
 
 pub const BUILTIN_NAMES: &[&str] = &[
-    "sine", "saw_lead", "square_lead", "pad", "strings", "synth_strings", "synth_bass", "bass", "brass", "flute", "violin", "cello", "pluck", "guitar", "harp", "bell", "epiano",
-    "organ", "piano", "drumkit", "drums",
+    "sine",
+    "saw_lead",
+    "square_lead",
+    "pad",
+    "strings",
+    "synth_strings",
+    "synth_bass",
+    "bass",
+    "brass",
+    "flute",
+    "violin",
+    "cello",
+    "pluck",
+    "guitar",
+    "harp",
+    "bell",
+    "epiano",
+    "organ",
+    "piano",
+    "drumkit",
+    "drums",
 ];
 
 fn gm_drum(note: u8, rate: f64, vel: f64, seed: u64) -> Vec<f32> {
@@ -323,7 +462,8 @@ fn gm_drum(note: u8, rate: f64, vel: f64, seed: u64) -> Vec<f32> {
             for i in 0..len(0.25) {
                 let t = i as f64 / rate;
                 let burst = ((t * 100.0) % 1.0 < 0.3 && t < 0.03) as u8 as f64;
-                let env = burst * (-(t % 0.01) * 300.0).exp() + (-t * 18.0).exp() * 0.5 * (t >= 0.03) as u8 as f64;
+                let env = burst * (-(t % 0.01) * 300.0).exp()
+                    + (-t * 18.0).exp() * 0.5 * (t >= 0.03) as u8 as f64;
                 out.push((n.next() * env * 0.7) as f32 * vel as f32);
             }
         }
@@ -333,7 +473,10 @@ fn gm_drum(note: u8, rate: f64, vel: f64, seed: u64) -> Vec<f32> {
             for i in 0..len(0.08) {
                 let t = i as f64 / rate;
                 ph += 820.0 / rate;
-                out.push((((ph * TAU).sin() * 0.6 + n.next() * 0.4) * (-t * 80.0).exp()) as f32 * vel as f32);
+                out.push(
+                    (((ph * TAU).sin() * 0.6 + n.next() * 0.4) * (-t * 80.0).exp()) as f32
+                        * vel as f32,
+                );
             }
         }
     }
@@ -341,7 +484,14 @@ fn gm_drum(note: u8, rate: f64, vel: f64, seed: u64) -> Vec<f32> {
 }
 
 /// Render one note (`len` seconds held) to a mono buffer, including its release.
-pub fn render_note(inst: &Instrument, note: u8, vel: f64, len: f64, rate: f64, seed: u64) -> Vec<f32> {
+pub fn render_note(
+    inst: &Instrument,
+    note: u8,
+    vel: f64,
+    len: f64,
+    rate: f64,
+    seed: u64,
+) -> Vec<f32> {
     let hz = midi_hz(note as f64);
     let amp_vel = vel.clamp(0.0, 1.0).powf(1.2);
     match inst {
@@ -373,7 +523,9 @@ pub fn render_note(inst: &Instrument, note: u8, vel: f64, len: f64, rate: f64, s
                 s += noise.next() * d.noise;
                 let env = d.amp.level(t, len);
                 let fe = d.filt_adsr.level(t, len);
-                let cutoff = d.cutoff * (hz / 261.63).powf(d.key_track) * 2f64.powf(d.filt_env * (fe - 0.5) * 2.0);
+                let cutoff = d.cutoff
+                    * (hz / 261.63).powf(d.key_track)
+                    * 2f64.powf(d.filt_env * (fe - 0.5) * 2.0);
                 let y = lp.process(s, cutoff.clamp(40.0, rate * 0.45), d.q, rate);
                 out.push((y * env * amp_vel * 0.5) as f32);
             }
@@ -399,7 +551,12 @@ pub fn render_note(inst: &Instrument, note: u8, vel: f64, len: f64, rate: f64, s
             }
             out
         }
-        Instrument::Fm { ratio, index, fade, amp } => {
+        Instrument::Fm {
+            ratio,
+            index,
+            fade,
+            amp,
+        } => {
             let n = ((len + amp.r) * rate).ceil() as usize;
             let (mut pc, mut pm) = (0.0, 0.0);
             let mut out = Vec::with_capacity(n);

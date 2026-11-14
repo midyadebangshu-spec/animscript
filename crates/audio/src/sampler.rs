@@ -26,7 +26,10 @@ pub struct SampleSet {
 
 impl SampleSet {
     pub fn new(zones: Vec<Zone>) -> SampleSet {
-        SampleSet { zones, release: 0.25 }
+        SampleSet {
+            zones,
+            release: 0.25,
+        }
     }
 
     /// The zone for a note and velocity (0 to 1): the first whose key and velocity ranges contain it, else the
@@ -46,7 +49,9 @@ impl SampleSet {
     }
 
     pub fn render(&self, note: u8, vel: f64, len: f64, rate: f64) -> Vec<f32> {
-        let Some(z) = self.pick(note, vel) else { return vec![] };
+        let Some(z) = self.pick(note, vel) else {
+            return vec![];
+        };
         let step = 2f64.powf((note as f64 - z.root as f64) / 12.0) * z.rate as f64 / rate;
         let total = ((len + self.release) * rate).ceil() as usize;
         let gain = vel.clamp(0.0, 1.0).powf(1.2) * z.gain;

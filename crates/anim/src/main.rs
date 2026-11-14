@@ -36,6 +36,16 @@ enum Cmd {
         #[arg(long)]
         hash: bool,
     },
+    /// Render the project's soundtrack (every `play(...)` of every `score`) to a WAV file.
+    Audio {
+        file: PathBuf,
+        /// Output WAV file.
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Sample rate (default: the score's, 44100).
+        #[arg(long)]
+        rate: Option<u32>,
+    },
     /// Render every tick to PNGs `f0000.png`, `f0001.png`... in a directory, simulating only once
     /// (much faster than calling `render` per tick for physics scenes).
     Frames {
@@ -112,6 +122,46 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             } else {
                 ExitCode::SUCCESS
+            }
+        }
+        Cmd::Audio { file, out, rate } => {
+            let src = match read(&file) {
+                Ok(s) => s,
+                Err(c) => return c,
+            };
+            let name = file.display().to_string();
+            let base = base_of(&file);
+            match run_in(&src, &RunOptions { trace: false, jit }, &base) {
+                Ok(r) => {
+                    for d in &r.diagnostics {
+                        eprintln!("{}", d.render(Some(&src), &name));
+                    }
+                    match animscript_lang::audio::render_project_audio(&r.audio, &base, rate) {
+                        Ok(st) => match std::fs::write(&out, st.to_wav()) {
+                            Ok(()) => {
+                                println!(
+                                    "wrote {} ({:.2} s, {} Hz)",
+                                    out.display(),
+                                    st.seconds(),
+                                    st.rate
+                                );
+                                ExitCode::SUCCESS
+                            }
+                            Err(e) => {
+                                eprintln!("cannot write {}: {e}", out.display());
+                                ExitCode::from(1)
+                            }
+                        },
+                        Err(e) => {
+                            eprintln!("error: {e}");
+                            ExitCode::from(1)
+                        }
+                    }
+                }
+                Err(d) => {
+                    eprint!("{}", d.render(Some(&src), &name));
+                    ExitCode::from(1)
+                }
             }
         }
         Cmd::Run { file, trace, hash } => {

@@ -13,4 +13,5 @@ animscript-physics.workspace = true
 animscript-physics3.workspace = true
 animscript-brush.workspace = true
 animscript-math.workspace = true
+animscript-audio.workspace = true
 serde_json.workspace = true

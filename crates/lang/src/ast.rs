@@ -230,6 +230,15 @@ pub struct ArmatureDecl {
     pub span: Span,
 }
 
+/// `score name:` with settings lines and `track name: key: value, ...` lines.
+#[derive(Clone, Debug)]
+pub struct ScoreDecl {
+    pub name: String,
+    pub settings: Vec<(String, Expr, Span)>,
+    pub tracks: Vec<ArmItem>,
+    pub span: Span,
+}
+
 #[derive(Clone, Debug)]
 pub struct EntityDecl {
     pub kind: String,
@@ -340,6 +349,7 @@ pub struct Program {
     pub fluids: Vec<EmitterDecl>,
     pub fields: Vec<EmitterDecl>,
     pub armatures: Vec<ArmatureDecl>,
+    pub scores: Vec<ScoreDecl>,
     pub defs: Vec<Rc<Def>>,
     pub entities: Vec<EntityDecl>,
     pub top: Vec<Stmt>,

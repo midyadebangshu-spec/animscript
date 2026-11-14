@@ -13,7 +13,10 @@ fn zero_crossings(x: &[f32]) -> usize {
 }
 fn rough(x: &[f32]) -> f64 {
     // how much the signal wiggles: the mean absolute difference between neighbours, relative to its level
-    let d: f64 = x.windows(3).map(|w| (w[2] - 2.0 * w[1] + w[0]).abs() as f64).sum();
+    let d: f64 = x
+        .windows(3)
+        .map(|w| (w[2] - 2.0 * w[1] + w[0]).abs() as f64)
+        .sum();
     let a: f64 = x.iter().map(|v| v.abs() as f64).sum();
     d / a.max(1e-12)
 }
@@ -47,7 +50,10 @@ fn a_sine_has_the_pitch_it_was_asked_for() {
 
 #[test]
 fn velocity_sets_the_loudness_and_the_release_ends_in_silence() {
-    let (loud, soft) = (peak(&tone("sine", 60, 1.0, 0.5)), peak(&tone("sine", 60, 0.3, 0.5)));
+    let (loud, soft) = (
+        peak(&tone("sine", 60, 1.0, 0.5)),
+        peak(&tone("sine", 60, 0.3, 0.5)),
+    );
     assert!(loud > soft * 2.0, "{loud} {soft}");
     let x = tone("sine", 60, 1.0, 0.5);
     assert!(x.len() >= (0.5 * SR) as usize);
@@ -58,10 +64,20 @@ fn velocity_sets_the_loudness_and_the_release_ends_in_silence() {
 fn a_saw_is_brighter_than_a_sine_and_the_filter_darkens_it() {
     let sine = tone("sine", 57, 1.0, 0.5);
     let lead = tone("saw_lead", 57, 1.0, 0.5);
-    assert!(rough(&lead) > rough(&sine) * 2.0, "{} {}", rough(&lead), rough(&sine));
+    assert!(
+        rough(&lead) > rough(&sine) * 2.0,
+        "{} {}",
+        rough(&lead),
+        rough(&sine)
+    );
     // a pad's filter is lower than the lead's
     let pad = tone("pad", 57, 1.0, 1.0);
-    assert!(rough(&pad) < rough(&lead), "{} {}", rough(&pad), rough(&lead));
+    assert!(
+        rough(&pad) < rough(&lead),
+        "{} {}",
+        rough(&pad),
+        rough(&lead)
+    );
 }
 
 #[test]
@@ -82,7 +98,12 @@ fn drums_sound_like_what_they_are() {
     let kick = tone("drumkit", 36, 1.0, 0.2);
     let hat = tone("drumkit", 42, 1.0, 0.2);
     // a kick is low (slow wiggle), a hat is bright (fast wiggle) and short
-    assert!(rough(&hat) > rough(&kick) * 5.0, "{} {}", rough(&hat), rough(&kick));
+    assert!(
+        rough(&hat) > rough(&kick) * 5.0,
+        "{} {}",
+        rough(&hat),
+        rough(&kick)
+    );
     assert!(hat.len() < kick.len());
     let snare = tone("drumkit", 38, 1.0, 0.2);
     assert!(rough(&snare) > rough(&kick));
@@ -113,7 +134,11 @@ fn score_with(track: Track) -> Score {
     s
 }
 fn one_note(instrument: &str) -> Track {
-    Track::new("t", instrument, parse_notes("A4:1/2", Meter::new(4, 4)).unwrap())
+    Track::new(
+        "t",
+        instrument,
+        parse_notes("A4:1/2", Meter::new(4, 4)).unwrap(),
+    )
 }
 
 #[test]
@@ -151,35 +176,91 @@ fn track_volume_scales_the_level() {
 #[test]
 fn reverb_and_delay_add_a_tail() {
     let dry = render_score(&score_with(one_note("sine")), &Mix::default(), &Bank::new()).unwrap();
-    let wet = render_score(&score_with(one_note("sine")), &Mix { reverb: 0.4, ..Mix::default() }, &Bank::new()).unwrap();
+    let wet = render_score(
+        &score_with(one_note("sine")),
+        &Mix {
+            reverb: 0.4,
+            ..Mix::default()
+        },
+        &Bank::new(),
+    )
+    .unwrap();
     assert!(wet.rms(1.2, 2.2) > dry.rms(1.2, 2.2) + 1e-3);
-    let echo = render_score(&score_with(one_note("sine")), &Mix { delay: 0.6, delay_time: 0.5, ..Mix::default() }, &Bank::new()).unwrap();
-    assert!(echo.rms(1.1, 1.5) > 1e-3, "the delayed copy comes after the note ends");
+    let echo = render_score(
+        &score_with(one_note("sine")),
+        &Mix {
+            delay: 0.6,
+            delay_time: 0.5,
+            ..Mix::default()
+        },
+        &Bank::new(),
+    )
+    .unwrap();
+    assert!(
+        echo.rms(1.1, 1.5) > 1e-3,
+        "the delayed copy comes after the note ends"
+    );
 }
 
 #[test]
 fn the_output_never_leaves_the_range() {
     let mut s = Score::new(120.0, Meter::new(4, 4));
     for k in 0..8 {
-        s.tracks.push(Track::new("t", "saw_lead", parse_notes(&format!("[C{} E4 G4 C5]:1", 2 + k % 3), Meter::new(4, 4)).unwrap()));
+        s.tracks.push(Track::new(
+            "t",
+            "saw_lead",
+            parse_notes(&format!("[C{} E4 G4 C5]:1", 2 + k % 3), Meter::new(4, 4)).unwrap(),
+        ));
     }
-    let st = render_score(&s, &Mix { reverb: 0.3, ..Mix::default() }, &Bank::new()).unwrap();
+    let st = render_score(
+        &s,
+        &Mix {
+            reverb: 0.3,
+            ..Mix::default()
+        },
+        &Bank::new(),
+    )
+    .unwrap();
     assert!(peak(&st.left) <= 1.0 && peak(&st.right) <= 1.0);
     assert!(st.left.iter().all(|v| v.is_finite()));
 }
 
 #[test]
 fn an_unknown_instrument_is_an_error_that_lists_the_known_ones() {
-    let e = render_score(&score_with(one_note("kazoo")), &Mix::default(), &Bank::new()).unwrap_err();
+    let e = render_score(
+        &score_with(one_note("kazoo")),
+        &Mix::default(),
+        &Bank::new(),
+    )
+    .unwrap_err();
     assert!(e.contains("kazoo") && e.contains("piano"), "{e}");
 }
 
 #[test]
 fn rendering_is_deterministic_byte_for_byte() {
     let mut s = Score::new(110.0, Meter::new(4, 4));
-    s.tracks.push(Track::new("a", "pad", parse_progression("Am | F", Meter::new(4, 4), &Key::default(), &ChordStyle::block()).unwrap()));
-    s.tracks.push(Track::new("b", "drumkit", parse_beat("k.h.s.h.", 8, Meter::new(4, 4)).unwrap()));
-    let mix = Mix { reverb: 0.2, delay: 0.1, ..Mix::default() };
+    s.tracks.push(Track::new(
+        "a",
+        "pad",
+        parse_progression(
+            "Am | F",
+            Meter::new(4, 4),
+            &Key::default(),
+            &ChordStyle::block(),
+            3,
+        )
+        .unwrap(),
+    ));
+    s.tracks.push(Track::new(
+        "b",
+        "drumkit",
+        parse_beat("k.h.s.h.", 8, Meter::new(4, 4)).unwrap(),
+    ));
+    let mix = Mix {
+        reverb: 0.2,
+        delay: 0.1,
+        ..Mix::default()
+    };
     let a = render_score(&s, &mix, &Bank::new()).unwrap().to_wav();
     let b = render_score(&s, &mix, &Bank::new()).unwrap().to_wav();
     assert_eq!(a, b);
@@ -206,4 +287,87 @@ fn the_reader_handles_other_formats_and_rejects_junk() {
     assert!(read_wav(b"not a wav").is_err());
     b.truncate(20);
     assert!(read_wav(&b).is_err());
+}
+
+// ---- the mixer
+
+use animscript_audio::mixer::*;
+
+fn blip(rate: u32, secs: f64, level: f32) -> Stereo {
+    let n = (rate as f64 * secs) as usize;
+    Stereo {
+        rate,
+        left: vec![level; n],
+        right: vec![level; n],
+    }
+}
+
+#[test]
+fn cues_start_at_their_time_with_their_volume() {
+    let src = vec![blip(1000, 1.0, 0.5)];
+    let mut c = Cue::new(0, 2.0);
+    c.volume = 0.5;
+    let out = mix_cues(&src, &[c], 4.0, 1000);
+    assert_eq!(out.left.len(), 4000);
+    assert_eq!(out.left[1999], 0.0);
+    assert!((out.left[2000] - 0.25).abs() < 1e-6);
+    assert!((out.left[2999] - 0.25).abs() < 1e-6);
+    assert_eq!(out.left[3000], 0.0);
+}
+
+#[test]
+fn fades_ramp_the_gain() {
+    let src = vec![blip(1000, 2.0, 1.0)];
+    let mut c = Cue::new(0, 0.0);
+    c.fade_in = 1.0;
+    let out = mix_cues(&src, &[c], 2.0, 1000);
+    assert!((out.left[500] - 0.5).abs() < 1e-3);
+    assert!((out.left[1500] - 1.0).abs() < 1e-6);
+    // a stop with a fade out
+    let mut c = Cue::new(0, 0.0);
+    c.stop = Some(0.5);
+    c.fade_out = 0.5;
+    let out = mix_cues(&src, &[c], 2.0, 1000);
+    assert!((out.left[400] - 1.0).abs() < 1e-6);
+    assert!((out.left[750] - 0.5).abs() < 1e-3);
+    assert_eq!(out.left[1100], 0.0);
+}
+
+#[test]
+fn looping_repeats_until_stopped_or_the_end() {
+    let src = vec![blip(1000, 0.5, 1.0)];
+    let mut c = Cue::new(0, 0.0);
+    c.looping = true;
+    c.loop_len = 1.0;
+    c.stop = Some(2.5);
+    let out = mix_cues(&src, &[c], 5.0, 1000);
+    assert_eq!(out.left[250], 1.0);
+    assert_eq!(out.left[750], 0.0); // the gap after the half-second source
+    assert_eq!(out.left[1250], 1.0); // second pass
+    assert_eq!(out.left[2250], 1.0); // third pass starts at 2.0 < stop
+    assert_eq!(out.left[3250], 0.0); // stopped at 2.5
+}
+
+#[test]
+fn cues_add_and_the_sum_is_clamped_and_an_offset_skips_ahead() {
+    let mut a = blip(1000, 1.0, 0.8);
+    a.left[500] = 0.1;
+    let src = vec![a, blip(1000, 1.0, 0.8)];
+    let out = mix_cues(&src, &[Cue::new(0, 0.0), Cue::new(1, 0.0)], 1.0, 1000);
+    assert_eq!(out.left[10], 1.0); // 1.6 clamped
+    let mut c = Cue::new(0, 0.0);
+    c.offset = 0.5;
+    let out = mix_cues(&src, &[c], 1.0, 1000);
+    assert!((out.left[0] - 0.1).abs() < 1e-6); // starts at the 0.5 s sample
+}
+
+#[test]
+fn a_looped_score_has_a_whole_number_of_bars() {
+    let mut s = Score::new(120.0, Meter::new(4, 4));
+    s.tracks.push(Track::new(
+        "t",
+        "sine",
+        parse_notes("A4:1/2", Meter::new(4, 4)).unwrap(),
+    ));
+    assert!((s.loop_seconds() - 2.0).abs() < 1e-9); // one 4/4 bar at 120 bpm
 }
