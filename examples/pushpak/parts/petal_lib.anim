@@ -34,3 +34,7 @@ fn petal_flat_arc_spine(x: Number, base_y: Number, r0: Number, flat: Number, rad
 
 fn petal_flat_arc_ring(x: Number, base_y: Number, r0: Number, flat: Number, radius: Number, half_w: Number, cup: Number, count: Int, phase: Angle) -> Shape:
     return sheet(spine: petal_flat_arc_spine(x, base_y, r0, flat, radius, 20), width: (0..20).map(i -> petal_width(half_w, i / 20)), cup: cup, across: 8, side: (0, 0, 1), around: count, about: (x, 0), phase: phase)
+
+# a ring of flat petals: straight blades lying along the base, `length` long, with no curl
+fn petal_flat_ring(x: Number, base_y: Number, r0: Number, length: Number, half_w: Number, cup: Number, count: Int, phase: Angle) -> Shape:
+    return sheet(spine: (0..16).map(i -> (x + r0 + length * i / 16, base_y, 0)), width: (0..16).map(i -> petal_width(half_w, i / 16)), cup: cup, across: 8, side: (0, 0, 1), around: count, about: (x, 0), phase: phase)

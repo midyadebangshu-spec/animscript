@@ -1,29 +1,21 @@
-## Pushpak Viman: the outer petals. Sixteen long blade-like petals fanned out almost flat, dark leaf with a vein
-## pattern and glowing gold edges.  Shape: `petals_outer`.
+## Pushpak Viman: the outermost layer of petals, `petals_outer`. It is the second layer unrolled: the same long petals
+## but lying flat along the base, not curled up, as long as the second layer's whole curve. Translucent like the dome
+## (opacity 0.9, some light through), a dark gold leaf with glowing gold edges and veins.
 import "petal_lib"
 
 param axis_x = 640
 param base_y = 514
-param height = 70
 param r_base = 100
-param lean = 330
-param bulge = 20
-param flare = 0
-param spin = 0.07.turns
-param s_bend = 0
-param sway = 0
-param wave = 6
-param waves = 1
-param count = 18
+param length = 307
 param half_w = 44
+param count = 11
 
-shape petals_outer = petal_ring(axis_x, base_y, height, r_base, lean, bulge, flare, spin, s_bend, sway, wave, waves, half_w, -0.2, count, 0.0.turns)
-petals_outer.fill = #5b4129
-petals_outer.opacity = 0.55
-petals_outer.surface(roughness: 0.5, metallic: 0.3, emissive: 0.2)
+shape petals_outer = petal_flat_ring(axis_x, base_y, r_base, length, half_w, -0.08, count, 0.turns)
+petals_outer.fill = #8a6428
+petals_outer.opacity = 0.9
+petals_outer.surface(roughness: 0.4, metallic: 0.6, emissive: 0.3, transmission: 1.2)
 # gold glowing edges and a pale vein; fine veins sweep out from the centre
-petals_outer.pattern(mask: "(abs(u - 0.5) * 2 > 0.9) || (abs(u - 0.5) * 2 < 0.03) || (abs(fract(v * 16 + abs(u - 0.5) * 3) - 0.5) > 0.47 && abs(u - 0.5) * 2 < 0.9)", color: #f2c65a, glow: 1.6, alpha: 0.95)
-
+petals_outer.pattern(mask: "(abs(u - 0.5) * 2 > 0.9) || (abs(u - 0.5) * 2 < 0.03) || (abs(fract(v * 16 + abs(u - 0.5) * 3) - 0.5) > 0.47 && abs(u - 0.5) * 2 < 0.9)", color: #f2c65a, glow: 1.6, alpha: 1)
 petals_outer.stroke_width = 0.35
 
 project "Pushpak outer petals":
