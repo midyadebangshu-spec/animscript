@@ -1,0 +1,33 @@
+## Pushpak Viman: the inner petals. Tall, cupped petals that rise from the hub and hug the dome, a translucent
+## membrane in a dark lace frame with a central vein and ribs. One ring of `count` petals, built by `sheet` (a ribbon
+## along a curved spine) and repeated around the vertical axis. Shape: `petals_inner`.
+import "petal_lib"
+
+param axis_x = 640
+param base_y = 660
+param height = 340
+param r_base = 55
+param r_top = 165
+param count = 8
+param half_w = 64
+
+shape petals_inner = petal_ring(axis_x, base_y, height, r_base, r_top, 1.6, half_w, -0.3, count, 0.turns)
+petals_inner.fill = #d8c2b4
+petals_inner.surface(roughness: 0.55, emissive: 0.5)
+# the lace: a frame along the edges, a central vein and ribs that sweep up from the vein
+petals_inner.pattern(mask: "(abs(u - 0.5) * 2 > 0.86) || (abs(u - 0.5) * 2 < 0.035) || (abs(fract(v * 13 + abs(u - 0.5) * 2.6) - 0.5) > 0.455 && abs(u - 0.5) * 2 < 0.86)", color: #3a2414)
+
+project "Pushpak inner petals":
+    anim_version: "0.1"
+    canvas: 1280x720
+    fps: 24
+    background: #f0b070
+
+preview:
+    stage3(fov: 40, exposure: 1.1, bloom: 0.2, quality: "medium", smooth: 55.deg, crease: 38.deg)
+    shape sun = sun_light(dir: (-0.5, 0.5, 0.8), color: #ffd9a0, intensity: 2.2, size: 3)
+    shape sky = ambient_light(color: #ffb27a, ground: #5a3a2a, intensity: 0.5)
+
+scene "preview" for 3.seconds:
+    main:
+        camera3.orbit(turns: 0.1, over: 3.seconds)

@@ -1,0 +1,31 @@
+## Pushpak Viman: the middle petals. Twelve broad petals that lean outward from the hub with their tips curled
+## back, a translucent membrane with a dark lace frame and ribs.  Shape: `petals_mid`.
+import "petal_lib"
+
+param axis_x = 640
+param base_y = 700
+param height = 270
+param r_base = 70
+param r_top = 300
+param count = 12
+param half_w = 66
+
+shape petals_mid = petal_ring(axis_x, base_y, height, r_base, r_top, -0.6, half_w, -0.25, count, 0.04.turns)
+petals_mid.fill = #c9b0a4
+petals_mid.surface(roughness: 0.55, emissive: 0.45)
+petals_mid.pattern(mask: "(abs(u - 0.5) * 2 > 0.84) || (abs(u - 0.5) * 2 < 0.03) || (abs(fract(v * 11 + abs(u - 0.5) * 3) - 0.5) > 0.46 && abs(u - 0.5) * 2 < 0.84)", color: #34200f)
+
+project "Pushpak middle petals":
+    anim_version: "0.1"
+    canvas: 1280x720
+    fps: 24
+    background: #f0b070
+
+preview:
+    stage3(fov: 40, exposure: 1.1, bloom: 0.2, quality: "medium", smooth: 55.deg, crease: 38.deg)
+    shape sun = sun_light(dir: (-0.5, 0.5, 0.8), color: #ffd9a0, intensity: 2.2, size: 3)
+    shape sky = ambient_light(color: #ffb27a, ground: #5a3a2a, intensity: 0.5)
+
+scene "preview" for 3.seconds:
+    main:
+        camera3.orbit(turns: 0.1, over: 3.seconds)

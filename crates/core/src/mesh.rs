@@ -340,6 +340,168 @@ impl Mesh {
         Ok(m)
     }
 
+    /// A ribbon along a 3D spine: `width[i]` is the half-width at spine point `i` (0 at a tip, which becomes a single
+    /// vertex), `twist[i]` (turns, or empty) turns the ribbon about the spine, `cup` bends its edges by `cup * width`
+    /// towards the facing side, `across` is the number of strips across it, and `facing` is the side its face looks to
+    /// before any twist. `u` runs across (0 to 1), `v` along the spine (0 to 1). Drawn from both sides.
+    pub fn sheet(
+        spine: &[[f64; 3]],
+        width: &[f64],
+        twist: &[f64],
+        cup: f64,
+        across: usize,
+        facing: [f64; 3],
+    ) -> Result<Mesh, String> {
+        let n = spine.len();
+        if n < 2 {
+            return Err("a sheet needs a spine of at least two points".into());
+        }
+        if width.len() != n {
+            return Err(format!(
+                "`width` needs one number per spine point ({n}), found {}",
+                width.len()
+            ));
+        }
+        if width.iter().any(|w| *w < 0.0 || !w.is_finite()) {
+            return Err("`width` numbers are half-widths: zero or more".into());
+        }
+        if !twist.is_empty() && twist.len() != n {
+            return Err(format!(
+                "`twist` needs one angle per spine point ({n}), found {}",
+                twist.len()
+            ));
+        }
+        if across < 1 {
+            return Err("`across` needs at least 1 strip".into());
+        }
+        if !cup.is_finite() || spine.iter().flatten().any(|x| !x.is_finite()) {
+            return Err("a sheet needs finite numbers".into());
+        }
+        let unit = |a: [f64; 3]| {
+            let l = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+            if l < 1e-12 {
+                None
+            } else {
+                Some([a[0] / l, a[1] / l, a[2] / l])
+            }
+        };
+        let crs = |a: [f64; 3], b: [f64; 3]| {
+            [
+                a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0],
+            ]
+        };
+        let face = unit(facing).ok_or("`facing` must not be a zero vector")?;
+        let mut verts: Vec<[f64; 3]> = vec![];
+        let mut rows: Vec<Vec<u32>> = vec![];
+        for i in 0..n {
+            let (a, b) = (spine[i.saturating_sub(1)], spine[(i + 1).min(n - 1)]);
+            let t = unit([b[0] - a[0], b[1] - a[1], b[2] - a[2]])
+                .ok_or("two neighbouring spine points coincide")?;
+            // the side direction: across the ribbon, perpendicular to the spine and to `facing`
+            let side = match unit(crs(t, face)) {
+                Some(s) => s,
+                None => {
+                    // the spine runs along `facing`: any perpendicular will do
+                    let other = if t[0].abs() < 0.9 {
+                        [1.0, 0.0, 0.0]
+                    } else {
+                        [0.0, 1.0, 0.0]
+                    };
+                    unit(crs(t, other)).ok_or("a degenerate spine")?
+                }
+            };
+            let nrm = crs(side, t);
+            let th = std::f64::consts::TAU * twist.get(i).copied().unwrap_or(0.0);
+            let (c, sn) = (th.cos(), th.sin());
+            let s2 = [
+                side[0] * c + nrm[0] * sn,
+                side[1] * c + nrm[1] * sn,
+                side[2] * c + nrm[2] * sn,
+            ];
+            let n2 = [
+                nrm[0] * c - side[0] * sn,
+                nrm[1] * c - side[1] * sn,
+                nrm[2] * c - side[2] * sn,
+            ];
+            let w = width[i];
+            let p = spine[i];
+            if w == 0.0 {
+                verts.push(p);
+                rows.push(vec![verts.len() as u32 - 1; across + 1]);
+                continue;
+            }
+            let mut row = vec![];
+            for j in 0..=across {
+                let e = 2.0 * j as f64 / across as f64 - 1.0;
+                let off = cup * w * e * e;
+                verts.push([
+                    p[0] + s2[0] * w * e + n2[0] * off,
+                    p[1] + s2[1] * w * e + n2[1] * off,
+                    p[2] + s2[2] * w * e + n2[2] * off,
+                ]);
+                row.push(verts.len() as u32 - 1);
+            }
+            rows.push(row);
+        }
+        let mut faces = vec![];
+        let mut uv: Vec<Vec<[f64; 2]>> = vec![];
+        for i in 0..n - 1 {
+            for j in 0..across {
+                let (u0, u1) = (j as f64 / across as f64, (j + 1) as f64 / across as f64);
+                let (v0, v1) = (i as f64 / (n - 1) as f64, (i + 1) as f64 / (n - 1) as f64);
+                let mut q: Vec<(u32, [f64; 2])> = vec![
+                    (rows[i][j], [u0, v0]),
+                    (rows[i][j + 1], [u1, v0]),
+                    (rows[i + 1][j + 1], [u1, v1]),
+                    (rows[i + 1][j], [u0, v1]),
+                ];
+                q.dedup_by_key(|c| c.0);
+                while q.len() > 1 && q.first().map(|c| c.0) == q.last().map(|c| c.0) {
+                    q.pop();
+                }
+                if q.len() >= 3 {
+                    faces.push(q.iter().map(|c| c.0).collect());
+                    uv.push(q.iter().map(|c| c.1).collect());
+                }
+            }
+        }
+        Ok(Mesh {
+            verts,
+            faces,
+            double_sided: true,
+            uv,
+        })
+    }
+
+    /// `count` copies of this mesh turned about the vertical line through `(cx, cz)`, one `1/count` of a turn apart
+    /// (plus `phase` turns), joined into one mesh.
+    pub fn around_y(&self, count: usize, cx: f64, cz: f64, phase: f64) -> Mesh {
+        let mut out = Mesh {
+            double_sided: self.double_sided,
+            ..Default::default()
+        };
+        let has_uv = self.uv.len() == self.faces.len();
+        for k in 0..count {
+            let th = std::f64::consts::TAU * (k as f64 / count as f64 + phase);
+            let (c, s) = (th.cos(), th.sin());
+            let base = out.verts.len() as u32;
+            for v in &self.verts {
+                let (dx, dz) = (v[0] - cx, v[2] - cz);
+                out.verts
+                    .push([cx + dx * c - dz * s, v[1], cz + dx * s + dz * c]);
+            }
+            for f in &self.faces {
+                out.faces.push(f.iter().map(|i| i + base).collect());
+            }
+            if has_uv {
+                out.uv.extend(self.uv.iter().cloned());
+            }
+        }
+        out
+    }
+
     pub fn sphere(radius: f64, segments: usize, rings: usize) -> Mesh {
         let rings = rings.max(2);
         let profile: Vec<P> = (0..=rings)

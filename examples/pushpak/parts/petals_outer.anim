@@ -1,0 +1,32 @@
+## Pushpak Viman: the outer petals. Sixteen long blade-like petals fanned out almost flat, dark leaf with a vein
+## pattern and glowing gold edges.  Shape: `petals_outer`.
+import "petal_lib"
+
+param axis_x = 640
+param base_y = 720
+param height = 70
+param r_base = 80
+param r_top = 450
+param count = 16
+param half_w = 52
+
+shape petals_outer = petal_ring(axis_x, base_y, height, r_base, r_top, -0.9, half_w, -0.15, count, 0.0.turns)
+petals_outer.fill = #5b4129
+petals_outer.surface(roughness: 0.5, metallic: 0.3, emissive: 0.2)
+# gold glowing edges and a pale vein; fine veins sweep out from the centre
+petals_outer.pattern(mask: "(abs(u - 0.5) * 2 > 0.9) || (abs(u - 0.5) * 2 < 0.03) || (abs(fract(v * 16 + abs(u - 0.5) * 3) - 0.5) > 0.47 && abs(u - 0.5) * 2 < 0.9)", color: #f2c65a, glow: 1.6)
+
+project "Pushpak outer petals":
+    anim_version: "0.1"
+    canvas: 1280x720
+    fps: 24
+    background: #f0b070
+
+preview:
+    stage3(fov: 40, exposure: 1.1, bloom: 0.2, quality: "medium", smooth: 55.deg, crease: 38.deg)
+    shape sun = sun_light(dir: (-0.5, 0.5, 0.8), color: #ffd9a0, intensity: 2.2, size: 3)
+    shape sky = ambient_light(color: #ffb27a, ground: #5a3a2a, intensity: 0.5)
+
+scene "preview" for 3.seconds:
+    main:
+        camera3.orbit(turns: 0.1, over: 3.seconds)

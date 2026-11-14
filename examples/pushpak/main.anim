@@ -1,0 +1,22 @@
+## Pushpak Viman, assembled from parts: the dome and three layers of petals (inner, middle, outer).
+## Each part is its own file under parts/ and previews on its own.
+project "Pushpak Viman":
+    anim_version: "0.1"
+    canvas: 1280x720
+    fps: 24
+    background: #f0a860
+
+import "std/3d"
+import "parts/dome"
+import "parts/petals_inner"
+import "parts/petals_mid"
+import "parts/petals_outer"
+
+stage3(fov: 40, exposure: 1.1, bloom: 0.25, quality: "medium", smooth: 55.deg, crease: 38.deg)
+shape sun = sun_light(dir: (-0.5, 0.5, 0.8), color: #ffd9a0, intensity: 2.2, size: 3)
+shape sky = ambient_light(color: #ffb27a, ground: #5a3a2a, intensity: 0.5)
+
+scene "Pushpak" for 4.seconds:
+    main:
+        start camera3.crane(height: 120, pitch: 0.07, over: 4.seconds)
+        camera3.orbit(turns: 0.12, over: 4.seconds)

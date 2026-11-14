@@ -269,6 +269,89 @@ impl Interp {
                 }
                 Ok(self.mesh_shape(mesh, self.at3(&m)?, self.pivot3(&m)?))
             }
+            "sheet" => {
+                let m = self.bind(
+                    name,
+                    args,
+                    &[
+                        "spine", "width", "twist", "cup", "across", "facing", "around", "about",
+                        "phase",
+                    ],
+                    &["spine", "width"],
+                )?;
+                let spine: Vec<[f64; 3]> = match &m["spine"] {
+                    Value::List(items) => items
+                        .iter()
+                        .map(|p| match p {
+                            Value::Tuple(t) if t.len() == 3 => Ok([
+                                self.num(&t[0], "a spine point")?,
+                                self.num(&t[1], "a spine point")?,
+                                self.num(&t[2], "a spine point")?,
+                            ]),
+                            o => Err(msh(format!(
+                                "a spine point is (x, y, z), found {}",
+                                o.type_name()
+                            ))),
+                        })
+                        .collect::<Res<_>>()?,
+                    o => {
+                        return Err(msh(format!(
+                            "`spine` is a list of (x, y, z) points, found {}",
+                            o.type_name()
+                        )))
+                    }
+                };
+                let nums = |this: &Interp, key: &str, angle: bool| -> Res<Vec<f64>> {
+                    match m.get(key) {
+                        None => Ok(vec![]),
+                        Some(Value::List(items)) => items
+                            .iter()
+                            .map(|v| match (v, angle) {
+                                (Value::Angle(t), true) => Ok(*t),
+                                (o, false) => this.num(o, &format!("`{key}`")),
+                                (o, true) => Err(msh(format!(
+                                    "`{key}` holds angles like 0.1.turns, found {}",
+                                    o.type_name()
+                                ))),
+                            })
+                            .collect(),
+                        Some(o) => Err(msh(format!("`{key}` is a list, found {}", o.type_name()))),
+                    }
+                };
+                let width = nums(self, "width", false)?;
+                let twist = nums(self, "twist", true)?;
+                let cup = match m.get("cup") {
+                    Some(v) => self.num(v, "`cup`")?,
+                    None => 0.0,
+                };
+                let across = self.count(&m, "across", 6, 1)?;
+                let facing = self.point3(&m, "facing")?.unwrap_or([0.0, 0.0, -1.0]);
+                let mut mesh =
+                    Mesh::sheet(&spine, &width, &twist, cup, across, facing).map_err(msh)?;
+                if m.contains_key("around") {
+                    let k = self.count(&m, "around", 1, 1)?;
+                    let about = self.point3(&m, "about")?.unwrap_or([0.0; 3]);
+                    let phase = match m.get("phase") {
+                        Some(Value::Angle(t)) => *t,
+                        Some(o) => {
+                            return Err(msh(format!(
+                                "`phase` is an angle like 0.05.turns, found {}",
+                                o.type_name()
+                            )))
+                        }
+                        None => 0.0,
+                    };
+                    mesh = mesh.around_y(k, about[0], about[2], phase);
+                }
+                // the points are scene points: the mesh stays where they are
+                let (lo, hi) = mesh.bbox();
+                let centre = [
+                    (lo[0] + hi[0]) / 2.0,
+                    (lo[1] + hi[1]) / 2.0,
+                    (lo[2] + hi[2]) / 2.0,
+                ];
+                Ok(self.mesh_shape(mesh, Some(centre), None))
+            }
             "extrude" => {
                 let m = self.bind(name, args, &["of", "depth", "points", "at", "pivot"], &[])?;
                 let poly: Vec<[f64; 2]> = match (m.get("of"), m.get("points")) {

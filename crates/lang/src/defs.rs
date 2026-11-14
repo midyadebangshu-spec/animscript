@@ -165,7 +165,7 @@ impl Interp {
                 t.len() == 2 && t.iter().all(|x| x.as_f64().is_some())
             }
             ("Camera", Value::Shape(n)) => n == "camera",
-            ("Shape", Value::Shape(_))
+            ("Shape", Value::Shape(_) | Value::Fresh(_))
             | ("Armature", Value::Armature(_))
             | ("Entity", Value::Entity(_))
             | ("List", Value::List(_))

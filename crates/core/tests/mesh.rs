@@ -308,3 +308,119 @@ fn a_plane_and_a_cube_have_surface_coordinates() {
     let c = Mesh::cube(10.0, 10.0, 10.0);
     assert_eq!(c.uv.len(), 6);
 }
+
+#[test]
+fn a_sheet_is_a_ribbon_along_a_spine_with_a_width_profile() {
+    // a straight spine up the screen (y decreasing), half-width 0, 10, 10, 0: a pointed leaf; facing the viewer
+    let spine = [
+        [0.0, 0.0, 0.0],
+        [0.0, -10.0, 0.0],
+        [0.0, -20.0, 0.0],
+        [0.0, -30.0, 0.0],
+    ];
+    let m = Mesh::sheet(
+        &spine,
+        &[0.0, 10.0, 10.0, 0.0],
+        &[],
+        0.0,
+        4,
+        [0.0, 0.0, -1.0],
+    )
+    .unwrap();
+    // the two ends are single points; the middle two rows have 5 vertices each
+    assert_eq!(m.verts.len(), 1 + 5 + 5 + 1);
+    assert!(m.double_sided);
+    assert_eq!(m.uv.len(), m.faces.len());
+    // across the ribbon the vertices spread over x in [-10, 10] at the widest rows, in the plane z = 0
+    let xs: Vec<f64> = m.verts.iter().map(|v| v[0]).collect();
+    assert!(xs.iter().cloned().fold(f64::INFINITY, f64::min) <= -10.0 + 1e-9);
+    assert!(xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max) >= 10.0 - 1e-9);
+    assert!(m.verts.iter().all(|v| v[2].abs() < 1e-9));
+    // u runs across, v along the spine
+    for c in m.uv.iter().flatten() {
+        assert!((0.0..=1.0).contains(&c[0]) && (0.0..=1.0).contains(&c[1]));
+    }
+}
+
+#[test]
+fn cup_bends_the_edges_of_a_sheet_towards_one_side() {
+    let spine = [[0.0, 0.0, 0.0], [0.0, -20.0, 0.0], [0.0, -40.0, 0.0]];
+    let flat = Mesh::sheet(&spine, &[10.0; 3], &[], 0.0, 4, [0.0, 0.0, -1.0]).unwrap();
+    let cupped = Mesh::sheet(&spine, &[10.0; 3], &[], 0.5, 4, [0.0, 0.0, -1.0]).unwrap();
+    let depth = |m: &Mesh| {
+        let z: Vec<f64> = m.verts.iter().map(|v| v[2]).collect();
+        z.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
+            - z.iter().cloned().fold(f64::INFINITY, f64::min)
+    };
+    assert!(depth(&flat) < 1e-9);
+    assert!(depth(&cupped) > 4.0, "{}", depth(&cupped));
+}
+
+#[test]
+fn twist_turns_the_ribbon_about_the_spine() {
+    let spine = [[0.0, 0.0, 0.0], [0.0, -20.0, 0.0]];
+    let m = Mesh::sheet(
+        &spine,
+        &[10.0, 10.0],
+        &[0.0, 0.25],
+        0.0,
+        2,
+        [0.0, 0.0, -1.0],
+    )
+    .unwrap();
+    // the first row lies along x, the last (a quarter turn later) along z
+    let first: Vec<_> = m.verts.iter().filter(|v| v[1] == 0.0).collect();
+    let last: Vec<_> = m.verts.iter().filter(|v| v[1] == -20.0).collect();
+    assert!(first.iter().any(|v| v[0].abs() > 9.0) && first.iter().all(|v| v[2].abs() < 1e-9));
+    assert!(last.iter().any(|v| v[2].abs() > 9.0) && last.iter().all(|v| v[0].abs() < 1e-9));
+}
+
+#[test]
+fn sheet_arguments_are_checked() {
+    let spine = [[0.0, 0.0, 0.0], [0.0, -10.0, 0.0]];
+    assert!(Mesh::sheet(&spine[..1], &[1.0], &[], 0.0, 2, [0.0, 0.0, -1.0]).is_err());
+    assert!(Mesh::sheet(&spine, &[1.0], &[], 0.0, 2, [0.0, 0.0, -1.0]).is_err());
+    assert!(Mesh::sheet(&spine, &[1.0, -1.0], &[], 0.0, 2, [0.0, 0.0, -1.0]).is_err());
+    assert!(Mesh::sheet(&spine, &[1.0, 1.0], &[0.0], 0.0, 2, [0.0, 0.0, -1.0]).is_err());
+    assert!(Mesh::sheet(&spine, &[1.0, 1.0], &[], 0.0, 0, [0.0, 0.0, -1.0]).is_err());
+    assert!(Mesh::sheet(&spine, &[1.0, 1.0], &[], 0.0, 2, [0.0, 0.0, 0.0]).is_err());
+}
+
+#[test]
+fn around_y_repeats_a_mesh_in_turns_about_a_vertical_axis() {
+    let spine = [[10.0, 0.0, 0.0], [10.0, -20.0, 0.0]];
+    let one = Mesh::sheet(&spine, &[2.0, 2.0], &[], 0.0, 1, [0.0, 0.0, -1.0]).unwrap();
+    let ring = one.around_y(4, 0.0, 0.0, 0.0);
+    assert_eq!(ring.faces.len(), 4 * one.faces.len());
+    assert_eq!(ring.verts.len(), 4 * one.verts.len());
+    assert_eq!(ring.uv.len(), ring.faces.len());
+    // the copies' spines sit at 0, 90, 180 and 270 degrees: x = 10 then z = 10 then x = -10 then z = -10
+    let centre = |k: usize| {
+        let n = one.verts.len();
+        let s = &ring.verts[k * n..(k + 1) * n];
+        [
+            s.iter().map(|v| v[0]).sum::<f64>() / n as f64,
+            s.iter().map(|v| v[2]).sum::<f64>() / n as f64,
+        ]
+    };
+    let want = [[10.0, 0.0], [0.0, 10.0], [-10.0, 0.0], [0.0, -10.0]];
+    for (k, w) in want.iter().enumerate() {
+        let c = centre(k);
+        assert!(
+            (c[0] - w[0]).abs() < 1e-9 && (c[1] - w[1]).abs() < 1e-9,
+            "{k}: {c:?}"
+        );
+    }
+    // a phase turns every copy
+    let phased = one.around_y(4, 0.0, 0.0, 0.125);
+    assert!(
+        (phased.verts[0][0] - phased.verts[0][2].abs()).abs() < 1e-9
+            || phased.verts[0][0] != ring.verts[0][0]
+    );
+    // about another axis
+    let off = one.around_y(2, 10.0, 0.0, 0.0);
+    // a half turn about x = 10 keeps a spine that is already on that axis where it is
+    let n = one.verts.len();
+    let mean = off.verts[n..].iter().map(|v| v[0]).sum::<f64>() / n as f64;
+    assert!((mean - 10.0).abs() < 1e-9, "{mean}");
+}

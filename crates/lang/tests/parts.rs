@@ -185,3 +185,22 @@ fn part_constants_can_drive_an_armature() {
     let r = run(&main, &d).unwrap_or_else(|e| panic!("{}", e.render(Some(&main), "main")));
     assert_eq!(r.snapshots.len(), 2);
 }
+
+#[test]
+fn a_preview_block_runs_only_when_the_part_is_opened_on_its_own() {
+    let part = "shape head = square(size: 20, at: (10, 10))\n\npreview:\n    shape stand = square(size: 5, at: (50, 50))\n    stand.fill = #ff0000\n\nshape tail = square(size: 5, at: (60, 60))\n";
+    let d = folder("preview", &[("head.anim", part)]);
+    // imported: the preview's shape is not made, and later lines keep their numbers
+    let main =
+        format!("{PROJECT}import \"head\"\nshape stand = square(size: 9, at: (1, 1))\n{SCENE}");
+    let r = run(&main, &d).unwrap_or_else(|e| panic!("{}", e.render(Some(&main), "main")));
+    assert!(
+        (x_of(&r, "stand") - 1.0).abs() < 1e-9,
+        "main's own `stand`, not the preview's"
+    );
+    assert!((x_of(&r, "tail") - 60.0).abs() < 1e-9);
+    // opened on its own: the block runs as if its lines were at the top level
+    let own = format!("{PROJECT}{part}{SCENE}");
+    let r = run(&own, &d).unwrap_or_else(|e| panic!("{}", e.render(Some(&own), "own")));
+    assert!((x_of(&r, "stand") - 50.0).abs() < 1e-9);
+}

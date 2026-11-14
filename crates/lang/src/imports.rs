@@ -360,6 +360,33 @@ fn rewrite(text: &str, own: Option<(&str, &BTreeSet<String>)>, aliases: &[Alias]
     out
 }
 
+/// A `preview:` block (a part's own lights, camera and so on): dropped when the file is imported, and when the file
+/// is the one being run its lines are moved out to the top level (the line `preview:` goes blank, the block loses
+/// one level of indent), so line numbers never change.
+fn preview_blocks(lines: &mut [String], keep: bool) {
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].trim_end() == "preview:" {
+            lines[i].clear();
+            i += 1;
+            while i < lines.len()
+                && (lines[i].trim().is_empty()
+                    || lines[i].starts_with(' ')
+                    || lines[i].starts_with('\t'))
+            {
+                if !keep {
+                    lines[i].clear();
+                } else if let Some(rest) = lines[i].strip_prefix("    ") {
+                    lines[i] = rest.to_string();
+                }
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+}
+
 /// Blank the top-level `project` and `scene` blocks (a part's own preview).
 fn strip_blocks(lines: &mut [String]) {
     let mut i = 0;
@@ -533,6 +560,7 @@ fn expand(
         cx.appended.push_str(&body);
         cx.appended.push('\n');
     }
+    preview_blocks(&mut out, is_main);
     if !is_main {
         strip_blocks(&mut out);
     }
