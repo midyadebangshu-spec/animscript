@@ -2360,6 +2360,31 @@ armature puppet:
 
 Example: `examples/puppet3d.anim` (waving, knocked over by a ball, limp, standing up again as an active ragdoll).
 
+## 13y. Photographic lighting (round L)
+
+A scene that declares at least one light is lit photographically, in 3D and 2D alike. A scene without lights renders exactly as before (toon bands from `stage3(light:, ambient:, bands:)`); when lights exist those three settings are ignored.
+
+```
+stage3(fov: 40, ao: 90, bloom: 0.3, exposure: 1.2, quality: "high")
+shape lamp = point_light(at: (640, 150, 40), color: #ffc78a, intensity: 7, reach: 300, size: 16)
+shape sun = sun_light(dir: (0.35, 0.45, 1), color: #6f8cff, intensity: 0.16, size: 4)
+shape spot = spot_light(at: (900, 80, 300), dir: (0, 1, 0), angle: 30.deg, softness: 0.4, intensity: 5)
+shape room = ambient_light(color: #5a6a9a, ground: #3a2a20, intensity: 0.32)
+```
+
+- **Lights are hidden shapes.** `at` is the position (x, y, z in px, as for meshes: z grows away from the viewer), the shape's turns rotate `dir`, its fill is the colour and its opacity multiplies `intensity`, so `lamp.move_to(...)`, `lamp.fade_to(...)`, `fill_to`, `rotate_to`, keyframes and easing all work on lights.
+- **Kinds.** `sun_light(dir, color, intensity, size, shadows)`; `point_light(at, color, intensity, reach, size, shadows)`; `spot_light(at, dir, angle, softness, color, intensity, reach, size, shadows)`; `ambient_light(color, ground, intensity)` (a hemisphere: `color` from above, `ground` from below, flat if omitted). `intensity` of a point or spot is the irradiance at `reach` px and falls with the square of the distance (not below a tenth of `reach`); `size` is the emitter's radius in px (the sun's angular size in degrees) and makes shadows soft; a spot's `angle` is its half-angle (up to 90 degrees) and `softness` the share of it that fades. `shadows: false` turns a light's shadows off.
+- **Surfaces.** `mesh.surface(roughness: 0.6, metallic: 0, emissive: 0)`: GGX specular, metals take their highlight colour from the fill, emissive meshes glow (and bloom). `mirror(...)` still gives screen-space reflections, now of the lit picture.
+- **Stage settings.** `exposure` (1), `ao` (ambient occlusion distance in px, default 60 and only with an ambient light, 0 off), `bloom` (strength 0 to 4, default 0), `quality` ("low", "medium", "high": 4, 8 or 16 rays per soft shadow and AO).
+- **Shadows and occlusion.** Every opaque mesh casts shadows (rays against a deterministic BVH); soft shadows and AO use fixed spiral patterns turned by a hash of the pixel, so a frame is the same on every run and every machine, whatever the thread count. Glass and meshes with opacity under 0.5 do not cast.
+- **2D shapes.** `shape.lit(bevel: 0, roughness: 0.6, metallic: 0, emissive: 0, occluder: false, depth: 0)` makes a flat shape take the light as a sheet facing the viewer at `depth` (z, px); `bevel` (px) rounds its edges for shading; it is shaded, shadowed by meshes and by other occluders, and with `occluder: true` it casts shadows on 3D meshes and on other lit sheets (anywhere its alpha is solid). An unlit 2D shape is never touched. A sheet is lit from the viewer's side only: put 2D lights and depths so the light is nearer than the sheet.
+- **Bloom** is applied to the whole finished picture, so emissive 2D and 3D things glow alike.
+- **Debug.** `--debug-physics` draws lights: a yellow ring for point and spot lights (with a line along a spot's axis), a line for a sun's direction.
+- **Errors.** `E-LIT-001` unknown setting or wrong use (`lit` on a mesh), `E-LIT-002` bad value (negative intensity, zero `dir`, `angle` over 90 degrees, ...).
+- **Limits.** No global illumination, caustics or environment maps (metals reflect through `mirror` or look dark away from highlights); water and glass are composited after lighting, so they carry the light only through the picture beneath them; a lit frame costs about 3 to 5 s at 1280x720; 2D lit shapes ignore the 2D camera's rotation for light positions (lights live in canvas coordinates).
+
+Example: `examples/lamplight.anim` (a swinging soft-shadow lamp, a 2D figure lit and casting a shadow on a 3D wall, emissive bulb with bloom, ambient occlusion).
+
 ## 14. Diagnostics, tracing and the command line
 
 Every diagnostic has a **severity** (`error`, `warning`, `info`), a **stable code**, a **source span**, a message,

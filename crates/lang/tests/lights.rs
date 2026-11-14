@@ -193,3 +193,38 @@ fn a_mesh_has_a_surface() {
         "E-LIT-002"
     );
 }
+
+#[test]
+fn a_flat_shape_can_be_lit() {
+    let src = format!(
+        "shape moon = circle(n: 24, radius: 60, at: (300, 300))\nmoon.lit(bevel: 20, roughness: 0.3, emissive: 0.5, occluder: true, depth: 120)\nshape plain = circle(n: 24, radius: 20, at: (600, 300))\n{}",
+        scene(1, "")
+    );
+    let r = go(&src);
+    let s = r.snapshots.last().unwrap();
+    let shapes = s["shapes"].as_array().unwrap();
+    let moon = shapes.iter().find(|x| x["id"] == "moon").unwrap();
+    assert_eq!(moon["lit"]["bevel"], 20.0);
+    assert_eq!(moon["lit"]["surface"], serde_json::json!([0.3, 0.0, 0.5]));
+    assert_eq!(moon["lit"]["occluder"], true);
+    assert_eq!(moon["lit"]["depth"], 120.0);
+    assert!(shapes
+        .iter()
+        .find(|x| x["id"] == "plain")
+        .unwrap()
+        .get("lit")
+        .is_none());
+}
+
+#[test]
+fn lit_is_rejected_on_meshes_and_bad_values() {
+    assert_eq!(err("shape b = cube(size: 10)\nb.lit()\n").code, "E-LIT-001");
+    assert_eq!(
+        err("shape c = circle(n: 12, radius: 10)\nc.lit(roughness: 3)\n").code,
+        "E-LIT-002"
+    );
+    assert_eq!(
+        err("shape c = circle(n: 12, radius: 10)\nc.lit(occluder: 1)\n").code,
+        "E-LIT-002"
+    );
+}

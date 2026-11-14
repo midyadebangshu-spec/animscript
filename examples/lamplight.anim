@@ -1,0 +1,65 @@
+project "Lamplight":
+    anim_version: "0.1"
+    canvas: 1280x720
+    fps: 24
+    background: #0b0d14
+
+import "std/3d"
+
+# Photographic lighting. A swinging lamp (a point light with a size, so its shadows are soft) lights a room built of
+# meshes and a 2D figure; a weak blue light from the window fills in; an ambient light with ambient occlusion darkens
+# the creases. The lamp's bulb glows (emissive plus bloom). The 2D figure is `lit`: it gets a rounded bevel, shading from
+# the lamp, and (as an `occluder`) throws its shadow on the wall behind it, which is a 3D mesh. Everything is deterministic.
+stage3(fov: 40, ao: 90, bloom: 0.3, exposure: 1.2, quality: "high", smooth: 55.deg, crease: 38.deg)
+
+shape lamp = point_light(at: (640, 150, 40), color: #ffc78a, intensity: 7, reach: 300, size: 16)
+shape window = sun_light(dir: (0.35, 0.45, 1), color: #6f8cff, intensity: 0.16, size: 4)
+shape room = ambient_light(color: #5a6a9a, ground: #3a2a20, intensity: 0.32)
+
+shape floor = cube(width: 2400, height: 40, depth: 1600, at: (640, 580, 200))
+floor.fill = #b08a5e
+floor.surface(roughness: 0.45)
+shape wall = cube(width: 2400, height: 1200, depth: 40, at: (640, 100, 520))
+wall.fill = #cbbfae
+wall.surface(roughness: 0.9)
+shape table = cube(width: 340, height: 22, depth: 210, at: (640, 470, 250))
+table.fill = #7a4a2a
+table.surface(roughness: 0.5)
+shape pedestal = cylinder(radius: 26, height: 100, segments: 24, at: (640, 521, 250))
+pedestal.fill = #5a3a20
+shape ball = sphere(radius: 64, segments: 32, rings: 20, at: (560, 395, 250))
+ball.fill = #c8d4e0
+ball.surface(roughness: 0.12, metallic: 1)
+ball.mirror(reflect: 0.55)
+shape box = cube(width: 80, height: 80, depth: 80, at: (730, 420, 250))
+box.fill = #d9483b
+box.surface(roughness: 0.35)
+box.rotation = 14.deg
+shape bulb = sphere(radius: 14, segments: 16, rings: 10, at: (640, 150, 40))
+bulb.fill = #fff2d0
+bulb.surface(emissive: 6)
+bulb.stroke_width = 0
+
+# a 2D figure standing in the room, lit by the 3D lamp and casting a shadow on the 3D wall
+shape body = polygon([(990, 560), (940, 560), (950, 420), (1000, 360), (1050, 420), (1040, 560)])
+body.fill = #3d5a80
+body.stroke_width = 0
+body.lit(bevel: 22, roughness: 0.6, occluder: true, depth: 330)
+shape head = circle(n: 32, radius: 34, at: (995, 320))
+head.fill = #f2c9a0
+head.stroke_width = 0
+head.lit(bevel: 24, roughness: 0.5, occluder: true, depth: 330)
+body.z = 5
+head.z = 5
+
+scene "Lamplight" for 8.seconds:
+    main:
+        start camera3.orbit(turns: 0.02, over: 8.seconds)
+        for i in 0..2:
+            start bulb.move_to((840, 190), over: 1.second, ease: ease_in_out)
+            lamp.move_to((840, 190), over: 1.second, ease: ease_in_out)
+            start bulb.move_to((440, 190), over: 2.seconds, ease: ease_in_out)
+            lamp.move_to((440, 190), over: 2.seconds, ease: ease_in_out)
+            start bulb.move_to((640, 150), over: 1.second, ease: ease_in_out)
+            lamp.move_to((640, 150), over: 1.second, ease: ease_in_out)
+        wait 8.seconds

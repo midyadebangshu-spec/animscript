@@ -1,5 +1,6 @@
 //! Shadows: the BVH agrees with brute force, occluders darken what is behind them, soft shadows have a
 //! penumbra, and everything is deterministic.
+#![allow(clippy::needless_range_loop)]
 use animscript_render::bvh::Bvh;
 use animscript_render::render_with;
 use serde_json::{json, Value};

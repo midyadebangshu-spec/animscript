@@ -4,6 +4,7 @@ use serde_json::Value;
 
 pub mod bvh;
 pub mod light;
+mod light2d;
 mod mesh3;
 use tiny_skia::{
     Color, FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform,
@@ -877,6 +878,65 @@ fn blend_towards(pm: &mut Pixmap, col: [f32; 3], u: f32) {
     }
 }
 
+/// Draw one flat shape (fills, picture, strokes, debug dots) onto `pm`.
+fn draw_plain(
+    pm: &mut Pixmap,
+    sh: &Value,
+    view: &View,
+    debug: bool,
+    base: &std::path::Path,
+    textures: &mut std::collections::HashMap<String, Option<Pixmap>>,
+) {
+    let tf = view.tf;
+    // every face is filled with its own resolved colour, every edge stroked with its own
+    for face in sh["faces"].as_array().into_iter().flatten() {
+        let Some(color) = face["fill"].as_str().and_then(parse_hex) else {
+            continue;
+        };
+        let mut paint = Paint::default();
+        paint.set_color(color);
+        paint.anti_alias = true;
+        if let Some(path) = face_path(face) {
+            pm.fill_path(&path, &paint, FillRule::Winding, tf, None);
+        }
+    }
+    if sh["image"].is_object() {
+        let opacity = sh["opacity"].as_f64().unwrap_or(1.0) as f32;
+        draw_image(pm, &sh["image"], opacity, tf, base, textures);
+    }
+    for edge in sh["edges"].as_array().into_iter().flatten() {
+        let Some(color) = edge["stroke"].as_str().and_then(parse_hex) else {
+            continue;
+        };
+        let mut paint = Paint::default();
+        paint.set_color(color);
+        paint.anti_alias = true;
+        let stroke = Stroke {
+            width: edge["stroke_width"].as_f64().unwrap_or(2.0) as f32,
+            line_cap: LineCap::Round,
+            line_join: LineJoin::Round,
+            ..Stroke::default()
+        };
+        if let Some(path) = edge_path(edge) {
+            pm.stroke_path(&path, &paint, &stroke, tf, None);
+        }
+    }
+    if debug {
+        let mut paint = Paint::default();
+        paint.set_color(Color::from_rgba8(0xd0, 0x30, 0x30, 255));
+        paint.anti_alias = true;
+        for v in sh["vertices"].as_array().into_iter().flatten() {
+            let (x, y) = (
+                v[1].as_f64().unwrap_or(0.0) as f32,
+                v[2].as_f64().unwrap_or(0.0) as f32,
+            );
+            if let Some(c) = PathBuilder::from_circle(x, y, 3.0) {
+                pm.fill_path(&c, &paint, FillRule::Winding, tf, None);
+            }
+        }
+    }
+}
+
 fn render_view(
     snapshot: &Value,
     cam: &Value,
@@ -904,6 +964,39 @@ fn render_view(
     let mut textures: std::collections::HashMap<String, Option<Pixmap>> = Default::default();
     draw_fluids(&mut pm, &snapshot["fluids"], &view, true);
     draw_fluid_foam(&mut pm, &snapshot["fluids"], &view, true);
+    // photographic lighting: the lights, the shadow casters and the 2D occluders of this view
+    let lights = light::parse_lights(snapshot);
+    let (mut bvh, mut occ) = (bvh::Bvh::new(vec![]), vec![]);
+    let exposure = snapshot["light3"]["exposure"].as_f64().unwrap_or(1.0);
+    let samples = match snapshot["light3"]["quality"].as_str() {
+        Some("low") => 4,
+        Some("high") => 16,
+        _ => 8,
+    };
+    if !lights.is_empty() {
+        bvh = bvh::Bvh::new(mesh3::occluder_triangles(snapshot));
+        for sh in snapshot["shapes"].as_array().into_iter().flatten() {
+            if sh["lit"]["occluder"] == Value::Bool(true) && sh["visible"] != Value::Bool(false) {
+                let mut layer = Pixmap::new(pm.width(), pm.height()).expect("a pixmap");
+                draw_plain(&mut layer, sh, &view, false, base, &mut textures);
+                let t = view.tf;
+                occ.push(light::OccLayer {
+                    z: sh["lit"]["depth"].as_f64().unwrap_or(0.0),
+                    w: layer.width() as usize,
+                    h: layer.height() as usize,
+                    alpha: layer.data().chunks(4).map(|p| p[3]).collect(),
+                    tf: [
+                        t.sx as f64,
+                        t.kx as f64,
+                        t.tx as f64,
+                        t.ky as f64,
+                        t.sy as f64,
+                        t.ty as f64,
+                    ],
+                });
+            }
+        }
+    }
     // fields are drawn in order with the shapes, by z (a field goes before a shape of the same z)
     let mut fields: Vec<&Value> = snapshot["fields"]
         .as_array()
@@ -934,57 +1027,27 @@ fn render_view(
         if sh["mesh"].is_object() {
             // all the meshes are drawn together, with one z-buffer, where the first of them comes in the z order
             if !meshes_drawn {
-                mesh3::draw_meshes(&mut pm, snapshot, &view);
+                mesh3::draw_meshes(&mut pm, snapshot, &view, &occ);
                 meshes_drawn = true;
             }
             continue;
         }
-        // every face is filled with its own resolved colour, every edge stroked with its own
-        for face in sh["faces"].as_array().into_iter().flatten() {
-            let Some(color) = face["fill"].as_str().and_then(parse_hex) else {
-                continue;
-            };
-            let mut paint = Paint::default();
-            paint.set_color(color);
-            paint.anti_alias = true;
-            if let Some(path) = face_path(face) {
-                pm.fill_path(&path, &paint, FillRule::Winding, tf, None);
-            }
-        }
-        if sh["image"].is_object() {
-            let opacity = sh["opacity"].as_f64().unwrap_or(1.0) as f32;
-            draw_image(&mut pm, &sh["image"], opacity, tf, base, &mut textures);
-        }
-        for edge in sh["edges"].as_array().into_iter().flatten() {
-            let Some(color) = edge["stroke"].as_str().and_then(parse_hex) else {
-                continue;
-            };
-            let mut paint = Paint::default();
-            paint.set_color(color);
-            paint.anti_alias = true;
-            let stroke = Stroke {
-                width: edge["stroke_width"].as_f64().unwrap_or(2.0) as f32,
-                line_cap: LineCap::Round,
-                line_join: LineJoin::Round,
-                ..Stroke::default()
-            };
-            if let Some(path) = edge_path(edge) {
-                pm.stroke_path(&path, &paint, &stroke, tf, None);
-            }
-        }
-        if debug {
-            let mut paint = Paint::default();
-            paint.set_color(Color::from_rgba8(0xd0, 0x30, 0x30, 255));
-            paint.anti_alias = true;
-            for v in sh["vertices"].as_array().into_iter().flatten() {
-                let (x, y) = (
-                    v[1].as_f64().unwrap_or(0.0) as f32,
-                    v[2].as_f64().unwrap_or(0.0) as f32,
-                );
-                if let Some(c) = PathBuilder::from_circle(x, y, 3.0) {
-                    pm.fill_path(&c, &paint, FillRule::Winding, tf, None);
-                }
-            }
+        let lit_layer = !lights.is_empty() && sh["lit"].is_object();
+        if lit_layer {
+            // lit shapes are drawn flat into their own layer, shaded, then laid over the picture
+            let mut layer = Pixmap::new(pm.width(), pm.height()).expect("a pixmap");
+            draw_plain(&mut layer, sh, &view, false, base, &mut textures);
+            light2d::light_layer(&mut layer, sh, &lights, &bvh, &occ, tf, exposure, samples);
+            pm.draw_pixmap(
+                0,
+                0,
+                layer.as_ref(),
+                &tiny_skia::PixmapPaint::default(),
+                Transform::identity(),
+                None,
+            );
+        } else {
+            draw_plain(&mut pm, sh, &view, debug, base, &mut textures);
         }
     }
     draw_fluids(&mut pm, &snapshot["fluids"], &view, false);
@@ -1009,11 +1072,34 @@ fn render_view(
     }
     // a scene whose only 3D thing is water has no mesh to trigger the 3D pass
     if !meshes_drawn && snapshot["fluids3"].is_array() {
-        mesh3::draw_meshes(&mut pm, snapshot, &view);
+        mesh3::draw_meshes(&mut pm, snapshot, &view, &occ);
     }
     while next_field < fields.len() {
         draw_field(&mut pm, fields[next_field], &view);
         next_field += 1;
+    }
+    // bloom: the bright parts of a lit picture bleed into their surroundings
+    let bloom = snapshot["light3"]["bloom"].as_f64().unwrap_or(0.0);
+    if !lights.is_empty() && bloom > 0.0 {
+        let (w, h) = (pm.width() as usize, pm.height() as usize);
+        let mut buf: Vec<[f32; 4]> = pm
+            .data()
+            .chunks(4)
+            .map(|p| {
+                [
+                    p[0] as f32 / 255.0,
+                    p[1] as f32 / 255.0,
+                    p[2] as f32 / 255.0,
+                    p[3] as f32 / 255.0,
+                ]
+            })
+            .collect();
+        light::bloom(&mut buf, w, h, bloom, (h / 60).max(1));
+        for (px, b) in pm.data_mut().chunks_mut(4).zip(&buf) {
+            let a = (b[3] * 255.0 + 0.5) as u8;
+            let q = |v: f32| ((v * 255.0 + 0.5) as u8).min(a);
+            px.copy_from_slice(&[q(b[0]), q(b[1]), q(b[2]), a]);
+        }
     }
     if debug_physics {
         draw_physics(

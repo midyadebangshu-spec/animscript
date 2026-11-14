@@ -220,6 +220,8 @@ pub struct Shape {
     pub light: Option<LightDef>,
     /// How a mesh answers light: roughness, metalness and emission (0 to 1; emission may exceed 1).
     pub surface: Option<Surface>,
+    /// A 2D shape that is lit by the scene's lights (`shape.lit(...)`).
+    pub lit: Option<Lit2D>,
     /// A physics body's orientation as a quaternion `[w, x, y, z]`; replaces the three turns when set.
     pub orient: Option<[f64; 4]>,
     /// Texture coordinates `[u, v]` (0 to 1) fixed when the image was assigned.
@@ -245,6 +247,17 @@ pub struct LightDef {
     pub ground: Option<Color>,
     /// Does it cast shadows? (not for ambient light)
     pub shadows: bool,
+}
+
+/// How a flat shape takes light: the `bevel` (px) rounds its edges for shading (0: flat), its surface,
+/// and whether it blocks light for others.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Lit2D {
+    pub bevel: f64,
+    pub surface: Surface,
+    pub occluder: bool,
+    /// The sheet's distance along z (px; the 3D camera looks along +z, so larger is further away).
+    pub depth: f64,
 }
 
 /// A mesh's response to light.
@@ -500,6 +513,7 @@ impl Shape {
             material: None,
             light: None,
             surface: None,
+            lit: None,
             orient: None,
             uv: BTreeMap::new(),
         }

@@ -1,3 +1,4 @@
+#![allow(clippy::cloned_ref_to_slice_refs)]
 //! Photographic lighting: the shading model and what the renderer does with `lights`.
 use animscript_render::light::*;
 use animscript_render::render_with;

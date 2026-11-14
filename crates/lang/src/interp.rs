@@ -2634,6 +2634,10 @@ impl Interp {
             let sn = sn.clone();
             return self.material_method(&sn, name, args);
         }
+        if let (Value::Shape(sn), "lit") = (&obj, name) {
+            let sn = sn.clone();
+            return self.lit_method(&sn, args);
+        }
         if let (Value::Shape(sn), true) = (&obj, Interp::is_body_method(name)) {
             let sn = sn.clone();
             return self.body_method(&sn, name, args, mode);

@@ -127,6 +127,10 @@ pub fn build_snapshot(
                 "transform": {"position": pt(&tf.position), "scale": pt(&tf.scale), "rotation": tf.rotation, "pivot": pt(&tf.pivot)},
                 "vertices": vertices, "edges": edges, "faces": faces,
             });
+            if let Some(l) = &sh.lit {
+                let depth = l.depth;
+                shape_json["lit"] = json!({"bevel": l.bevel, "surface": [l.surface.roughness, l.surface.metallic, l.surface.emissive], "occluder": l.occluder, "depth": depth});
+            }
             if let Some(p) = it.paint_snapshot(n, &resolved.stroke_progress) {
                 shape_json["paint"] = p;
             }

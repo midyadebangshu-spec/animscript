@@ -141,6 +141,7 @@ struct Buffers {
 }
 
 impl Buffers {
+    #[allow(clippy::too_many_arguments)]
     fn triangle(
         &mut self,
         p: [[f64; 2]; 3],
@@ -239,7 +240,7 @@ fn shade(light: &Light, n: V3) -> f64 {
 }
 
 /// Draw every visible mesh of the snapshot into `pm` (one z-buffer for all of them).
-pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View) {
+pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View, occ: &[crate::light::OccLayer]) {
     let c = &snapshot["camera3"];
     if !c.is_object() {
         return;
@@ -570,7 +571,7 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View) {
                             },
                         };
                         let rad = crate::light::radiance(lights, &surf, &|li| {
-                            crate::light::visibility(&lights[li], bvh, samples, pos, n, x, y)
+                            crate::light::visibility(&lights[li], bvh, occ, samples, pos, n, x, y)
                         });
                         let t = crate::light::tonemap(rad, exposure);
                         [t[0] as f32 * a, t[1] as f32 * a, t[2] as f32 * a, a]
@@ -613,13 +614,6 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View) {
                 });
             }
         });
-        crate::light::bloom(
-            &mut buf.rgba,
-            w,
-            h,
-            snapshot["light3"]["bloom"].as_f64().unwrap_or(0.0),
-            h / 60,
-        );
     }
 
     // the picture, averaged down from the supersampled buffer
@@ -784,7 +778,9 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View) {
 /// between their anchors. Drawn over the finished picture, without hiding.
 pub fn draw_physics3(pm: &mut Pixmap, snapshot: &Value, tf: Transform) {
     let (c, phys) = (&snapshot["camera3"], &snapshot["physics3"]);
-    if !c.is_object() || !(phys.is_object() || snapshot["rigs3"].is_array()) {
+    if !c.is_object()
+        || !(phys.is_object() || snapshot["rigs3"].is_array() || snapshot["lights"].is_array())
+    {
         return;
     }
     let s = Screen {
@@ -849,6 +845,53 @@ pub fn draw_physics3(pm: &mut Pixmap, snapshot: &Value, tf: Transform) {
             }
         }
     }
+    // lights: a yellow ring at a point or spot light (spots show their axis), a line along a sun's direction
+    let mut yellow = Paint::default();
+    yellow.set_color(Color::from_rgba8(0xe8, 0xc0, 0x20, 255));
+    yellow.anti_alias = true;
+    for l in snapshot["lights"].as_array().into_iter().flatten() {
+        let (pos, dir) = (v3(&l["pos"]), v3(&l["dir"]));
+        let kind = l["kind"].as_str().unwrap_or("point");
+        let (from, to) = match kind {
+            "sun" => {
+                let c = [
+                    snapshot["canvas"][0].as_f64().unwrap_or(1280.0) / 2.0,
+                    80.0,
+                    400.0,
+                ];
+                (
+                    c,
+                    [
+                        c[0] + dir[0] * 120.0,
+                        c[1] + dir[1] * 120.0,
+                        c[2] + dir[2] * 120.0,
+                    ],
+                )
+            }
+            "ambient" => continue,
+            _ => (
+                pos,
+                [
+                    pos[0] + dir[0] * 80.0,
+                    pos[1] + dir[1] * 80.0,
+                    pos[2] + dir[2] * 80.0,
+                ],
+            ),
+        };
+        if let (Some((x0, y0)), Some((x1, y1))) = (at(from), at(to)) {
+            if kind != "point" {
+                let mut pb = PathBuilder::new();
+                pb.move_to(x0, y0);
+                pb.line_to(x1, y1);
+                if let Some(path) = pb.finish() {
+                    pm.stroke_path(&path, &yellow, &line, ident, None);
+                }
+            }
+            if let Some(ring) = PathBuilder::from_circle(x0, y0, 7.0) {
+                pm.stroke_path(&ring, &yellow, &line, ident, None);
+            }
+        }
+    }
     // bones: green lines from head to tip with a ring at the head
     let mut green = Paint::default();
     green.set_color(Color::from_rgba8(0x20, 0xa0, 0x50, 255));
@@ -881,4 +924,41 @@ pub fn draw_physics3(pm: &mut Pixmap, snapshot: &Value, tf: Transform) {
             }
         }
     }
+}
+
+/// The triangles of every opaque visible mesh of a snapshot (world space), as shadow casters.
+pub fn occluder_triangles(snapshot: &Value) -> Vec<[V3; 3]> {
+    let mut tris = vec![];
+    for sh in snapshot["shapes"].as_array().into_iter().flatten() {
+        if sh["visible"] == Value::Bool(false) || !sh["mesh"].is_object() {
+            continue;
+        }
+        if sh["mesh"]["material"]["kind"].as_str() == Some("glass")
+            || sh["opacity"].as_f64().unwrap_or(1.0) < 0.5
+        {
+            continue;
+        }
+        let verts: Vec<V3> = sh["mesh"]["verts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(v3)
+            .collect();
+        for f in sh["mesh"]["faces"].as_array().into_iter().flatten() {
+            let idx: Vec<usize> = f
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|i| i.as_u64())
+                .map(|i| i as usize)
+                .collect();
+            if idx.len() < 3 || idx.iter().any(|i| *i >= verts.len()) {
+                continue;
+            }
+            for k in 1..idx.len() - 1 {
+                tris.push([verts[idx[0]], verts[idx[k]], verts[idx[k + 1]]]);
+            }
+        }
+    }
+    tris
 }

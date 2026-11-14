@@ -87,7 +87,7 @@ impl Interp {
                     let x = this
                         .num(v, &format!("`{key}`"))
                         .map_err(|e| e2(e.message))?;
-                    if !(x >= 0.0) || !x.is_finite() {
+                    if x.is_nan() || x < 0.0 || !x.is_finite() {
                         return Err(e2(format!("`{key}` cannot be negative")));
                     }
                     Ok(x)
@@ -174,6 +174,72 @@ impl Interp {
         Ok(Value::Fresh(Box::new(sh)))
     }
 
+    /// `shape.lit(bevel: 0, roughness: 0.6, metallic: 0, emissive: 0, occluder: false)` on a 2D shape: the
+    /// scene's lights shade it (as a flat sheet at the shape's depth, `pos_z`, rounded at its edges by `bevel`).
+    pub fn lit_method(&mut self, sn: &str, args: Args) -> Res<Value> {
+        if self.is_mesh_shape(sn) || sn.contains('.') {
+            return Err(e1(format!("`lit` is for flat 2D shapes; `{sn}` is not one (meshes are always lit when the scene has lights)")));
+        }
+        let m = self.bind(
+            "lit",
+            args,
+            &[
+                "bevel",
+                "roughness",
+                "metallic",
+                "emissive",
+                "occluder",
+                "depth",
+            ],
+            &[],
+        )?;
+        let mut lit = Lit2D {
+            bevel: 0.0,
+            surface: Surface::default(),
+            occluder: false,
+            depth: 0.0,
+        };
+        let num = |this: &Interp, k: &str, lo: f64, hi: f64| -> Res<Option<f64>> {
+            match m.get(k) {
+                None => Ok(None),
+                Some(v) => {
+                    let x = this.num(v, &format!("`{k}`")).map_err(|e| e2(e.message))?;
+                    if !(lo..=hi).contains(&x) {
+                        return Err(e2(format!("`{k}` is between {lo} and {hi}")));
+                    }
+                    Ok(Some(x))
+                }
+            }
+        };
+        if let Some(x) = num(self, "bevel", 0.0, 1000.0)? {
+            lit.bevel = x;
+        }
+        if let Some(x) = num(self, "roughness", 0.0, 1.0)? {
+            lit.surface.roughness = x;
+        }
+        if let Some(x) = num(self, "metallic", 0.0, 1.0)? {
+            lit.surface.metallic = x;
+        }
+        if let Some(x) = num(self, "depth", -1e6, 1e6)? {
+            lit.depth = x;
+        }
+        if let Some(x) = num(self, "emissive", 0.0, 50.0)? {
+            lit.surface.emissive = x;
+        }
+        match m.get("occluder") {
+            None => {}
+            Some(Value::Bool(b)) => lit.occluder = *b,
+            Some(o) => {
+                return Err(e2(format!(
+                    "`occluder` is true or false, found {}",
+                    o.type_name()
+                )))
+            }
+        }
+        self.shapes.get_mut(sn).expect("shape").lit = Some(lit);
+        Ok(Value::None)
+    }
+
     /// Every light as the renderer needs it this tick (colour in linear light, `intensity` already
     /// multiplied by the opacity); `None` when the program has no lights.
     pub fn lights_json(&self, resolved: &crate::snapshot::Resolved) -> Option<J> {
@@ -224,6 +290,6 @@ impl Interp {
             }
             out.push(j);
         }
-        (!out.is_empty()).then(|| J::Array(out))
+        (!out.is_empty()).then_some(J::Array(out))
     }
 }

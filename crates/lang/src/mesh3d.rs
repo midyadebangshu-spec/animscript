@@ -344,7 +344,7 @@ impl Interp {
                 }
                 if let Some(v) = m.get("ao") {
                     st.ao = self.num(v, "`ao`")?;
-                    if !(st.ao >= 0.0) {
+                    if st.ao.is_nan() || st.ao < 0.0 {
                         return Err(msh("`ao` is the occlusion distance in px (0 turns it off)"));
                     }
                 }

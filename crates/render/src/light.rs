@@ -158,6 +158,7 @@ pub fn arrival(l: &Lt, p: V3) -> Option<(V3, f64, f64)> {
 
 /// Linear radiance leaving the surface towards the eye. `visible(i)` is how much of light `i` (its
 /// index in `lights`) reaches the point (1 = all, 0 = shadowed).
+#[allow(clippy::needless_range_loop)]
 pub fn radiance(lights: &[Lt], s: &Surf, visible: &dyn Fn(usize) -> f64) -> [f64; 3] {
     let rough = s.rough.clamp(0.04, 1.0);
     let a = rough * rough;
@@ -230,16 +231,18 @@ fn cross(a: V3, b: V3) -> V3 {
 /// How much of light `l` reaches `p` (surface normal `n`): 1 = all, 0 = none. A light with `size` zero
 /// casts a hard shadow (one ray); otherwise `samples` rays go to points of its disc, laid out on a
 /// spiral that is turned by a hash of the pixel `(x, y)`, so the same picture always comes out.
+#[allow(clippy::too_many_arguments)]
 pub fn visibility(
     l: &Lt,
     bvh: &crate::bvh::Bvh,
+    occ: &[OccLayer],
     samples: usize,
     p: V3,
     n: V3,
     x: usize,
     y: usize,
 ) -> f64 {
-    if !l.shadows || bvh.is_empty() {
+    if !l.shadows || (bvh.is_empty() && occ.is_empty()) {
         return 1.0;
     }
     let Some((to, dist, _)) = arrival(l, p) else {
@@ -255,7 +258,11 @@ pub fn visibility(
         } else {
             f64::INFINITY
         };
-        return if bvh.any_hit(o, to, tmax) { 0.0 } else { 1.0 };
+        return if blocked(bvh, occ, o, to, tmax) {
+            0.0
+        } else {
+            1.0
+        };
     }
     let up = if to[1].abs() < 0.9 {
         [0.0, 1.0, 0.0]
@@ -290,7 +297,7 @@ pub fn visibility(
                 f64::INFINITY,
             )
         };
-        if !bvh.any_hit(o, dir, tmax) {
+        if !blocked(bvh, occ, o, dir, tmax) {
             open += 1;
         }
     }
@@ -407,4 +414,38 @@ fn blur_line(src: &[[f32; 3]], dst: &mut [[f32; 3]], r: usize) {
             dst[i][c] = acc[c] * norm;
         }
     }
+}
+
+/// A flat 2D shape that blocks light: a sheet at depth `z` whose alpha mask (pixels of a `w` x `h`
+/// picture) says where it is solid. `tf` maps canvas coordinates to those pixels:
+/// `(sx, kx, tx, ky, sy, ty)` as in `px = sx x + kx y + tx`, `py = ky x + sy y + ty`.
+pub struct OccLayer {
+    pub z: f64,
+    pub w: usize,
+    pub h: usize,
+    pub alpha: Vec<u8>,
+    pub tf: [f64; 6],
+}
+
+fn layer_blocks(l: &OccLayer, o: V3, d: V3, tmax: f64) -> bool {
+    if d[2].abs() < 1e-12 {
+        return false;
+    }
+    let t = (l.z - o[2]) / d[2];
+    if t <= 1e-6 || t >= tmax {
+        return false;
+    }
+    let (x, y) = (o[0] + d[0] * t, o[1] + d[1] * t);
+    let px = l.tf[0] * x + l.tf[1] * y + l.tf[2];
+    let py = l.tf[3] * x + l.tf[4] * y + l.tf[5];
+    if px < 0.0 || py < 0.0 {
+        return false;
+    }
+    let (ix, iy) = (px as usize, py as usize);
+    ix < l.w && iy < l.h && l.alpha[iy * l.w + ix] >= 128
+}
+
+/// Is the ray from `o` along unit `d` for `tmax` stopped by a mesh or a 2D occluder?
+pub fn blocked(bvh: &crate::bvh::Bvh, occ: &[OccLayer], o: V3, d: V3, tmax: f64) -> bool {
+    bvh.any_hit(o, d, tmax) || occ.iter().any(|l| layer_blocks(l, o, d, tmax))
 }
