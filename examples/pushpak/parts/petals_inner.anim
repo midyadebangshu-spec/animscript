@@ -8,6 +8,7 @@ param base_y = 596
 param height = 250
 param r_base = 205
 param lean = 0
+param bulge = 55
 param spin = 0.09.turns
 param s_bend = 0
 param sway = 0
@@ -16,7 +17,7 @@ param waves = 1.5
 param count = 10
 param half_w = 50
 
-shape petals_inner = petal_ring(axis_x, base_y, height, r_base, lean, spin, s_bend, sway, wave, waves, half_w, -0.2, count, 0.turns)
+shape petals_inner = petal_ring(axis_x, base_y, height, r_base, lean, bulge, spin, s_bend, sway, wave, waves, half_w, -0.35, count, 0.turns)
 petals_inner.fill = #d8c2b4
 petals_inner.surface(roughness: 0.55, emissive: 0.5)
 # the lace: a frame along the edges, a central vein and ribs that sweep up from the vein
