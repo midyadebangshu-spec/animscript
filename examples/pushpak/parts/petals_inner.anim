@@ -19,9 +19,9 @@ param count = 11
 param half_w = 36
 
 shape petals_inner = petal_ring(axis_x, base_y, height, r_base, lean, bulge, flare, spin, s_bend, sway, wave, waves, half_w, -0.35, count, 0.turns)
-petals_inner.fill = #cfc4dc
-petals_inner.opacity = 0.6
-petals_inner.surface(roughness: 0.55, emissive: 0.5)
+petals_inner.fill = #a995d3
+petals_inner.opacity = 0.72
+petals_inner.surface(roughness: 0.4, metallic: 0.35, emissive: 0.5)
 # the lace: a frame along the edges, a central vein and ribs that sweep up from the vein
 petals_inner.pattern(mask: "(abs(u - 0.5) * 2 > 0.86) || (abs(u - 0.5) * 2 < 0.035) || (abs(fract(v * 11 + abs(u - 0.5) * 2 + abs(u - 0.5) * abs(u - 0.5) * 2.4) - 0.5) > 0.455 && abs(u - 0.5) * 2 < 0.86)", color: #3a2414, alpha: 0.95)
 
