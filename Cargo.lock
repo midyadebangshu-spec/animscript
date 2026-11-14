@@ -192,6 +192,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "animscript-audio"
+version = "0.1.0"
+
+[[package]]
 name = "animscript-brush"
 version = "0.1.0"
 dependencies = [
