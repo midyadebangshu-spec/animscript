@@ -66,6 +66,8 @@ struct Mesh {
     opacity: f64,
     /// A mirror's reflectance (0 = an ordinary surface).
     reflect: f64,
+    /// Roughness, metalness and emission for photographic lighting.
+    surface: [f64; 3],
 }
 
 struct Light {
@@ -131,6 +133,11 @@ struct Buffers {
     /// How mirror-like the nearest surface at each pixel is (0 = not at all) and its normal.
     refl: Vec<f32>,
     nrm: Vec<[f32; 3]>,
+    /// Camera-space position, the unlit colour (sRGB with alpha) and (roughness, metalness, emission) per pixel,
+    /// for the photographic lighting pass.
+    cpos: Vec<[f32; 3]>,
+    alb: Vec<[f32; 4]>,
+    mat: Vec<[f32; 3]>,
 }
 
 impl Buffers {
@@ -139,7 +146,9 @@ impl Buffers {
         p: [[f64; 2]; 3],
         z: [f64; 3],
         normals: [V3; 3],
+        pc: [V3; 3],
         base: [f32; 4],
+        mat: [f32; 3],
         refl: f32,
         light: &Light,
     ) {
@@ -197,6 +206,13 @@ impl Buffers {
                         (a0 * normals[0][2] + a1 * normals[1][2] + a2 * normals[2][2]) * k,
                     ]);
                     let s = shade(light, n) as f32;
+                    self.cpos[i] = [
+                        ((a0 * pc[0][0] + a1 * pc[1][0] + a2 * pc[2][0]) * k) as f32,
+                        ((a0 * pc[0][1] + a1 * pc[1][1] + a2 * pc[2][1]) * k) as f32,
+                        zz,
+                    ];
+                    self.alb[i] = base;
+                    self.mat[i] = mat;
                     self.refl[i] = refl;
                     self.nrm[i] = [n[0] as f32, n[1] as f32, n[2] as f32];
                     self.rgba[i] = [
@@ -324,6 +340,14 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View) {
                         .collect()
                 })
                 .collect(),
+            surface: match m["surface"].as_array() {
+                Some(a) if a.len() == 3 => [
+                    a[0].as_f64().unwrap_or(0.6),
+                    a[1].as_f64().unwrap_or(0.0),
+                    a[2].as_f64().unwrap_or(0.0),
+                ],
+                _ => [0.6, 0.0, 0.0],
+            },
             double_sided: m["double_sided"] == Value::Bool(true),
             fill: m["fill"]
                 .as_str()
@@ -351,6 +375,9 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View) {
         rgba: vec![[0.0; 4]; w * h],
         refl: vec![0.0; w * h],
         nrm: vec![[0.0; 3]; w * h],
+        cpos: vec![[0.0; 3]; w * h],
+        alb: vec![[0.0; 4]; w * h],
+        mat: vec![[0.0; 3]; w * h],
     };
 
     // faces: cull, shade, clip, rasterize
@@ -448,12 +475,151 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View) {
                     [pts[0], pts[k], pts[k + 1]],
                     [poly[0].0[2], poly[k].0[2], poly[k + 1].0[2]],
                     [poly[0].1, poly[k].1, poly[k + 1].1],
+                    [poly[0].0, poly[k].0, poly[k + 1].0],
                     base,
+                    [
+                        m.surface[0] as f32,
+                        m.surface[1] as f32,
+                        m.surface[2] as f32,
+                    ],
                     m.reflect as f32,
                     &light,
                 );
             }
         }
+    }
+
+    // photographic lighting replaces the toon shading when the scene has lights
+    let lights = crate::light::parse_lights(snapshot);
+    if !lights.is_empty() {
+        let exposure = snapshot["light3"]["exposure"].as_f64().unwrap_or(1.0);
+        let samples = match snapshot["light3"]["quality"].as_str() {
+            Some("low") => 4,
+            Some("high") => 16,
+            _ => 8,
+        };
+        let ao_radius = snapshot["light3"]["ao"].as_f64().unwrap_or(60.0);
+        let ao_on = ao_radius > 0.0 && lights.iter().any(|l| l.kind == crate::light::Kind::Ambient);
+        // every opaque mesh casts shadows and occludes
+        let mut tris: Vec<[V3; 3]> = vec![];
+        if ao_on
+            || lights
+                .iter()
+                .any(|l| l.shadows && l.kind != crate::light::Kind::Ambient)
+        {
+            for m in meshes.iter().filter(|m| m.opacity >= 0.5) {
+                for f in &m.faces {
+                    if f.len() < 3 || f.iter().any(|i| *i >= m.verts.len()) {
+                        continue;
+                    }
+                    for k in 1..f.len() - 1 {
+                        tris.push([m.verts[f[0]], m.verts[f[k]], m.verts[f[k + 1]]]);
+                    }
+                }
+            }
+        }
+        let bvh = crate::bvh::Bvh::new(tris);
+        let cam = &screen.cam;
+        let (alb, cpos, nrm, mat, depth) = (&buf.alb, &buf.cpos, &buf.nrm, &buf.mat, &buf.depth);
+        let threads = std::thread::available_parallelism()
+            .map_or(4, |n| n.get())
+            .min(16);
+        // chunks of whole SS-high bands, so a block's samples are in one chunk
+        let rows = (h.div_ceil(threads).div_ceil(SS) * SS).max(SS);
+        std::thread::scope(|sc| {
+            for (ci, chunk) in buf.rgba.chunks_mut(rows * w).enumerate() {
+                let (lights, bvh) = (&lights, &bvh);
+                sc.spawn(move || {
+                    let y0 = ci * rows;
+                    let shade = |x: usize, y: usize| -> [f32; 4] {
+                        let i = y * w + x;
+                        let a = alb[i][3];
+                        let c = [cpos[i][0] as f64, cpos[i][1] as f64, cpos[i][2] as f64];
+                        let pos = [
+                            cam.eye[0]
+                                + cam.right[0] * c[0]
+                                + cam.down[0] * c[1]
+                                + cam.forward[0] * c[2],
+                            cam.eye[1]
+                                + cam.right[1] * c[0]
+                                + cam.down[1] * c[1]
+                                + cam.forward[1] * c[2],
+                            cam.eye[2]
+                                + cam.right[2] * c[0]
+                                + cam.down[2] * c[1]
+                                + cam.forward[2] * c[2],
+                        ];
+                        let n = [nrm[i][0] as f64, nrm[i][1] as f64, nrm[i][2] as f64];
+                        let al = alb[i];
+                        let surf = crate::light::Surf {
+                            pos,
+                            n,
+                            view: unit(sub(cam.eye, pos)),
+                            albedo: [
+                                crate::light::srgb_to_linear(al[0] as f64),
+                                crate::light::srgb_to_linear(al[1] as f64),
+                                crate::light::srgb_to_linear(al[2] as f64),
+                            ],
+                            rough: mat[i][0] as f64,
+                            metal: mat[i][1] as f64,
+                            emissive: mat[i][2] as f64,
+                            ao: if ao_on {
+                                crate::light::occlusion(bvh, samples, ao_radius, pos, n, x, y)
+                            } else {
+                                1.0
+                            },
+                        };
+                        let rad = crate::light::radiance(lights, &surf, &|li| {
+                            crate::light::visibility(&lights[li], bvh, samples, pos, n, x, y)
+                        });
+                        let t = crate::light::tonemap(rad, exposure);
+                        [t[0] as f32 * a, t[1] as f32 * a, t[2] as f32 * a, a]
+                    };
+                    let live = |i: usize| depth[i] != f32::INFINITY && alb[i][3] > 0.0;
+                    let rows_here = chunk.len() / w;
+                    // the first sample of every SS x SS block is lit; the others copy it when they are the same surface
+                    for ly in (0..rows_here).step_by(SS) {
+                        for x in (0..w).step_by(SS) {
+                            let i0 = (y0 + ly) * w + x;
+                            let lit0 = live(i0).then(|| shade(x, y0 + ly));
+                            if let Some(c) = lit0 {
+                                chunk[ly * w + x] = c;
+                            }
+                            for sy in 0..SS {
+                                for sx in 0..SS {
+                                    if (sx, sy) == (0, 0) || x + sx >= w || ly + sy >= rows_here {
+                                        continue;
+                                    }
+                                    let i = (y0 + ly + sy) * w + x + sx;
+                                    if !live(i) {
+                                        continue;
+                                    }
+                                    let same = live(i0)
+                                        && (depth[i] - depth[i0]).abs() <= 0.004 * depth[i0]
+                                        && nrm[i][0] * nrm[i0][0]
+                                            + nrm[i][1] * nrm[i0][1]
+                                            + nrm[i][2] * nrm[i0][2]
+                                            > 0.995
+                                        && alb[i] == alb[i0]
+                                        && mat[i] == mat[i0];
+                                    chunk[(ly + sy) * w + x + sx] = match (same, lit0) {
+                                        (true, Some(c)) => c,
+                                        _ => shade(x + sx, y0 + ly + sy),
+                                    };
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        });
+        crate::light::bloom(
+            &mut buf.rgba,
+            w,
+            h,
+            snapshot["light3"]["bloom"].as_f64().unwrap_or(0.0),
+            h / 60,
+        );
     }
 
     // the picture, averaged down from the supersampled buffer

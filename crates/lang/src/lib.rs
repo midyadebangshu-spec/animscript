@@ -15,6 +15,7 @@ pub mod interp;
 pub mod journal;
 pub mod layers;
 pub mod lexer;
+pub mod light;
 pub mod mathfx;
 pub mod mesh3d;
 pub mod paint;

@@ -215,10 +215,54 @@ pub struct Shape {
     /// What the mesh's surface does with light beyond shading: reflect its surroundings (mirror) or
     /// let them through bent (glass).
     pub material: Option<MeshMaterial>,
+    /// Set on a light (`sun_light`, `point_light`, ...): a hidden shape whose position, turns, fill colour and
+    /// opacity are the light's, so every action and keyframe works on it.
+    pub light: Option<LightDef>,
+    /// How a mesh answers light: roughness, metalness and emission (0 to 1; emission may exceed 1).
+    pub surface: Option<Surface>,
     /// A physics body's orientation as a quaternion `[w, x, y, z]`; replaces the three turns when set.
     pub orient: Option<[f64; 4]>,
     /// Texture coordinates `[u, v]` (0 to 1) fixed when the image was assigned.
     pub uv: BTreeMap<u32, [f64; 2]>,
+}
+
+/// What a light is. Colour is the shape's fill, the multiplier on `intensity` its opacity.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LightDef {
+    /// "sun", "point", "spot" or "ambient".
+    pub kind: String,
+    /// The direction the light travels before the shape's turns are applied (sun, spot).
+    pub dir: [f64; 3],
+    pub intensity: f64,
+    /// Point and spot: the distance (px) at which `intensity` applies; it falls off with the square of the distance.
+    pub reach: f64,
+    /// Radius (px) of a point or spot emitter, or the angular size (degrees) of the sun: softens shadows.
+    pub size: f64,
+    /// Spot: half-angle of the cone in radians; `softness` is the fraction of it that fades out.
+    pub angle: f64,
+    pub softness: f64,
+    /// Ambient: the colour from below (the fill is the colour from above); `None` for a flat ambient.
+    pub ground: Option<Color>,
+    /// Does it cast shadows? (not for ambient light)
+    pub shadows: bool,
+}
+
+/// A mesh's response to light.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Surface {
+    pub roughness: f64,
+    pub metallic: f64,
+    pub emissive: f64,
+}
+
+impl Default for Surface {
+    fn default() -> Self {
+        Surface {
+            roughness: 0.6,
+            metallic: 0.0,
+            emissive: 0.0,
+        }
+    }
 }
 
 /// A paint layer's raster size (canvas pixels) and how many picture pixels there are per canvas pixel.
@@ -454,6 +498,8 @@ impl Shape {
             scale_z: 1.0,
             pivot3: [0.0; 3],
             material: None,
+            light: None,
+            surface: None,
             orient: None,
             uv: BTreeMap::new(),
         }

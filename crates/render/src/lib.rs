@@ -2,6 +2,8 @@
 //! faces and strokes the edges that the runtime already resolved into the snapshot.
 use serde_json::Value;
 
+pub mod bvh;
+pub mod light;
 mod mesh3;
 use tiny_skia::{
     Color, FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform,

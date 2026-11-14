@@ -183,6 +183,9 @@ pub fn build_snapshot(
     if let Some(p) = &resolved.soft {
         snap["soft"] = p.clone();
     }
+    if let Some(l) = it.lights_json(resolved) {
+        snap["lights"] = l;
+    }
     if let Some(p) = &resolved.rigs3 {
         snap["rigs3"] = p.clone();
     }

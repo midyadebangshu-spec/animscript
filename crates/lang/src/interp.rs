@@ -2368,6 +2368,7 @@ impl Interp {
             }
             "plot" | "curve" | "polar" | "implicit" => self.math_shape(name, args),
             "cube" | "sphere" | "cylinder" | "cone" | "plane" | "lathe" | "extrude" | "stage3" | "focal3" => self.mesh_builtin(name, args),
+            "sun_light" | "point_light" | "spot_light" | "ambient_light" => self.light_builtin(name, args),
             "line" => {
                 let m = self.bind(name, args, &["a", "b"], &["a", "b"])?;
                 Ok(Value::Fresh(Box::new(line(self.point(&m["a"], "`a`")?, self.point(&m["b"], "`b`")?))))

@@ -33,6 +33,14 @@ pub struct Stage3 {
     pub smooth: f64,
     /// The sky mirrors and water reflect where nothing else is: (top, horizon). Default: from the background.
     pub sky: Option<([u8; 4], [u8; 4])>,
+    /// Photographic lighting: multiplies the light before the tone-map (1 = as lit).
+    pub exposure: f64,
+    /// Shadow quality: "low", "medium" or "high" (the number of rays a soft shadow takes).
+    pub quality: String,
+    /// Ambient occlusion distance in px (0 = off).
+    pub ao: f64,
+    /// Bloom strength (0 = off).
+    pub bloom: f64,
 }
 
 impl Default for Stage3 {
@@ -47,6 +55,10 @@ impl Default for Stage3 {
             crease: 40.0,
             smooth: 50.0,
             sky: None,
+            exposure: 1.0,
+            quality: "medium".into(),
+            ao: 60.0,
+            bloom: 0.0,
         }
     }
 }
@@ -294,7 +306,8 @@ impl Interp {
                     name,
                     args,
                     &[
-                        "fov", "light", "ambient", "bands", "crease", "smooth", "sky",
+                        "fov", "light", "ambient", "bands", "crease", "smooth", "sky", "exposure",
+                        "quality", "ao", "bloom",
                     ],
                     &[],
                 )?;
@@ -327,6 +340,32 @@ impl Interp {
                     st.ambient = self.num(v, "`ambient`")?;
                     if !(0.0..=1.0).contains(&st.ambient) {
                         return Err(msh("`ambient` is between 0 and 1"));
+                    }
+                }
+                if let Some(v) = m.get("ao") {
+                    st.ao = self.num(v, "`ao`")?;
+                    if !(st.ao >= 0.0) {
+                        return Err(msh("`ao` is the occlusion distance in px (0 turns it off)"));
+                    }
+                }
+                if let Some(v) = m.get("bloom") {
+                    st.bloom = self.num(v, "`bloom`")?;
+                    if !(0.0..=4.0).contains(&st.bloom) {
+                        return Err(msh("`bloom` is a strength between 0 (off) and 4"));
+                    }
+                }
+                if let Some(v) = m.get("quality") {
+                    match v {
+                        Value::Str(q) if matches!(q.as_str(), "low" | "medium" | "high") => {
+                            st.quality = q.clone()
+                        }
+                        _ => return Err(msh("`quality` is \"low\", \"medium\" or \"high\"")),
+                    }
+                }
+                if let Some(v) = m.get("exposure") {
+                    st.exposure = self.num(v, "`exposure`")?;
+                    if !(st.exposure > 0.0 && st.exposure <= 100.0) {
+                        return Err(msh("`exposure` is above 0 (1 leaves the light as it is)"));
                     }
                 }
                 if let Some(v) = m.get("bands") {
@@ -378,7 +417,7 @@ impl Interp {
     }
 
     pub fn is_material_method(name: &str) -> bool {
-        matches!(name, "glass" | "mirror" | "matte")
+        matches!(name, "glass" | "mirror" | "matte" | "surface")
     }
 
     /// `glass(opacity:, reflect:, refract:)`, `mirror(reflect:)` and `matte()` on a mesh shape.
@@ -398,6 +437,28 @@ impl Interp {
             }
             Ok(v)
         };
+        if name == "surface" {
+            let m = self.bind(name, args, &["roughness", "metallic", "emissive"], &[])?;
+            let mut s = Surface::default();
+            for (k, slot, max) in [
+                ("roughness", &mut s.roughness, 1.0),
+                ("metallic", &mut s.metallic, 1.0),
+                ("emissive", &mut s.emissive, 50.0),
+            ] {
+                if let Some(v) = m.get(k) {
+                    let x = self.num(v, &format!("`{k}`"))?;
+                    if !(0.0..=max).contains(&x) {
+                        return Err(Diagnostic::new(
+                            "E-LIT-002",
+                            format!("`{k}` is between 0 and {max}"),
+                        ));
+                    }
+                    *slot = x;
+                }
+            }
+            self.shapes.get_mut(sn).expect("shape").surface = Some(s);
+            return Ok(Value::None);
+        }
         let material = match name {
             "glass" => {
                 let m = self.bind(name, args, &["opacity", "reflect", "refract"], &[])?;
@@ -473,6 +534,18 @@ impl Interp {
     pub fn light3_json(&self) -> J {
         let s = &self.stage3;
         let mut j = json!({"dir": s.light, "ambient": s.ambient, "bands": s.bands, "crease": s.crease, "smooth": s.smooth});
+        if s.ao != 60.0 {
+            j["ao"] = json!(s.ao);
+        }
+        if s.bloom != 0.0 {
+            j["bloom"] = json!(s.bloom);
+        }
+        if s.quality != "medium" {
+            j["quality"] = json!(s.quality);
+        }
+        if s.exposure != 1.0 {
+            j["exposure"] = json!(s.exposure);
+        }
         if let Some((top, horizon)) = s.sky {
             j["sky"] = json!([crate::color::hex(top), crate::color::hex(horizon)]);
         }
@@ -508,6 +581,9 @@ pub fn mesh_json(
         .map(|(i, v)| json!(t.apply(over.and_then(|o| o.get(&(i as u32))).copied().unwrap_or(*v))))
         .collect();
     let mut j = json!({"verts": verts, "faces": mesh.faces, "double_sided": mesh.double_sided, "fill": fill, "outline": outline, "width": width});
+    if let Some(s) = &sh.surface {
+        j["surface"] = json!([s.roughness, s.metallic, s.emissive]);
+    }
     if let Some(m) = &sh.material {
         j["material"] = json!({"kind": m.kind, "reflect": m.reflect, "refract": m.refract, "opacity": m.opacity});
     }
