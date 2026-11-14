@@ -206,6 +206,38 @@ impl Program {
             .collect())
     }
 
+    /// Evaluate the first output at one point given as one number per declared input (all of them per-point inputs,
+    /// no parameters), reusing `regs` so a caller shading millions of pixels allocates nothing. The result is
+    /// bit-identical to `eval1`.
+    pub fn eval_scalar(&self, point: &[f64], regs: &mut Vec<f64>) -> f64 {
+        regs.clear();
+        for node in &self.nodes {
+            let v = match *node {
+                Node::Const(b) => f64::from_bits(b),
+                Node::Param(_) => 0.0,
+                Node::Input(k) => point.get(k as usize).copied().unwrap_or(0.0),
+                Node::Un(op, a) => un_apply(op, regs[a as usize]),
+                Node::Bin(op, a, b) => bin_apply(op, regs[a as usize], regs[b as usize]),
+                Node::Select(c, a, b) => {
+                    if regs[c as usize] != 0.0 {
+                        regs[a as usize]
+                    } else {
+                        regs[b as usize]
+                    }
+                }
+                Node::Noise { dims, seed, args } => noise_apply(
+                    dims,
+                    seed,
+                    regs[args[0] as usize],
+                    regs[args[1] as usize],
+                    regs[args[2] as usize],
+                ),
+            };
+            regs.push(v);
+        }
+        self.outputs.first().map_or(0.0, |o| regs[*o as usize])
+    }
+
     /// Like `eval_n`, with the number of points taken from the first per-point input (one point if there is none).
     pub fn eval(
         &self,

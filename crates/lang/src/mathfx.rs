@@ -222,7 +222,7 @@ impl Interp {
     }
 
     /// Split arguments into the named ones in `known` and the rest; the rest must be numbers (named constants).
-    fn split_math_args(
+    pub(crate) fn split_math_args(
         &self,
         what: &str,
         args: Args,

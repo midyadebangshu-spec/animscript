@@ -428,7 +428,7 @@ impl Interp {
     }
 
     pub fn is_material_method(name: &str) -> bool {
-        matches!(name, "glass" | "mirror" | "matte" | "surface")
+        matches!(name, "glass" | "mirror" | "matte" | "surface" | "pattern")
     }
 
     /// `glass(opacity:, reflect:, refract:)`, `mirror(reflect:)` and `matte()` on a mesh shape.
@@ -448,6 +448,9 @@ impl Interp {
             }
             Ok(v)
         };
+        if name == "pattern" {
+            return self.pattern_method(sn, args);
+        }
         if name == "surface" {
             let m = self.bind(name, args, &["roughness", "metallic", "emissive"], &[])?;
             let mut s = Surface::default();
@@ -495,6 +498,72 @@ impl Interp {
             }
         };
         self.shapes.get_mut(sn).expect("shape").material = material;
+        Ok(Value::None)
+    }
+
+    /// `pattern(mask:, hole:, color:, glow:)`: equations of the surface coordinates `u` and `v` (each 0 to 1).
+    fn pattern_method(&mut self, sn: &str, args: Args) -> Res<Value> {
+        let (m, consts) = self.split_math_args(
+            "pattern",
+            args,
+            &["mask", "hole", "color", "glow"],
+            &["u", "v"],
+        )?;
+        let has_uv = self.shapes[sn]
+            .mesh
+            .as_ref()
+            .is_some_and(|me| !me.uv.is_empty() && me.uv.len() == me.faces.len());
+        if !has_uv {
+            return Err(msh(format!("`{sn}` has no surface coordinates to draw a pattern on"))
+                .help("a pattern works on meshes with a surface: lathe, sphere, cylinder, cone, cube and plane (not extrude)"));
+        }
+        let mut pat = Pattern::default();
+        for key in ["mask", "hole"] {
+            let Some(v) = m.get(key) else { continue };
+            let Value::Str(src) = v else {
+                return Err(msh(format!(
+                    "`{key}` is an equation in quotes, like \"fract(u * 8) < 0.5\", found {}",
+                    v.type_name()
+                )));
+            };
+            let mut b = animscript_math::Builder::new();
+            let (u, vv) = (
+                b.input("u", animscript_math::Rate::Point),
+                b.input("v", animscript_math::Rate::Point),
+            );
+            let mut env = animscript_math::Env::new().with("u", u).with("v", vv);
+            for (k, c) in &consts {
+                let id = b.constant(*c);
+                env = env.with(k, id);
+            }
+            animscript_math::parse(src, &mut b, &env).map_err(|e| {
+                msh(format!("the `{key}` equation `{src}` is not valid: {e}"))
+                    .help("it may use `u` and `v` (0 to 1 across and along the surface) and the math functions (sin, fract, abs, min, max, smoothstep, noise, ...)")
+            })?;
+            if key == "mask" {
+                pat.mask = Some(src.clone());
+            } else {
+                pat.hole = Some(src.clone());
+            }
+        }
+        if pat.mask.is_none() && pat.hole.is_none() {
+            return Err(msh("`pattern` needs a `mask:` or a `hole:` equation"));
+        }
+        if let Some(c) = m.get("color") {
+            let Value::Color(rgba) = c else {
+                return Err(msh(format!("`color` is a colour, found {}", c.type_name())));
+            };
+            pat.color = Some(format!("#{:02x}{:02x}{:02x}", rgba[0], rgba[1], rgba[2]));
+        }
+        if let Some(g) = m.get("glow") {
+            let g = self.num(g, "`glow`")?;
+            if !(0.0..=50.0).contains(&g) {
+                return Err(msh("`glow` is between 0 and 50"));
+            }
+            pat.glow = g;
+        }
+        pat.consts = consts.into_iter().collect();
+        self.shapes.get_mut(sn).expect("shape").pattern = Some(pat);
         Ok(Value::None)
     }
 
@@ -592,6 +661,10 @@ pub fn mesh_json(
         .map(|(i, v)| json!(t.apply(over.and_then(|o| o.get(&(i as u32))).copied().unwrap_or(*v))))
         .collect();
     let mut j = json!({"verts": verts, "faces": mesh.faces, "double_sided": mesh.double_sided, "fill": fill, "outline": outline, "width": width});
+    if let Some(p) = &sh.pattern {
+        j["pattern"] = json!({"mask": p.mask, "hole": p.hole, "color": p.color, "glow": p.glow, "consts": p.consts.iter().cloned().collect::<std::collections::BTreeMap<_, _>>()});
+        j["uv"] = json!(mesh.uv);
+    }
     if let Some(s) = &sh.surface {
         j["surface"] = json!([s.roughness, s.metallic, s.emissive]);
     }

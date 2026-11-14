@@ -278,3 +278,33 @@ fn subdividing_a_cube_keeps_its_faces_outward_and_its_volume() {
         );
     }
 }
+
+#[test]
+fn a_lathe_has_surface_coordinates_for_every_face_corner() {
+    let m = Mesh::lathe(&[[10.0, 0.0], [20.0, 10.0], [10.0, 20.0]], 8).unwrap();
+    assert_eq!(m.uv.len(), m.faces.len());
+    for (f, uv) in m.faces.iter().zip(&m.uv) {
+        assert_eq!(f.len(), uv.len());
+        for c in uv {
+            assert!(
+                (0.0..=1.0).contains(&c[0]) && (0.0..=1.0).contains(&c[1]),
+                "{c:?}"
+            );
+        }
+    }
+    // u grows around, v up the profile: the first ring of faces spans v 0 to 0.5
+    let (umin, umax) =
+        m.uv.iter()
+            .flatten()
+            .fold((1.0f64, 0.0f64), |a, c| (a.0.min(c[0]), a.1.max(c[0])));
+    assert_eq!((umin, umax), (0.0, 1.0));
+    assert!(m.uv[0].iter().all(|c| c[1] <= 0.5 + 1e-12));
+}
+
+#[test]
+fn a_plane_and_a_cube_have_surface_coordinates() {
+    let p = Mesh::plane(100.0, 50.0, 2, 2);
+    assert_eq!(p.uv.len(), p.faces.len());
+    let c = Mesh::cube(10.0, 10.0, 10.0);
+    assert_eq!(c.uv.len(), 6);
+}

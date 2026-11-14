@@ -24,33 +24,53 @@ fn strip(t0: Number, t1: Number, n: Int, gain: Number) -> List:
 
 shape body = lathe(profile: strip(0.02, 0.98, 32, 1), segments: 64, at: (dome_x, egg_y(0.5), 0))
 body.fill = #e8a24a
-body.surface(roughness: 0.6, emissive: 0.9)
+body.fill = #f0a53c
+body.surface(roughness: 0.6, emissive: 1.2)
 
-shape band_a = lathe(profile: strip(0.17, 0.31, 8, 1.012), segments: 64, at: (dome_x, egg_y(0.24), 0), double_sided: true)
-band_a.fill = #3b2314
-band_a.surface(roughness: 0.7, emissive: 0.05)
-band_a.opacity = 0.62
-shape band_b = lathe(profile: strip(0.33, 0.37, 4, 1.016), segments: 64, at: (dome_x, egg_y(0.35), 0), double_sided: true)
+# ---- ornament: dark lace over the glowing body ------------------------------------------------------------
+# A band is a lathe strip drawn in ink; `hole` cuts everything that is not ink, so the glowing body shows through.
+# A cell of the repeat is (x, y) in -0.5..0.5: `n` cells go round the band and `a` is the cell's height over its width.
+let cell = "sqrt((fract(u * n) - 0.5) * (fract(u * n) - 0.5) + (v - 0.5) * a * (v - 0.5) * a)"
+let corner = "abs(abs(fract(u * n) - 0.5) + abs((v - 0.5) * a) - 0.78) < 0.03"
+let frame = "v < 0.035 || v > 0.965"
+# a medallion: two rings, spokes, a centre dot, a diamond about the cell corners and a frame at the band's edges
+let medallion = "1 - ((abs(" + cell + " - 0.4) < 0.03) || (abs(" + cell + " - 0.27) < 0.022) || (" + cell + " < 0.075) || (" + cell + " < 0.25 && " + cell + " > 0.1 && abs(sin(atan2((v - 0.5) * a, fract(u * n) - 0.5) * 6)) > 0.82) || (" + corner + ") || " + frame + ")"
+# a lattice: crossing diagonals with a dot in each diamond
+let lattice = "1 - ((abs(abs(fract(u * n) - 0.5) + abs((v - 0.5) * a) - 0.35) < 0.05) || (" + cell + " < 0.12) || " + frame + ")"
+# scallops: a row of arches with a small dot under each
+let scallop = "1 - ((abs(sqrt((fract(u * n) - 0.5) * (fract(u * n) - 0.5) + (v - 0.2) * a * (v - 0.2) * a) - 0.46) < 0.05 && v < 0.62) || (sqrt((fract(u * n) - 0.5) * (fract(u * n) - 0.5) + (v - 0.72) * a * (v - 0.72) * a) < 0.1) || " + frame + ")"
+
+# the height of a strip over the width of one of its n cells, so the cells come out square
+fn aspect(t0: Number, t1: Number, n: Int) -> Number:
+    return (t1 - t0) * dome_h * n / (6.283 * egg((t0 + t1) / 2))
+
+shape band_a = lathe(profile: strip(0.08, 0.33, 12, 1.012), segments: 96, at: (dome_x, egg_y(0.2), 0), double_sided: true)
+band_a.fill = #2c1608
+band_a.pattern(hole: medallion, n: 9, a: aspect(0.08, 0.33, 9))
+band_a.surface(roughness: 0.6, emissive: 0.05)
+shape band_b = lathe(profile: strip(0.34, 0.365, 3, 1.016), segments: 64, at: (dome_x, egg_y(0.35), 0), double_sided: true)
 band_b.fill = #f2c56b
 band_b.surface(roughness: 0.35, metallic: 0.6, emissive: 0.5)
-shape band_c = lathe(profile: strip(0.39, 0.52, 8, 1.012), segments: 64, at: (dome_x, egg_y(0.455), 0), double_sided: true)
-band_c.fill = #5a3418
-band_c.surface(roughness: 0.7, emissive: 0.05)
-band_c.opacity = 0.62
-shape band_d = lathe(profile: strip(0.54, 0.58, 4, 1.016), segments: 64, at: (dome_x, egg_y(0.56), 0), double_sided: true)
+shape band_c = lathe(profile: strip(0.375, 0.5, 8, 1.012), segments: 96, at: (dome_x, egg_y(0.44), 0), double_sided: true)
+band_c.fill = #2c1608
+band_c.pattern(hole: lattice, n: 20, a: aspect(0.375, 0.5, 20))
+band_c.surface(roughness: 0.6, emissive: 0.05)
+shape band_d = lathe(profile: strip(0.51, 0.535, 3, 1.016), segments: 64, at: (dome_x, egg_y(0.52), 0), double_sided: true)
 band_d.fill = #f2c56b
 band_d.surface(roughness: 0.35, metallic: 0.6, emissive: 0.5)
-shape band_e = lathe(profile: strip(0.60, 0.74, 8, 1.012), segments: 64, at: (dome_x, egg_y(0.67), 0), double_sided: true)
-band_e.fill = #c9582a
-band_e.surface(roughness: 0.6, emissive: 0.6)
+shape band_e = lathe(profile: strip(0.545, 0.72, 10, 1.012), segments: 96, at: (dome_x, egg_y(0.63), 0), double_sided: true)
+band_e.fill = #3a1a08
+band_e.pattern(hole: scallop, n: 26, a: aspect(0.545, 0.72, 26))
+band_e.surface(roughness: 0.6, emissive: 0.05)
 
 # the waist: a gold band where the ropes hang, and the darker belt below it
 shape waist = lathe(profile: strip(0.755, 0.785, 3, 1.03), segments: 64, at: (dome_x, egg_y(0.77), 0), double_sided: true)
 waist.fill = #e9c25a
 waist.surface(roughness: 0.3, metallic: 0.7, emissive: 0.5)
 shape belt = lathe(profile: strip(0.80, 0.97, 8, 1.01), segments: 64, at: (dome_x, egg_y(0.885), 0), double_sided: true)
-belt.fill = #8a3a1c
-belt.surface(roughness: 0.6, emissive: 0.45)
+belt.fill = #4a200c
+belt.pattern(hole: lattice, n: 30, a: aspect(0.80, 0.97, 30))
+belt.surface(roughness: 0.6, emissive: 0.05)
 
 # the crown: three stacked tiers and a spike
 shape crown_a = lathe(profile: [(0, 0), (50, 0), (34, 14), (46, 22), (30, 40), (0, 44)], segments: 24, at: (dome_x, dome_top - 22, 0))

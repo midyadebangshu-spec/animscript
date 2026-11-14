@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 animscript-brush.workspace = true
+animscript-math.workspace = true
 serde_json.workspace = true
 tiny-skia.workspace = true
 png.workspace = true

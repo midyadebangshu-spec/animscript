@@ -155,6 +155,7 @@ impl Interp {
                     verts: vec![at],
                     faces: vec![],
                     double_sided: false,
+                    ..Default::default()
                 });
                 sh.sculpt = Some(id);
                 Ok(Value::Fresh(Box::new(sh)))
@@ -377,12 +378,14 @@ impl Interp {
                 verts: vec![c],
                 faces: vec![],
                 double_sided: false,
+                ..Default::default()
             });
         } else {
             sh.mesh = Some(CoreMesh {
                 verts: m.verts,
                 faces: m.tris.iter().map(|t| vec![t[0], t[1], t[2]]).collect(),
                 double_sided: false,
+                ..Default::default()
             });
         }
     }

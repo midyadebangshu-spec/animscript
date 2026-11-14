@@ -56,7 +56,79 @@ struct Camera {
     cy: f64,
 }
 
+/// A pattern on a mesh: equations of the surface coordinates `u`, `v`. `mask` (0 to 1) blends the pattern colour into
+/// the fill, `hole` (above 0.5) leaves the pixel undrawn, `glow` is the emission added where the mask is 1.
+struct Pat {
+    mask: Option<animscript_math::Program>,
+    hole: Option<animscript_math::Program>,
+    color: [f32; 3],
+    glow: f64,
+}
+
+/// What `triangle` needs to texture one polygon.
+struct PatTri<'a> {
+    pat: &'a Pat,
+    uv: [[f64; 2]; 3],
+}
+
+fn compile_uv(src: &str, consts: &[(String, f64)]) -> Option<animscript_math::Program> {
+    use animscript_math::*;
+    let mut b = Builder::new();
+    let (u, v) = (b.input("u", Rate::Point), b.input("v", Rate::Point));
+    let mut env = Env::new().with("u", u).with("v", v);
+    for (k, c) in consts {
+        let id = b.constant(*c);
+        env = env.with(k, id);
+    }
+    let id = parse(src, &mut b, &env).ok()?;
+    Some(b.finish(&[id]))
+}
+
+fn pat_of(m: &Value) -> Option<Pat> {
+    let p = &m["pattern"];
+    if !p.is_object() {
+        return None;
+    }
+    let consts: Vec<(String, f64)> = p["consts"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(k, v)| v.as_f64().map(|x| (k.clone(), x)))
+        .collect();
+    let mask = p["mask"].as_str().and_then(|s| compile_uv(s, &consts));
+    let hole = p["hole"].as_str().and_then(|s| compile_uv(s, &consts));
+    if mask.is_none() && hole.is_none() {
+        return None;
+    }
+    let c = p["color"].as_str().and_then(parse_hex).unwrap_or_else(|| {
+        parse_hex(m["fill"].as_str().unwrap_or("#ffffff")).unwrap_or(Color::WHITE)
+    });
+    Some(Pat {
+        mask,
+        hole,
+        color: [c.red(), c.green(), c.blue()],
+        glow: p["glow"].as_f64().unwrap_or(0.0),
+    })
+}
+
+fn uv_of(m: &Value) -> Vec<Vec<[f64; 2]>> {
+    m["uv"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|f| {
+            f.as_array()
+                .into_iter()
+                .flatten()
+                .map(|c| [c[0].as_f64().unwrap_or(0.0), c[1].as_f64().unwrap_or(0.0)])
+                .collect()
+        })
+        .collect()
+}
+
 struct Mesh {
+    uv: Vec<Vec<[f64; 2]>>,
+    pat: Option<Pat>,
     verts: Vec<V3>,
     faces: Vec<Vec<usize>>,
     double_sided: bool,
@@ -152,7 +224,9 @@ impl Buffers {
         mat: [f32; 3],
         refl: f32,
         light: &Light,
+        tex: Option<PatTri>,
     ) {
+        let mut regs: Vec<f64> = vec![];
         let area =
             (p[1][0] - p[0][0]) * (p[2][1] - p[0][1]) - (p[1][1] - p[0][1]) * (p[2][0] - p[0][0]);
         if area == 0.0 || !area.is_finite() {
@@ -198,6 +272,28 @@ impl Buffers {
                 let zz = (1.0 / (a0 + a1 + a2)) as f32;
                 let i = y * self.w + x;
                 if zz < self.depth[i] {
+                    let mut base = base;
+                    let mut mat = mat;
+                    if let Some(t) = &tex {
+                        // surface coordinates with perspective correction, then the pattern's equations
+                        let k = 1.0 / (a0 + a1 + a2);
+                        let at = [
+                            (a0 * t.uv[0][0] + a1 * t.uv[1][0] + a2 * t.uv[2][0]) * k,
+                            (a0 * t.uv[0][1] + a1 * t.uv[1][1] + a2 * t.uv[2][1]) * k,
+                        ];
+                        if let Some(h) = &t.pat.hole {
+                            if h.eval_scalar(&at, &mut regs) > 0.5 {
+                                continue;
+                            }
+                        }
+                        if let Some(m) = &t.pat.mask {
+                            let w = m.eval_scalar(&at, &mut regs).clamp(0.0, 1.0) as f32;
+                            for (b, c) in base.iter_mut().zip(t.pat.color) {
+                                *b += (c - *b) * w;
+                            }
+                            mat[2] += (t.pat.glow * w as f64) as f32;
+                        }
+                    }
                     self.depth[i] = zz;
                     // the normal, interpolated with perspective correction, then lit per pixel
                     let k = 1.0 / (a0 + a1 + a2);
@@ -314,6 +410,8 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View, occ: &[crate:
             continue;
         }
         meshes.push(Mesh {
+            uv: uv_of(m),
+            pat: pat_of(m),
             reflect: if kind == Some("mirror") {
                 m["material"]["reflect"]
                     .as_f64()
@@ -445,12 +543,16 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View, occ: &[crate:
             let base = [m.fill.red(), m.fill.green(), m.fill.blue(), a];
             // clip the polygon to the near plane, carrying the corner normals along
             let cam: Vec<V3> = f.iter().map(|i| screen.to_camera(m.verts[*i])).collect();
-            let mut poly: Vec<(V3, V3)> = vec![];
+            let corner_uv: Vec<[f64; 2]> = match m.uv.get(fi) {
+                Some(c) if c.len() == f.len() && m.pat.is_some() => c.clone(),
+                _ => vec![[0.0; 2]; f.len()],
+            };
+            let mut poly: Vec<(V3, V3, [f64; 2])> = vec![];
             for i in 0..cam.len() {
                 let (p, q) = (i, (i + 1) % cam.len());
                 let (ina, inb) = (cam[p][2] >= NEAR, cam[q][2] >= NEAR);
                 if ina {
-                    poly.push((cam[p], corner[p]));
+                    poly.push((cam[p], corner[p], corner_uv[p]));
                 }
                 if ina != inb {
                     let t = (NEAR - cam[p][2]) / (cam[q][2] - cam[p][2]);
@@ -464,13 +566,17 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View, occ: &[crate:
                         corner[p][1] + (corner[q][1] - corner[p][1]) * t,
                         corner[p][2] + (corner[q][2] - corner[p][2]) * t,
                     ]);
-                    poly.push((pos, nrm));
+                    let uv = [
+                        corner_uv[p][0] + (corner_uv[q][0] - corner_uv[p][0]) * t,
+                        corner_uv[p][1] + (corner_uv[q][1] - corner_uv[p][1]) * t,
+                    ];
+                    poly.push((pos, nrm, uv));
                 }
             }
             if poly.len() < 3 {
                 continue;
             }
-            let pts: Vec<[f64; 2]> = poly.iter().map(|(c, _)| screen.project(*c)).collect();
+            let pts: Vec<[f64; 2]> = poly.iter().map(|(c, _, _)| screen.project(*c)).collect();
             for k in 1..poly.len() - 1 {
                 buf.triangle(
                     [pts[0], pts[k], pts[k + 1]],
@@ -485,6 +591,10 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View, occ: &[crate:
                     ],
                     m.reflect as f32,
                     &light,
+                    m.pat.as_ref().map(|pat| PatTri {
+                        pat,
+                        uv: [poly[0].2, poly[k].2, poly[k + 1].2],
+                    }),
                 );
             }
         }

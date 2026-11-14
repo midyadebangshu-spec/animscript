@@ -220,6 +220,8 @@ pub struct Shape {
     pub light: Option<LightDef>,
     /// How a mesh answers light: roughness, metalness and emission (0 to 1; emission may exceed 1).
     pub surface: Option<Surface>,
+    /// A pattern drawn on a mesh's surface (`mesh.pattern(...)`).
+    pub pattern: Option<Pattern>,
     /// A sculpt (`sculpt(...)`): the index of its volume in the interpreter; the mesh is rebuilt from it after every operation.
     pub sculpt: Option<u32>,
     /// A 2D shape that is lit by the scene's lights (`shape.lit(...)`).
@@ -260,6 +262,18 @@ pub struct Lit2D {
     pub occluder: bool,
     /// The sheet's distance along z (px; the 3D camera looks along +z, so larger is further away).
     pub depth: f64,
+}
+
+/// Equations of a mesh's surface coordinates `u`, `v` (see `Mesh::uv`): where the mask is 1 the surface takes
+/// `color` (the fill if empty), where the hole is above 0.5 it is not drawn, and `glow` is emission added under the mask.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Pattern {
+    pub mask: Option<String>,
+    pub hole: Option<String>,
+    pub color: Option<String>,
+    pub glow: f64,
+    /// Named numbers the equations may use (`pattern(mask: "fract(u * n)", n: 12)`).
+    pub consts: Vec<(String, f64)>,
 }
 
 /// A mesh's response to light.
@@ -515,6 +529,7 @@ impl Shape {
             material: None,
             light: None,
             surface: None,
+            pattern: None,
             sculpt: None,
             lit: None,
             orient: None,

@@ -11,6 +11,9 @@ pub struct Mesh {
     pub faces: Vec<Vec<u32>>,
     /// Drawn from both sides (planes); closed solids are culled from behind.
     pub double_sided: bool,
+    /// Surface coordinates `(u, v)` in 0..1 for every corner of every face (the same shape as `faces`), or empty
+    /// when the mesh has none. They let a pattern be drawn on the surface (`mesh.pattern(...)`).
+    pub uv: Vec<Vec<[f64; 2]>>,
 }
 
 /// Scale about the pivot, rotate (in turns: about y first, the spin, then x, the tilt, then z, the roll), then
@@ -115,12 +118,16 @@ impl Mesh {
             verts: self.verts.iter().map(|v| t.apply(*v)).collect(),
             faces: self.faces.clone(),
             double_sided: self.double_sided,
+            uv: self.uv.clone(),
         }
     }
 
     fn flip(&mut self) {
         for f in &mut self.faces {
             f.reverse();
+        }
+        for c in &mut self.uv {
+            c.reverse();
         }
     }
 
@@ -137,6 +144,9 @@ impl Mesh {
             }
             if n[0] * c[0] + n[1] * c[1] + n[2] * c[2] < 0.0 {
                 self.faces[f].reverse();
+                if let Some(c) = self.uv.get_mut(f) {
+                    c.reverse();
+                }
             }
         }
     }
@@ -174,10 +184,15 @@ impl Mesh {
             vec![4, 5, 1, 0],
             vec![3, 2, 6, 7],
         ];
+        // every face is the unit square, so a pattern repeats once on each
+        let uv = (0..6)
+            .map(|_| vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+            .collect();
         let mut m = Mesh {
             verts,
             faces,
             double_sided: false,
+            uv,
         };
         m.orient_out();
         m
@@ -192,13 +207,18 @@ impl Mesh {
         }
         let mut verts: Vec<[f64; 3]> = vec![];
         let mut faces: Vec<Vec<u32>> = vec![];
-        for f in &self.faces {
+        let mut uvs: Vec<Vec<[f64; 2]>> = vec![];
+        let has_uv = self.uv.len() == self.faces.len();
+        for (fi, f) in self.faces.iter().enumerate() {
             if f.len() != 4 || n == 1 {
                 let base = verts.len() as u32;
                 for i in f {
                     verts.push(self.verts[*i as usize]);
                 }
                 faces.push((0..f.len() as u32).map(|k| base + k).collect());
+                if has_uv {
+                    uvs.push(self.uv[fi].clone());
+                }
                 continue;
             }
             let p: Vec<[f64; 3]> = f.iter().map(|i| self.verts[*i as usize]).collect();
@@ -219,6 +239,25 @@ impl Mesh {
             for j in 0..n {
                 for i in 0..n {
                     faces.push(vec![at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)]);
+                    if has_uv {
+                        let q = &self.uv[fi];
+                        let corner = |a: usize, b: usize| {
+                            let (u, v) = (a as f64 / n as f64, b as f64 / n as f64);
+                            let mut c = [0.0; 2];
+                            for (k, ck) in c.iter_mut().enumerate() {
+                                let lo = q[0][k] + (q[1][k] - q[0][k]) * u;
+                                let hi = q[3][k] + (q[2][k] - q[3][k]) * u;
+                                *ck = lo + (hi - lo) * v;
+                            }
+                            c
+                        };
+                        uvs.push(vec![
+                            corner(i, j),
+                            corner(i + 1, j),
+                            corner(i + 1, j + 1),
+                            corner(i, j + 1),
+                        ]);
+                    }
                 }
             }
         }
@@ -226,6 +265,7 @@ impl Mesh {
             verts,
             faces,
             double_sided: self.double_sided,
+            uv: uvs,
         }
     }
 
@@ -264,16 +304,27 @@ impl Mesh {
             idx.push(row);
         }
         let mut faces = vec![];
+        let mut uv: Vec<Vec<[f64; 2]>> = vec![];
+        let rows = (profile.len() - 1) as f64;
         for i in 0..profile.len() - 1 {
             for k in 0..segments {
                 let k2 = (k + 1) % segments;
-                let mut q = vec![idx[i][k], idx[i][k2], idx[i + 1][k2], idx[i + 1][k]];
-                q.dedup();
-                while q.len() > 1 && q.first() == q.last() {
+                // u runs once around (0 to 1), v up the profile (0 at its first point, 1 at its last)
+                let (u0, u1) = (k as f64 / segments as f64, (k + 1) as f64 / segments as f64);
+                let (v0, v1) = (i as f64 / rows, (i + 1) as f64 / rows);
+                let mut q: Vec<(u32, [f64; 2])> = vec![
+                    (idx[i][k], [u0, v0]),
+                    (idx[i][k2], [u1, v0]),
+                    (idx[i + 1][k2], [u1, v1]),
+                    (idx[i + 1][k], [u0, v1]),
+                ];
+                q.dedup_by_key(|c| c.0);
+                while q.len() > 1 && q.first().map(|c| c.0) == q.last().map(|c| c.0) {
                     q.pop();
                 }
                 if q.len() >= 3 {
-                    faces.push(q);
+                    faces.push(q.iter().map(|c| c.0).collect());
+                    uv.push(q.iter().map(|c| c.1).collect());
                 }
             }
         }
@@ -281,6 +332,7 @@ impl Mesh {
             verts,
             faces,
             double_sided: false,
+            uv,
         };
         if m.signed_volume() < 0.0 {
             m.flip();
@@ -340,10 +392,19 @@ impl Mesh {
                 faces.push(vec![at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)]);
             }
         }
+        let mut uv = vec![];
+        for j in 0..nz {
+            for i in 0..nx {
+                let (u0, u1) = (i as f64 / nx as f64, (i + 1) as f64 / nx as f64);
+                let (v0, v1) = (j as f64 / nz as f64, (j + 1) as f64 / nz as f64);
+                uv.push(vec![[u0, v0], [u1, v0], [u1, v1], [u0, v1]]);
+            }
+        }
         Mesh {
             verts,
             faces,
             double_sided: true,
+            uv,
         }
     }
 
@@ -395,6 +456,7 @@ impl Mesh {
             verts,
             faces,
             double_sided: false,
+            uv: vec![],
         })
     }
 }

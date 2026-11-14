@@ -249,6 +249,7 @@ name = "animscript-render"
 version = "0.1.0"
 dependencies = [
  "animscript-brush",
+ "animscript-math",
  "png 0.18.1",
  "serde_json",
  "tiny-skia",
