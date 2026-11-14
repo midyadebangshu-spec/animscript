@@ -407,3 +407,19 @@ fn an_articulated_score_makes_the_soundtrack() {
     .unwrap();
     assert_eq!(st.to_wav(), again.to_wav());
 }
+
+#[test]
+fn the_majhe_majhe_example_is_the_published_violin_melody() {
+    // 467 notes in 128 bars of 3/4 at 100 bpm (the staff score's violin lead), Sa = C
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/majhe_majhe.anim")).unwrap();
+    let r = run(&src, &RunOptions::default()).unwrap_or_else(|d| panic!("{}", d.render(Some(&src), "majhe")));
+    let def = &r.audio.scores["majhe"];
+    let ev = &def.score.tracks[0].events;
+    assert_eq!(ev.len(), 467);
+    assert_eq!((def.score.meter.num, def.score.meter.den, def.score.tempo), (3, 4, 100.0));
+    assert_eq!(def.score.length_ticks(), 128 * 2880);
+    let first: Vec<u8> = ev.iter().take(8).map(|e| e.note).collect();
+    assert_eq!(first, vec![60, 60, 62, 62, 62, 62, 63, 62]); // C C D D D D Eb D
+    // the pitches are those of Kafi on C, plus the natural E and B of the kirtan turns
+    assert!(ev.iter().all(|e| [60, 62, 63, 64, 65, 67, 69, 70, 71, 72, 74, 75].contains(&e.note)));
+}

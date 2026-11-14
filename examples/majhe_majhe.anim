@@ -1,0 +1,81 @@
+project "Majhe Majhe Tobo Dekha Pai":
+    anim_version: "0.1"
+    canvas: 1280x720
+    fps: 24
+    background: #0e1020
+
+# "Majhe majhe tobo dekha pai" (Rabindranath Tagore, written 1885; Puja parjay, raag Kafi / Kirtan ang, Dadra taal),
+# the melody for violin. Sa is C (the scale the published violin score uses), 3/4 at 100 beats per minute.
+#
+# The notes are transcribed from the published violin lead of the staff notation and MIDI at geetabitan.com (the
+# Bengali swaralipi there is by Kangalicharan Sen; the staff score and MIDI by Anjan Ganguly): 128 bars, pitches and
+# rhythm as in that score. Mine are only the instrument, the bowing (a slur for each stroke of notes that run on
+# without a rest, a new bow on a repeated note), the reverb and the picture. Check the licence of the source score
+# before redistributing a recording.
+#
+# Render the sound with:  anim audio examples/majhe_majhe.anim -o majhe_majhe.wav
+score majhe:
+    tempo: 100, meter: "3/4", key: "C minor", reverb: 0.3, room: 0.65
+    track violin: instrument: "violin", volume: 1.0, notes: [
+        "C4:1/4 (C4 D4) | D4 D4 (D4:1/8 Eb4) | (D4:1/4 E4 F4) | G4 (G4:1/8 F4 E4 F4)",
+        "(G4:1/4 A4) (A4:1/16 Bb4 C5:1/8) | (Bb4:1/4 A4 G4:1/8 A4) | (F4:1/4 G4:1/16 A4 G4:1/8 F4 G4) | .:1/4 (D4:1/16 Eb4 F4:1/8 Eb4 D4)",
+        "C4:1/4 (C4 D4) | D4 D4 (D4:1/8 Eb4) | (D4:1/4 E4 F4) | G4:3/4",
+        "G4:1/4 (G4:1/16 C5 B4:1/8 C5:1/2) C5:1/4 (C5:1/8 D5) | (Bb4 C5 Bb4:1/4 A4) | (G4 F4:1/8 E4 F4:1/4)",
+        "G4 (G4:1/16 C5 B4:1/8 C5:1/2) C5:1/4 (C5:1/8 D5) | (Bb4 C5 Bb4:1/4 A4) | (G4 F4:1/8 E4 F4:1/4)",
+        "G4 (G4:1/8 C5 Bb4:1/4) | (A4 G4 A4:1/8 G4) | (F4:1/4 G4:1/16 A4 G4:1/8 F4 G4) | (F4 Eb4:3/8 D4:1/8 Eb4)",
+        "(D4:1/4 C4 D4) | D4 D4 (D4:1/8 Eb4) | (D4:1/4 E4 F4) | G4:3/4",
+        "G4:1/4 G4 G4 | G4 G4 (G4:1/8 A4) | B4:1/4 (B4 C5) | (C5:1/8 B4 C5:1/4) C5",
+        "(B4 C5:1/8 B4 C5:1/4) | (D5 Eb5 D5:1/8 C5) | (C5:1/4 B4:1/16 C5 D5:1/8 C5:1/4) | (Bb4:1/8 A4 C5 Bb4:3/8)",
+        "(A4:1/4 G4) G4 | G4 G4 (G4:1/8 A4) | B4:1/4 (B4 C5) | (C5:1/8 B4 C5:1/4) C5",
+        "(B4 C5:1/8 B4 C5:1/4) | (D5 Eb5 D5:1/8 C5) | (C5:1/4 B4:1/16 C5 D5:1/8 C5:1/4) | (Bb4:1/8 A4 G4:1/2)",
+        "G4:1/4 (G4 C5:1/8 B4) | C5:1/4 (C5 D5) | (Bb4:1/8 C5 Bb4:1/4 A4) | (G4 F4:1/8 E4 F4:1/4)",
+        "G4 (G4 C5:1/8 B4) | C5:1/4 (C5 D5) | (Bb4:1/8 C5 Bb4:1/4 A4) | (G4 F4:1/8 E4 F4:1/4)",
+        "G4 (G4:1/8 C5 Bb4:1/4) | (A4 G4 A4:1/8 G4) | (F4:1/4 G4 F4) | (D4:1/8 Eb4 F4 Eb4 D4 Eb4)",
+        "(D4:1/4 C4 D4) | D4 D4 (D4:1/8 Eb4) | (D4:1/4 E4 F4) | G4:3/4",
+        "C4:1/4 (C4 D4) | D4 D4 (D4:1/8 Eb4) | F4:1/4 (F4 G4) | G4 (G4 E4:1/8 F4)",
+        "G4:1/4 (G4:1/8 C5 Bb4:1/4) | (A4 G4 A4:1/8 G4) | (F4:1/4 E4 F4:1/1) | G4:1/4 (G4:1/16 C5 B4:1/8 C5:1/2) C5:1/4 (C5:1/8 D5)",
+        "(Bb4 C5 Bb4:1/4 A4) | (G4 F4:1/8 E4 F4:1/4) | G4 (G4:1/8 C5 Bb4:1/4) | (A4 G4 A4:1/8 G4)",
+        "(F4:1/4 E4 F4:1/1) | C4:1/4 (C4 D4) | D4 D4 (D4:1/8 Eb4) | F4:1/4 (F4 G4)",
+        "G4 (G4 E4:1/8 F4) | G4:1/4 (G4:1/8 C5 Bb4:1/4) | (A4 G4 A4:1/8 G4) | (F4:1/4 E4 F4:1/1)",
+        "G4:1/4 (G4:1/16 C5 B4:1/8 C5:1/2) C5:1/4 (C5:1/8 D5) | (Bb4 C5 Bb4:1/4 A4) | (G4 F4:1/8 E4 F4:1/4)",
+        "G4 (G4:1/8 C5 Bb4:1/4) | (A4 G4 A4:1/8 G4) | (F4:1/4 E4 F4:1/1) | G4:1/2 G4:1/4",
+        "G4 G4 (G4:1/8 A4) | B4:1/4 (B4 C5) | (C5:1/8 B4 C5:1/2) | (G4:1/4 C5:1/8 B4 C5:1/4)",
+        "D5 (D5:1/8 Eb5 D5:1/4) | (C5 B4:1/16 C5 D5:1/8 C5:1/4) | (Bb4:1/8 A4 C5 Bb4:3/8) | (A4:1/2 G4:1/4)",
+        "G4 G4 (G4:1/8 A4) | B4:1/4 (B4 C5) | (C5:1/8 B4 C5:1/2) | (G4:1/4 C5:1/8 B4 C5:1/4)",
+        "D5 (D5:1/8 Eb5 D5:1/4) | (C5 B4:1/16 C5 D5:1/8 C5:1/4) | (Bb4:1/8 A4 G4:1/2) | G4:1/4 (G4:1/16 C5 B4:1/8 C5:1/4)",
+        "C5 C5 (C5:1/8 D5) | (Bb4 C5 Bb4:1/4 A4) | (G4 F4:1/8 E4 F4:1/4) | G4 (G4:1/8 C5 Bb4:1/4)",
+        "(A4 G4 A4:1/8 G4) | (F4:1/4 G4 F4) | (D4:1/8 Eb4 F4 Eb4 D4 Eb4) | (D4:1/4 C4 D4)",
+        "D4 D4 (D4:1/8 Eb4) | (D4:1/4 E4 F4) | G4 (G4:1/8 F4 E4 F4) | (G4:1/4 A4) (A4:1/16 Bb4 C5:1/8)",
+        "(Bb4:1/4 A4 G4:1/8 A4) | (F4:1/4 G4:1/16 A4 G4:1/8 F4 G4) | .:1/4 (D4:1/16 Eb4 F4:1/8 Eb4 D4) | C4:1/4 (C4 D4)",
+        "D4 D4 (D4:1/8 Eb4) | (D4:1/4 E4 F4) | G4:3/4"]
+
+shape halo = circle(n: 64, radius: 240, at: (640, 330))
+halo.fill = #4a3a8a
+halo.stroke_width = 0
+halo.opacity = 0.1
+
+shape moon = circle(n: 64, radius: 120, at: (640, 330))
+moon.fill = #f0e2c0
+moon.stroke_width = 0
+
+shape ground = rectangle(width: 1400, height: 140, at: (640, 650))
+ground.fill = #06070e
+ground.stroke_width = 0
+
+shape track_line = rectangle(width: 800, height: 4, at: (640, 640))
+track_line.fill = #3a3f66
+track_line.stroke_width = 0
+shape progress = rectangle(width: 800, height: 4, at: (640, 640))
+progress.fill = #f0e2c0
+progress.stroke_width = 0
+progress.pivot = (240, 640)
+
+scene "Melody" for 233.seconds:
+    main:
+        play(majhe)
+        for f in 0..(233 * 24):
+            moon.scale = 1 + 0.12 * majhe.violin
+            moon.opacity = 0.6 + 0.4 * majhe.violin
+            halo.opacity = 0.08 + 0.35 * majhe.violin
+            progress.scale = (min(1, majhe.time / 230.4) + 0.001, 1)
+            wait 1.frame
