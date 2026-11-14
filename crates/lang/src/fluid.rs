@@ -35,6 +35,26 @@ pub struct FluidCfg {
     pub space3: bool,
     /// Whether `spacing` was written (a 3D fluid defaults to a coarser 12 px).
     pub spacing_given: bool,
+    /// `field:` a wave field the water rests on and makes ripples in (3D fluids).
+    pub link: Option<FieldLink>,
+    /// How strongly a 3D fluid's surface reflects (Fresnel scale) and bends what is behind it.
+    pub reflect: f64,
+    pub refract: f64,
+    /// A fluid on a field: water that reaches the surface joins the field (a sea); `false`: it rests
+    /// on it as a pool.
+    pub absorb: bool,
+}
+
+/// The coupling of a 3D fluid to a wave field.
+#[derive(Clone, Debug)]
+pub struct FieldLink {
+    pub field: String,
+    pub channel: usize,
+    pub velocity: Option<usize>,
+    /// The field's rest surface, y in px: the surface is at `level - h`.
+    pub level: f64,
+    /// How strongly the water's impacts make ripples (0 = none).
+    pub ripple: f64,
 }
 
 struct Pour {
@@ -97,13 +117,66 @@ impl Interp {
                 smoothness: 1.4,
                 space3: false,
                 spacing_given: false,
+                link: None,
+                reflect: 1.0,
+                refract: 1.0,
+                absorb: true,
             };
+            let (
+                mut link_field,
+                mut link_level,
+                mut link_channel,
+                mut link_velocity,
+                mut link_ripple,
+            ) = (
+                None::<String>,
+                None::<f64>,
+                None::<String>,
+                None::<String>,
+                1.0f64,
+            );
             let (mut color_end, mut spacing) = (None, 8.0);
             for (key, expr, span) in &d.attrs {
                 let v = self.eval(expr, &vars, Mode::Build)?;
                 let num =
                     |s: &Interp, what: &str| s.num(&v, what).map_err(|e| e1(e.message).at(*span));
                 match key.as_str() {
+                    "field" => match &v {
+                        Value::Field(f) => link_field = Some(f.clone()),
+                        _ => return Err(e1("`field` must be a field, such as `field: lagoon`").at(*span)),
+                    },
+                    "level" => link_level = Some(num(self, "`level`")?),
+                    "channel" | "velocity" => match &v {
+                        Value::Str(c) => {
+                            if key == "channel" {
+                                link_channel = Some(c.clone())
+                            } else {
+                                link_velocity = Some(c.clone())
+                            }
+                        }
+                        _ => return Err(e1(format!("`{key}` must be a channel name in quotes")).at(*span)),
+                    },
+                    "absorb" => match v {
+                        Value::Bool(b) => cfg.absorb = b,
+                        _ => return Err(e1("`absorb` must be true or false").at(*span)),
+                    },
+                    "reflect" | "refract" => {
+                        let x = num(self, &format!("`{key}`"))?;
+                        if !(0.0..=1.0).contains(&x) {
+                            return Err(e1(format!("`{key}` is between 0 and 1")).at(*span));
+                        }
+                        if key == "reflect" {
+                            cfg.reflect = x
+                        } else {
+                            cfg.refract = x
+                        }
+                    }
+                    "ripple" => {
+                        link_ripple = num(self, "`ripple`")?;
+                        if link_ripple < 0.0 {
+                            return Err(e1("`ripple` cannot be negative").at(*span));
+                        }
+                    }
                     "space" => match &v {
                         Value::Str(s) if s == "3d" => cfg.space3 = true,
                         Value::Str(s) if s == "2d" => cfg.space3 = false,
@@ -178,8 +251,48 @@ impl Interp {
                         }
                         cfg.params.max = n as usize;
                     }
-                    other => return Err(e1(format!("a fluid has no setting `{other}`")).at(*span).help("settings: fill (or in), space, spacing, density, viscosity, surface_tension, foam, smoothness, color, color_end, render, behind, max")),
+                    other => return Err(e1(format!("a fluid has no setting `{other}`")).at(*span).help("settings: fill (or in), space, field, level, channel, velocity, ripple, absorb, reflect, refract, spacing, density, viscosity, surface_tension, foam, smoothness, color, color_end, render, behind, max")),
                 }
+            }
+            if let Some(f) = link_field {
+                let fc = self
+                    .fields
+                    .get(&f)
+                    .ok_or_else(|| e1(format!("unknown field `{f}`")).at(d.span))?;
+                if fc.chain.is_some() {
+                    return Err(e1("a chain field cannot carry water")
+                        .at(d.span)
+                        .help("use a grid field"));
+                }
+                let level = link_level.ok_or_else(|| {
+                    e1("a fluid on a field needs `level:`, the y (px) of the field's rest surface")
+                        .at(d.span)
+                        .help("for the lagoon's water plane at y = 520 write `level: 520`")
+                })?;
+                let find = |c: &str| {
+                    fc.channels
+                        .iter()
+                        .position(|x| x == c)
+                        .ok_or_else(|| e1(format!("field `{f}` has no channel `{c}`")).at(d.span))
+                };
+                let channel = match &link_channel {
+                    Some(c) => find(c)?,
+                    None => 0,
+                };
+                let velocity = match &link_velocity {
+                    Some(c) => Some(find(c)?),
+                    None => fc.channels.iter().position(|x| x == "v"),
+                };
+                cfg.link = Some(FieldLink {
+                    field: f,
+                    channel,
+                    velocity,
+                    level,
+                    ripple: link_ripple,
+                });
+                cfg.space3 = true;
+            } else if link_level.is_some() || link_channel.is_some() || link_velocity.is_some() {
+                return Err(e1("`level`, `channel` and `velocity` need `field:`").at(d.span));
             }
             cfg.color_end = color_end.unwrap_or(cfg.color);
             if !cfg.spacing_given && matches!(cfg.fill, Some(Region::Box3(_))) {

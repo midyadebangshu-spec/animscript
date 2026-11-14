@@ -18,7 +18,7 @@ mod tet;
 mod world;
 
 pub use collide::{collide, Manifold};
-pub use fluid::{Fluid3, FluidParams3, Foam3};
+pub use fluid::{Absorbed, Fluid3, FluidParams3, Foam3, Impact, Surface, SurfaceSample};
 pub use hull::{Edge, Face, Hull, MassProps};
 pub use joint::{Joint, JointDef, JointKind};
 pub use math::{v3, Mat3, Quat, V3};

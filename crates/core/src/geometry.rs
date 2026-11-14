@@ -159,6 +159,19 @@ pub struct ImageFill {
     pub rect: [f64; 4],
 }
 
+/// A mesh's special surface (`glass(...)`, `mirror(...)`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeshMaterial {
+    /// `"glass"` or `"mirror"`.
+    pub kind: String,
+    /// How much of the surroundings it reflects (a mirror: how mirror-like; glass: the Fresnel strength).
+    pub reflect: f64,
+    /// How much it bends what is behind it (glass only).
+    pub refract: f64,
+    /// How opaque the glass body is, 0 to 1.
+    pub opacity: f64,
+}
+
 #[derive(Clone, Debug)]
 pub struct Shape {
     pub name: String,
@@ -199,6 +212,9 @@ pub struct Shape {
     pub rot_y: f64,
     pub scale_z: f64,
     pub pivot3: [f64; 3],
+    /// What the mesh's surface does with light beyond shading: reflect its surroundings (mirror) or
+    /// let them through bent (glass).
+    pub material: Option<MeshMaterial>,
     /// A physics body's orientation as a quaternion `[w, x, y, z]`; replaces the three turns when set.
     pub orient: Option<[f64; 4]>,
     /// Texture coordinates `[u, v]` (0 to 1) fixed when the image was assigned.
@@ -437,6 +453,7 @@ impl Shape {
             rot_y: 0.0,
             scale_z: 1.0,
             pivot3: [0.0; 3],
+            material: None,
             orient: None,
             uv: BTreeMap::new(),
         }

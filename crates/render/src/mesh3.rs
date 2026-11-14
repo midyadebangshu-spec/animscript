@@ -64,6 +64,8 @@ struct Mesh {
     outline: Option<Color>,
     width: f64,
     opacity: f64,
+    /// A mirror's reflectance (0 = an ordinary surface).
+    reflect: f64,
 }
 
 struct Light {
@@ -126,6 +128,9 @@ struct Buffers {
     h: usize,
     depth: Vec<f32>,
     rgba: Vec<[f32; 4]>, // premultiplied
+    /// How mirror-like the nearest surface at each pixel is (0 = not at all) and its normal.
+    refl: Vec<f32>,
+    nrm: Vec<[f32; 3]>,
 }
 
 impl Buffers {
@@ -135,6 +140,7 @@ impl Buffers {
         z: [f64; 3],
         normals: [V3; 3],
         base: [f32; 4],
+        refl: f32,
         light: &Light,
     ) {
         let area =
@@ -191,6 +197,8 @@ impl Buffers {
                         (a0 * normals[0][2] + a1 * normals[1][2] + a2 * normals[2][2]) * k,
                     ]);
                     let s = shade(light, n) as f32;
+                    self.refl[i] = refl;
+                    self.nrm[i] = [n[0] as f32, n[1] as f32, n[2] as f32];
                     self.rgba[i] = [
                         base[0] * s * base[3],
                         base[1] * s * base[3],
@@ -238,12 +246,65 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View) {
         smooth: l["smooth"].as_f64().unwrap_or(0.0),
     };
     let mut meshes = vec![];
+    let mut glass: Vec<liquid::GlassMesh> = vec![];
     for sh in snapshot["shapes"].as_array().into_iter().flatten() {
         if sh["visible"] == Value::Bool(false) || !sh["mesh"].is_object() {
             continue;
         }
         let m = &sh["mesh"];
+        let kind = m["material"]["kind"].as_str();
+        let verts_of = |m: &Value| -> Vec<V3> {
+            m["verts"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(v3)
+                .collect()
+        };
+        let faces_of = |m: &Value| -> Vec<Vec<usize>> {
+            m["faces"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|f| {
+                    f.as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|i| i.as_u64())
+                        .map(|i| i as usize)
+                        .collect()
+                })
+                .collect()
+        };
+        if kind == Some("glass") {
+            // glass is composited with the liquids: it refracts and reflects what is behind it
+            let tint = m["fill"]
+                .as_str()
+                .and_then(parse_hex)
+                .unwrap_or(Color::WHITE);
+            let opacity = (m["material"]["opacity"].as_f64().unwrap_or(0.2)
+                * sh["opacity"].as_f64().unwrap_or(1.0))
+            .clamp(0.0, 1.0);
+            glass.push(liquid::GlassMesh {
+                verts: verts_of(m),
+                faces: faces_of(m),
+                fill: Color::from_rgba(tint.red(), tint.green(), tint.blue(), opacity as f32)
+                    .unwrap_or(tint),
+                outline: m["outline"].as_str().and_then(parse_hex),
+                reflect: m["material"]["reflect"].as_f64().unwrap_or(0.25),
+                refract: m["material"]["refract"].as_f64().unwrap_or(1.0),
+            });
+            continue;
+        }
         meshes.push(Mesh {
+            reflect: if kind == Some("mirror") {
+                m["material"]["reflect"]
+                    .as_f64()
+                    .unwrap_or(0.5)
+                    .clamp(0.0, 1.0)
+            } else {
+                0.0
+            },
             verts: m["verts"]
                 .as_array()
                 .into_iter()
@@ -275,7 +336,9 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View) {
     }
     let has_liquid = snapshot["fluids3"]
         .as_array()
-        .is_some_and(|f| !f.is_empty());
+        .is_some_and(|f| !f.is_empty())
+        || !glass.is_empty()
+        || meshes.iter().any(|m| m.reflect > 0.0);
     if meshes.is_empty() && !has_liquid {
         return;
     }
@@ -286,6 +349,8 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View) {
         h,
         depth: vec![f32::INFINITY; w * h],
         rgba: vec![[0.0; 4]; w * h],
+        refl: vec![0.0; w * h],
+        nrm: vec![[0.0; 3]; w * h],
     };
 
     // faces: cull, shade, clip, rasterize
@@ -384,6 +449,7 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View) {
                     [poly[0].0[2], poly[k].0[2], poly[k + 1].0[2]],
                     [poly[0].1, poly[k].1, poly[k + 1].1],
                     base,
+                    m.reflect as f32,
                     &light,
                 );
             }
@@ -504,15 +570,14 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View) {
 
     // liquids go over everything opaque (and its outlines), tinted by how deep the water is
     if has_liquid {
+        let surfaces = liquid::Surfaces {
+            backdrop: &*pm,
+            refl: &buf.refl,
+            nrm: &buf.nrm,
+            glass: &glass,
+        };
         liquid::composite(
-            &mut big,
-            &buf.depth,
-            w,
-            h,
-            &screen,
-            &light,
-            &snapshot["fluids3"],
-            0,
+            &mut big, &buf.depth, w, h, &screen, &light, snapshot, &surfaces, 0,
         );
     }
 

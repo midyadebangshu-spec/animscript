@@ -1,0 +1,168 @@
+project "Harbour":
+    anim_version: "0.1"
+    canvas: 1280x720
+    fps: 24
+    background: #d9ecee
+
+import "std/3d"
+
+# Water that reflects, bends and pushes back. The sea is a wave field (equations) drawn as a mirror-like plane: it
+# reflects the boat, the pier and the sky. A jet of particle water hits a hanging flag (the cloth is pushed by the
+# water), falls into the sea and the splash makes ripples in the field; the boat rides the waves. A glass tank on the
+# pier holds more particle water: look through the glass and the water, where the picture bends.
+world:
+    gravity: (0, 9.8, 0)
+    scale: 100
+    fluid_substeps: 4
+    fluid_iterations: 3
+
+stage3(fov: 30, light: (-0.6, 0.75, 0.5), ambient: 0.42, bands: 4, crease: 38.deg, smooth: 60.deg, sky: (#7fb9df, #dcedf0))
+
+# ---- the sea: a field of heights (h) and velocities (v) over the world rectangle of the water plane
+field sea:
+    grid: (110, 110)
+    rect: (-360, -750, 2000, 1900)
+    state: ["h", "v", "gx", "gz"]
+    edges: "mirror"
+    c2: 2400
+    damp: 0.55
+    init: [("h", "0"), ("v", "0"), ("gx", "0"), ("gz", "0")]
+    step: [[("v", "v + dt * (c2 * (h[-1, 0] + h[1, 0] + h[0, -1] + h[0, 1] - 4 * h) - damp * v)")],
+           [("h", "h + dt * v")],
+           [("gx", "(h[1, 0] - h[-1, 0]) * 0.05"), ("gz", "(h[0, 1] - h[0, -1]) * 0.05")]]
+    substeps: 4
+
+# ---- 2D backdrop
+shape sky_top = rectangle(width: 1500, height: 340, at: (640, 130))
+sky_top.fill = #7fb9df
+sky_top.stroke_width = 0
+sky_top.z = -60
+shape sky_low = rectangle(width: 1500, height: 260, at: (640, 400))
+sky_low.fill = #dcedf0
+sky_low.stroke_width = 0
+sky_low.z = -60
+shape sun = circle(n: 48, radius: 54, at: (330, 150))
+sun.fill = #fff4cf
+sun.stroke_width = 0
+sun.z = -55
+shape hills = polygon([(0, 430), (180, 390), (360, 420), (600, 370), (840, 415), (1060, 380), (1280, 425), (1280, 520), (0, 520)])
+hills.fill = #84ab72
+hills.stroke_width = 0
+hills.z = -50
+
+# ---- the sea itself: a mesh whose vertices are lifted by the field, mirror-like
+shape ocean = plane(width: 2000, depth: 1900, nx: 100, nz: 110, at: (640, 520, 200))
+ocean.fill = #2f95b5
+ocean.stroke_width = 0
+ocean.mirror(reflect: 0.5)
+
+# ---- the boat (three parts sharing one pivot) rides the waves
+shape hull = extrude(points: [(-110, -16), (-92, 34), (82, 34), (116, -16), (0, -6)], depth: 70, at: (420, 500, 330), pivot: (420, 506, 330))
+hull.fill = #8a5a32
+hull.stroke = #2a1a0c
+hull.stroke_width = 3
+shape mast = cylinder(radius: 4, height: 150, segments: 12, at: (420, 417, 330), pivot: (420, 506, 330))
+mast.fill = #5a3a1c
+mast.stroke = #2a1a0c
+mast.stroke_width = 2
+shape sail = extrude(points: [(0, 0), (0, -128), (78, -10)], depth: 5, at: (463, 424, 330), pivot: (420, 506, 330))
+sail.fill = #fffaf0
+sail.stroke = #6a5a3a
+sail.stroke_width = 3
+
+# ---- the pier (static) with a glass tank on it
+shape deck = cube(width: 430, height: 30, depth: 330, at: (1070, 475, 210))
+deck.fill = #9b7b52
+deck.stroke = #3a2a14
+deck.stroke_width = 3
+deck.body(kind: static, friction: 0.5)
+shape leg1 = cube(width: 26, height: 190, depth: 26, at: (900, 565, 80))
+leg1.fill = #6b5a45
+leg1.stroke = #2a2218
+leg1.stroke_width = 3
+shape leg2 = cube(width: 26, height: 190, depth: 26, at: (1240, 565, 80))
+leg2.fill = #6b5a45
+leg2.stroke = #2a2218
+leg2.stroke_width = 3
+shape tank_floor = cube(width: 280, height: 10, depth: 190, at: (1080, 455, 210))
+tank_floor.fill = #5a6a78
+tank_floor.stroke = #26323c
+tank_floor.stroke_width = 3
+tank_floor.body(kind: static, friction: 0.05)
+shape tank_l = cube(width: 8, height: 190, depth: 190, at: (936, 355, 210))
+shape tank_r = cube(width: 8, height: 190, depth: 190, at: (1224, 355, 210))
+shape tank_b = cube(width: 280, height: 190, depth: 8, at: (1080, 355, 119))
+shape tank_f = cube(width: 280, height: 190, depth: 8, at: (1080, 355, 301))
+for w in [tank_l, tank_r, tank_b, tank_f]:
+    w.fill = #bfe6ff
+    w.stroke = #3b6a8a
+    w.stroke_width = 2
+    w.body(kind: static, friction: 0.05)
+    w.glass(opacity: 0.16, reflect: 0.3, refract: 0.9)
+
+# ---- the flag on a rod: pushed by the jet
+shape rod = cube(width: 220, height: 12, depth: 12, at: (700, 238, 330))
+rod.fill = #6b5a45
+rod.stroke = #2a2218
+rod.stroke_width = 3
+rod.body(kind: static)
+shape post_a = cube(width: 18, height: 330, depth: 18, at: (600, 400, 330))
+post_a.fill = #6b5a45
+post_a.stroke = #2a2218
+post_a.stroke_width = 3
+post_a.body(kind: static)
+shape post_b = cube(width: 18, height: 330, depth: 18, at: (800, 400, 330))
+post_b.fill = #6b5a45
+post_b.stroke = #2a2218
+post_b.stroke_width = 3
+post_b.body(kind: static)
+shape flag = plane(width: 190, depth: 120, nx: 14, nz: 9, at: (700, 244, 390))
+flag.fill = #e0523c
+flag.stroke = #5a1c10
+flag.stroke_width = 2
+flag.soft(stiffness: 0.85, bend: 0.12, density: 0.3, thickness: 3)
+flag.pin_where(p -> p.z < 335)
+
+# ---- the water: a jet that falls into the sea (and rests on the wave field), and the tank
+fluid splash:
+    space: "3d"
+    field: sea
+    level: 520
+    spacing: 16
+    viscosity: 0.04
+    foam: 0.15
+    smoothness: 1.5
+    color: #78c8f890
+    color_end: #2a6cc0ff
+    max: 6000
+
+fluid tank_water:
+    fill: box(944, 362, 127, 128, 90, 174)
+    spacing: 14
+    viscosity: 0.04
+    foam: 0.2
+    smoothness: 1.5
+    color: #78c8f890
+    color_end: #2a6cc0ff
+    max: 3000
+
+scene "Harbour" for 12.seconds:
+    main:
+        start camera3.orbit(turns: 0.03, over: 12.seconds)
+        start camera3.crane(height: 90, pitch: 0.022, over: 12.seconds)
+        for part in [hull, mast, sail]:
+            start part.drive(pos_y: "-sea_h", rotation: "atan(sea_gx * 3) / tau", rot_x: "atan(sea_gz * 3) / tau", fields: [sea])
+        start ocean.drive(y: "-sea_h", fields: [sea])
+        start ocean.swell()
+        wait 1.second
+        splash.pour(at: (400, 230, 335), speed: (430, -60, 0), width: 100)
+        wait 4.seconds
+        splash.stop()
+        wait 10.seconds
+
+# a swell rolls in from the left: a poke along the edge of the field every so often
+action swell(self: Shape):
+    for i in 0..9:
+        sea.poke(-300, 300, amount: 60, radius: 240)
+        sea.poke(-300, 40, amount: 50, radius: 220)
+        wait 1.2.seconds

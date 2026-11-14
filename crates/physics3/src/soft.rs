@@ -101,6 +101,17 @@ pub struct SoftBody3 {
     exclude: f64,
 }
 
+/// A sphere on a triangle of a soft body's skin (see `obstacle_samples`).
+#[derive(Clone, Copy, Debug)]
+pub struct Sample {
+    pub pos: V3,
+    pub r: f64,
+    /// The body in the slice the fluid was given (set by the fluid).
+    pub body: usize,
+    pub pts: [usize; 3],
+    pub bary: [f64; 3],
+}
+
 struct RContact {
     point: usize,
     body: usize,
@@ -395,8 +406,9 @@ impl SoftBody3 {
             .fold(0.0, f64::max)
     }
     /// Spheres that stand for the skin of this body inside the box `lo`-`hi`: the points of every
-    /// live triangle and samples across it about `spacing` apart (fluids treat them as obstacles).
-    pub fn obstacle_points(&self, spacing: f64, lo: V3, hi: V3) -> Vec<(V3, f64)> {
+    /// live triangle and samples across it about `spacing` apart. A fluid treats them as obstacles
+    /// and pushes back on the triangle each sample belongs to.
+    pub fn obstacle_samples(&self, spacing: f64, lo: V3, hi: V3) -> Vec<Sample> {
         let r = self.params.radius.max(0.005);
         let mut out = vec![];
         for (i, t) in self.tris.iter().enumerate() {
@@ -426,11 +438,47 @@ impl SoftBody3 {
             for a in 0..=k {
                 for b in 0..=(k - a) {
                     let (u, v) = (a as f64 / k as f64, b as f64 / k as f64);
-                    out.push((p[0] + (p[1] - p[0]) * u + (p[2] - p[0]) * v, r));
+                    out.push(Sample {
+                        pos: p[0] + (p[1] - p[0]) * u + (p[2] - p[0]) * v,
+                        r,
+                        body: 0,
+                        pts: *t,
+                        bary: [1.0 - u - v, u, v],
+                    });
                 }
             }
         }
         out
+    }
+
+    /// Push the skin at a sample with `impulse` (kg m/s), shared among the triangle's points; the
+    /// velocity change of the sample is capped at `max_dv`.
+    pub fn apply_sample_impulse(
+        &mut self,
+        pts: [usize; 3],
+        bary: [f64; 3],
+        impulse: V3,
+        max_dv: f64,
+    ) {
+        let w: [f64; 3] = [
+            self.point_w(pts[0]),
+            self.point_w(pts[1]),
+            self.point_w(pts[2]),
+        ];
+        let gain: f64 = (0..3).map(|k| bary[k] * bary[k] * w[k]).sum();
+        if gain <= 0.0 {
+            return;
+        }
+        let change = impulse.len() * gain;
+        let scale = if change > max_dv {
+            max_dv / change
+        } else {
+            1.0
+        };
+        for k in 0..3 {
+            let dv = impulse * (bary[k] * w[k] * scale);
+            self.push_point_vel(pts[k], dv);
+        }
     }
 
     pub fn node_count(&self) -> usize {

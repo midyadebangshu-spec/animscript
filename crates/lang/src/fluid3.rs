@@ -27,6 +27,7 @@ struct Pour3 {
 
 pub struct FluidSim3 {
     pub(crate) names: Vec<String>,
+    links: Vec<Option<crate::fluid::FieldLink>>,
     pub(crate) fluids: Vec<Fluid3>,
     pours: Vec<Vec<Pour3>>,
     ppm: f64,
@@ -81,6 +82,7 @@ impl Interp {
         let threads = self.world_cfg.fluid_threads;
         let mut sim = FluidSim3 {
             names: vec![],
+            links: vec![],
             fluids: vec![],
             pours: vec![],
             ppm,
@@ -102,6 +104,7 @@ impl Interp {
                 max: cfg.params.max.min(20_000),
                 foam: cfg.params.foam,
                 threads,
+                absorb: cfg.link.is_some() && cfg.absorb,
                 ..FluidParams3::default()
             });
             f.set_seed(crate::procedural::stream_seed(
@@ -116,6 +119,7 @@ impl Interp {
             sim.names.push(name.clone());
             sim.fluids.push(f);
             sim.pours.push(vec![]);
+            sim.links.push(cfg.link.clone());
         }
         if !sim.names.is_empty() {
             self.fluid3 = Some(sim);
@@ -422,11 +426,133 @@ impl Interp {
                     "name": n, "spacing": self.spacing3(c), "smoothness": c.smoothness,
                     "color": hex(c.color), "color_end": hex(c.color_end),
                     "render": if c.blob { "surface" } else { "dots" },
+                    "reflect": c.reflect, "refract": c.refract,
                     "count": f.len(), "particles": particles,
                     "foam_count": f.foam.len(), "foam": foam,
                 })
             })
             .collect();
         Some(J::Array(out))
+    }
+}
+
+/// A wave field seen as the surface water rests on: the surface is at `level - h` and moves with
+/// the field's velocity channel. A copy of the field's data for one frame.
+#[derive(Debug)]
+struct FieldSurface {
+    rect: [f64; 4],
+    nx: usize,
+    ny: usize,
+    h: Vec<f64>,
+    v: Option<Vec<f64>>,
+    level: f64,
+    ppm: f64,
+}
+
+impl FieldSurface {
+    fn bilinear(&self, d: &[f64], x: f64, z: f64) -> f64 {
+        let (cw, ch) = (self.rect[2] / self.nx as f64, self.rect[3] / self.ny as f64);
+        let fx = ((x - self.rect[0]) / cw - 0.5).clamp(0.0, (self.nx - 1) as f64);
+        let fy = ((z - self.rect[1]) / ch - 0.5).clamp(0.0, (self.ny - 1) as f64);
+        let (i0, j0) = (fx.floor() as usize, fy.floor() as usize);
+        let (i1, j1) = ((i0 + 1).min(self.nx - 1), (j0 + 1).min(self.ny - 1));
+        let (tx, ty) = (fx - i0 as f64, fy - j0 as f64);
+        let at = |i: usize, j: usize| d[j * self.nx + i];
+        let top = at(i0, j0) + (at(i1, j0) - at(i0, j0)) * tx;
+        let bottom = at(i0, j1) + (at(i1, j1) - at(i0, j1)) * tx;
+        top + (bottom - top) * ty
+    }
+}
+
+impl p3::Surface for FieldSurface {
+    fn sample(&self, x: f64, z: f64) -> Option<p3::SurfaceSample> {
+        let (px, pz) = (x * self.ppm, z * self.ppm);
+        let r = self.rect;
+        if px < r[0] || px > r[0] + r[2] || pz < r[1] || pz > r[1] + r[3] {
+            return None;
+        }
+        let h = self.bilinear(&self.h, px, pz);
+        let d = 0.5 * (r[2] / self.nx as f64).max(r[3] / self.ny as f64);
+        let gx =
+            (self.bilinear(&self.h, px + d, pz) - self.bilinear(&self.h, px - d, pz)) / (2.0 * d);
+        let gz =
+            (self.bilinear(&self.h, px, pz + d) - self.bilinear(&self.h, px, pz - d)) / (2.0 * d);
+        let v = self
+            .v
+            .as_ref()
+            .map(|v| self.bilinear(v, px, pz))
+            .unwrap_or(0.0);
+        Some(p3::SurfaceSample {
+            y: (self.level - h) / self.ppm,
+            vy: -v / self.ppm,
+            // y = (level - h) / ppm, so the slope of y is minus the slope of h
+            gx: -gx,
+            gz: -gz,
+        })
+    }
+}
+
+impl Interp {
+    /// Hand every fluid on a field the field's surface as it is now.
+    pub(crate) fn couple_fluids_to_fields(&self, sim: &mut FluidSim3) {
+        for (i, link) in sim.links.iter().enumerate() {
+            let Some(l) = link else { continue };
+            let (Some(cfg), Some(rt)) = (self.fields.get(&l.field), self.field_rt.get(&l.field))
+            else {
+                continue;
+            };
+            let surface = FieldSurface {
+                rect: cfg.rect,
+                nx: rt.nx,
+                ny: rt.ny,
+                h: rt.data[l.channel].clone(),
+                v: l.velocity.map(|c| rt.data[c].clone()),
+                level: l.level,
+                ppm: sim.ppm,
+            };
+            sim.fluids[i].set_surface(Some(std::sync::Arc::new(surface)));
+        }
+    }
+
+    /// Water that pressed into a field makes ripples in it.
+    pub(crate) fn ripples_from_fluids(&mut self, sim: &mut FluidSim3) {
+        let ppm = sim.ppm;
+        for (i, link) in sim.links.clone().iter().enumerate() {
+            let Some(l) = link else { continue };
+            let impacts = sim.fluids[i].take_impacts();
+            let absorbed = sim.fluids[i].take_absorbed();
+            if l.ripple <= 0.0 {
+                continue;
+            }
+            let Some(cfg) = self.fields.get(&l.field) else {
+                continue;
+            };
+            let cell = (cfg.rect[2] / cfg.nx as f64).max(cfg.rect[3] / cfg.ny as f64);
+            let radius = (2.0 * cell).max(1.5 * sim.fluids[i].params().spacing * ppm);
+            // 10 px of ripple per kg m/s of water that arrived (a moderate gain keeps the water and the field from
+            // feeding each other)
+            // water that joined the field raises it by its volume around where it settled
+            for a in absorbed {
+                let v_px = a.volume * ppm * ppm * ppm;
+                self.field_add(
+                    &l.field,
+                    l.channel,
+                    a.x * ppm,
+                    a.z * ppm,
+                    3.0 * v_px / (std::f64::consts::PI * radius * radius),
+                    radius,
+                );
+            }
+            for im in impacts {
+                self.field_add(
+                    &l.field,
+                    l.channel,
+                    im.x * ppm,
+                    im.z * ppm,
+                    -10.0 * l.ripple * im.momentum,
+                    radius,
+                );
+            }
+        }
     }
 }

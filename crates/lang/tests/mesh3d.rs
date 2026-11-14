@@ -409,3 +409,36 @@ fn a_cube_can_be_subdivided() {
     assert_eq!(m["faces"].as_array().unwrap().len(), 6 * 16);
     assert_eq!(err("shape c = cube(subdivide: 100)\n").code, "E-MSH-001");
 }
+
+#[test]
+fn materials_and_the_sky_reach_the_snapshot() {
+    let r = go(&format!(
+        "stage3(sky: (#102040, #ffd0a0))\nshape pane = cube(size: 80, at: (300, 300, 50))\npane.glass(opacity: 0.3, reflect: 0.4)\nshape floor = plane(width: 400, depth: 400, at: (300, 400, 200))\nfloor.mirror(reflect: 0.7)\nshape plain = cube(size: 40, at: (100, 300, 50))\n{}",
+        scene(1, "")
+    ));
+    let s = &r.snapshots[0];
+    assert_eq!(
+        s["light3"]["sky"],
+        serde_json::json!(["#102040", "#ffd0a0"])
+    );
+    let g = &mesh(s, 0)["material"];
+    assert_eq!(g["kind"], "glass");
+    assert!((g["opacity"].as_f64().unwrap() - 0.3).abs() < 1e-9);
+    assert!((g["reflect"].as_f64().unwrap() - 0.4).abs() < 1e-9);
+    assert_eq!(g["refract"].as_f64().unwrap(), 1.0);
+    assert_eq!(mesh(s, 1)["material"]["kind"], "mirror");
+    assert!(mesh(s, 2).get("material").is_none());
+}
+
+#[test]
+fn material_errors() {
+    assert_eq!(
+        err("shape c = cube(size: 10)\nc.glass(opacity: 2)\n").code,
+        "E-MSH-001"
+    );
+    assert_eq!(
+        err("shape s = square(size: 10)\ns.glass()\n").code,
+        "E-MSH-001"
+    );
+    assert_eq!(err("stage3(sky: #ff0000)\n").code, "E-MSH-001");
+}

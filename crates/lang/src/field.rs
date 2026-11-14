@@ -769,6 +769,30 @@ impl Interp {
         }
     }
 
+    /// Add `amount` to a channel around `(x, y)`: the falloff `poke` uses.
+    pub(crate) fn field_add(
+        &mut self,
+        name: &str,
+        channel: usize,
+        x: f64,
+        y: f64,
+        amount: f64,
+        radius: f64,
+    ) {
+        let Some(rt) = self.field_rt.get_mut(name) else {
+            return;
+        };
+        let (nx, ny) = (rt.nx, rt.ny);
+        for k in 0..nx * ny {
+            let d2 = (rt.xs[k] - x).powi(2) + (rt.ys[k] - y).powi(2);
+            if d2 < radius * radius {
+                let f = 1.0 - d2 / (radius * radius);
+                // a ripple is never taller than the water that made it can be
+                rt.data[channel][k] = (rt.data[channel][k] + amount * f * f).clamp(-150.0, 150.0);
+            }
+        }
+    }
+
     /// The value of a channel at a point: bilinear between cell centres (a chain: linear along its x).
     pub fn field_sample(&self, name: &str, channel: usize, x: f64, y: f64) -> f64 {
         let (cfg, rt) = (&self.fields[name], &self.field_rt[name]);

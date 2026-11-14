@@ -7,8 +7,42 @@
 //! result does not depend on the thread count. Metres, kilograms, seconds.
 use crate::math::*;
 use crate::par::{par_map, par_ranges};
-use crate::soft::SoftBody3;
+use crate::soft::{Sample, SoftBody3};
 use crate::world::{BodyKind, World};
+
+/// Where a surface is under a point, in metres (y points down, so a higher surface has a smaller y).
+#[derive(Clone, Copy, Debug)]
+pub struct SurfaceSample {
+    pub y: f64,
+    /// Vertical velocity of the surface (negative: rising).
+    pub vy: f64,
+    /// Slope of the surface: `d y / d x` and `d y / d z`.
+    pub gx: f64,
+    pub gz: f64,
+}
+
+/// A height surface the water rests on and is moved by (a wave field): a floor with a velocity.
+pub trait Surface: Send + Sync + std::fmt::Debug {
+    /// The surface under `(x, z)`, or `None` where there is none.
+    fn sample(&self, x: f64, z: f64) -> Option<SurfaceSample>;
+}
+
+/// Water that came to rest on the surface and joined it.
+#[derive(Clone, Copy, Debug)]
+pub struct Absorbed {
+    pub x: f64,
+    pub z: f64,
+    /// Cubic metres.
+    pub volume: f64,
+}
+
+/// Water pressing into the surface at a point: `momentum` is the kg m/s that arrived this step.
+#[derive(Clone, Copy, Debug)]
+pub struct Impact {
+    pub x: f64,
+    pub z: f64,
+    pub momentum: f64,
+}
 
 #[derive(Clone, Debug)]
 pub struct FluidParams3 {
@@ -28,6 +62,8 @@ pub struct FluidParams3 {
     pub foam_max: usize,
     /// Worker threads; 0 picks the machine's parallelism. The result does not depend on it.
     pub threads: usize,
+    /// Water that reaches the surface joins it (and is reported by `take_absorbed`): a sea, not a pool.
+    pub absorb: bool,
 }
 
 impl Default for FluidParams3 {
@@ -42,6 +78,7 @@ impl Default for FluidParams3 {
             foam_life: 1.5,
             foam_max: 3000,
             threads: 0,
+            absorb: false,
         }
     }
 }
@@ -82,6 +119,13 @@ pub struct Fluid3 {
     eps: f64,
     wq: f64,
     bounds: Option<(V3, V3)>,
+    surface: Option<std::sync::Arc<dyn Surface>>,
+    impacts: Vec<Impact>,
+    /// Per particle: substeps left in which it still counts as resting on the surface.
+    touch: Vec<u8>,
+    /// Per particle: consecutive substeps it has lain still on the surface.
+    rest: Vec<u8>,
+    absorbed: Vec<Absorbed>,
 }
 
 struct Contact {
@@ -116,6 +160,11 @@ impl Fluid3 {
             eps: 0.0,
             wq: 0.0,
             bounds: None,
+            surface: None,
+            impacts: vec![],
+            touch: vec![],
+            rest: vec![],
+            absorbed: vec![],
         };
         // rest density and the gradient normalisation, from a perfect lattice
         let s = f.params.spacing;
@@ -154,6 +203,18 @@ impl Fluid3 {
     pub fn params(&self) -> &FluidParams3 {
         &self.params
     }
+    /// The surface the water rests on from now on (a wave field); `None` removes it.
+    pub fn set_surface(&mut self, surface: Option<std::sync::Arc<dyn Surface>>) {
+        self.surface = surface;
+    }
+    /// The water that joined the surface since the last call.
+    pub fn take_absorbed(&mut self) -> Vec<Absorbed> {
+        std::mem::take(&mut self.absorbed)
+    }
+    /// The impacts on the surface since the last call.
+    pub fn take_impacts(&mut self) -> Vec<Impact> {
+        std::mem::take(&mut self.impacts)
+    }
     pub fn set_threads(&mut self, threads: usize) {
         self.params.threads = threads;
     }
@@ -172,6 +233,8 @@ impl Fluid3 {
         let k = room.min(pts.len());
         self.pos.extend_from_slice(&pts[..k]);
         self.vel.extend(std::iter::repeat_n(V3::ZERO, k));
+        self.touch.extend(std::iter::repeat_n(0, k));
+        self.rest.extend(std::iter::repeat_n(0, k));
         k
     }
     pub fn add_with_velocity(&mut self, pts: &[(V3, V3)]) -> usize {
@@ -180,6 +243,8 @@ impl Fluid3 {
         for (p, v) in &pts[..k] {
             self.pos.push(*p);
             self.vel.push(*v);
+            self.touch.push(0);
+            self.rest.push(0);
         }
         k
     }
@@ -296,12 +361,18 @@ impl Fluid3 {
         gravity: V3,
         iterations: usize,
         mut world: Option<&mut World>,
-        soft: &[SoftBody3],
+        soft: &mut [SoftBody3],
     ) {
         let n = self.pos.len();
         if n == 0 {
             self.update_foam(dt, gravity, world.as_deref());
             return;
+        }
+        if self.touch.len() != n {
+            self.touch.resize(n, 0);
+        }
+        if self.rest.len() != n {
+            self.rest.resize(n, 0);
         }
         let threads = self.params.threads;
         let s = self.params.spacing;
@@ -344,7 +415,8 @@ impl Fluid3 {
             contacts = chunks.into_iter().flatten().collect();
         }
         // soft bodies as fixed obstacle spheres for this substep
-        let mut near_obst: Vec<(usize, V3, f64)> = vec![];
+        let mut near_obst: Vec<(usize, usize)> = vec![];
+        let mut obst: Vec<Sample> = vec![];
         if !soft.is_empty() {
             let (mut lo, mut hi) = (
                 v3(f64::MAX, f64::MAX, f64::MAX),
@@ -355,13 +427,13 @@ impl Fluid3 {
                 hi = hi.max(*x);
             }
             let pad = 2.0 * s;
-            let mut obst: Vec<(V3, f64)> = vec![];
-            for b in soft {
-                obst.extend(b.obstacle_points(
-                    0.5 * s,
-                    lo - v3(pad, pad, pad),
-                    hi + v3(pad, pad, pad),
-                ));
+            for (bi, b) in soft.iter().enumerate() {
+                let mut part =
+                    b.obstacle_samples(0.5 * s, lo - v3(pad, pad, pad), hi + v3(pad, pad, pad));
+                for q in part.iter_mut() {
+                    q.body = bi;
+                }
+                obst.extend(part);
             }
             if !obst.is_empty() {
                 let cell = 2.0 * s;
@@ -376,7 +448,7 @@ impl Fluid3 {
                     .iter()
                     .enumerate()
                     .map(|(k, o)| {
-                        let (cz, cy, cx) = key(o.0);
+                        let (cz, cy, cx) = key(o.pos);
                         (cz, cy, cx, k as u32)
                     })
                     .collect();
@@ -389,9 +461,9 @@ impl Fluid3 {
                                 let t = (cz + dz, cy + dy, cx + dx);
                                 let mut k = cells.partition_point(|c| (c.0, c.1, c.2) < t);
                                 while k < cells.len() && (cells[k].0, cells[k].1, cells[k].2) == t {
-                                    let (p, r) = obst[cells[k].3 as usize];
-                                    if (*x - p).len() < r + r_wall + 0.5 * s {
-                                        near_obst.push((i, p, r + r_wall));
+                                    let o = &obst[cells[k].3 as usize];
+                                    if (*x - o.pos).len() < o.r + r_wall + 0.5 * s {
+                                        near_obst.push((i, cells[k].3 as usize));
                                     }
                                     k += 1;
                                 }
@@ -402,6 +474,10 @@ impl Fluid3 {
             }
         }
         let max_move = 0.4 * s;
+        let mut obst_push: Vec<V3> = vec![V3::ZERO; near_obst.len()];
+        // contacts with the surface (a wave field): the normal and vertical velocity at the last touch
+        let mut on_surface: Vec<Option<(V3, f64)>> = vec![None; n];
+        let surface = self.surface.clone();
         for _ in 0..iterations {
             let lambda: Vec<f64> = par_map(n, threads, |i| {
                 let mut rho = self.w(0.0);
@@ -448,16 +524,34 @@ impl Fluid3 {
                     c.acc += -clearance;
                 }
             }
-            for (i, p, rad) in &near_obst {
-                let d = xs[*i] - *p;
+            if let Some(sf) = surface.as_deref() {
+                for i in 0..n {
+                    let p = xs[i];
+                    if let Some(sm) = sf.sample(p.x, p.z) {
+                        let norm = v3(sm.gx, -1.0, sm.gz);
+                        let l = norm.len();
+                        let nrm = norm / l;
+                        let clear = (sm.y - p.y) / l - r_wall;
+                        if clear < 0.0 {
+                            xs[i] += nrm * (-clear).min(0.8 * s);
+                            on_surface[i] = Some((nrm, sm.vy));
+                        }
+                    }
+                }
+            }
+            for (k, (i, oi)) in near_obst.iter().enumerate() {
+                let o = &obst[*oi];
+                let rad = o.r + r_wall;
+                let d = xs[*i] - o.pos;
                 let dist = d.len();
-                if dist < *rad {
+                if dist < rad {
                     let dir = if dist > 1e-9 {
                         d / dist
                     } else {
                         v3(0.0, -1.0, 0.0)
                     };
                     xs[*i] += dir * (rad - dist);
+                    obst_push[k] += dir * (rad - dist);
                 }
             }
         }
@@ -491,6 +585,65 @@ impl Fluid3 {
                 v
             }
         });
+        let mut new_vel = new_vel;
+        if surface.is_some() {
+            let m = self.params.density * s * s * s;
+            for i in 0..n {
+                if let Some((nrm, vy)) = on_surface[i] {
+                    // water that pressed into the surface hands its momentum to it and slides on
+                    let vs = v3(0.0, vy, 0.0);
+                    let into = -(self.vel[i] - vs).dot(nrm);
+                    // only a real impact counts: water resting on the surface presses with its weight
+                    // all the time, which would sink a wave field without end
+                    let into = into.min(4.0);
+                    // ...and only when it arrives: water that stays on the surface, or is lifted by
+                    // it, does not make new ripples every step
+                    if into > 0.5 && self.touch[i] == 0 {
+                        self.impacts.push(Impact {
+                            x: xs[i].x,
+                            z: xs[i].z,
+                            momentum: m * (into - 0.5),
+                        });
+                    }
+                    let rel = (new_vel[i] - vs).dot(nrm);
+                    if rel < 0.0 {
+                        new_vel[i] -= nrm * rel;
+                    }
+                }
+            }
+        }
+        if self.touch.len() != n {
+            self.touch.resize(n, 0);
+        }
+        for i in 0..n {
+            self.touch[i] = if on_surface[i].is_some() {
+                6
+            } else {
+                self.touch[i].saturating_sub(1)
+            };
+        }
+        // water that has lain still on the surface for a while joins it
+        let mut dead: Vec<bool> = vec![];
+        if self.params.absorb && surface.is_some() {
+            dead = vec![false; n];
+            for i in 0..n {
+                // touching the surface for a few steps in a row (a particle that bounces away
+                // first is not absorbed)
+                if on_surface[i].is_some() {
+                    self.rest[i] = self.rest[i].saturating_add(1);
+                } else {
+                    self.rest[i] = 0;
+                }
+                if self.rest[i] >= 3 {
+                    dead[i] = true;
+                    self.absorbed.push(Absorbed {
+                        x: xs[i].x,
+                        z: xs[i].z,
+                        volume: s * s * s,
+                    });
+                }
+            }
+        }
         self.pos = xs;
         self.vel = new_vel;
         // water pushes bodies back with the momentum of its push-out
@@ -502,11 +655,31 @@ impl Fluid3 {
                 }
             }
         }
+        // ... and push soft skins back with the momentum of the push-out, like a rigid body
+        {
+            let m = self.params.density * s * s * s;
+            for (k, (_, oi)) in near_obst.iter().enumerate() {
+                if obst_push[k].len2() > 0.0 {
+                    let o = obst[*oi];
+                    soft[o.body].apply_sample_impulse(o.pts, o.bary, -obst_push[k] * (m / dt), 3.0);
+                }
+            }
+        }
         if self.params.foam > 0.0 {
             self.update_foam(dt, gravity, world.as_deref());
             self.spawn_foam(dt, &start, &list);
         }
         self.steps += 1;
+        if dead.iter().any(|d| *d) {
+            let mut it = dead.iter();
+            self.pos.retain(|_| !*it.next().expect("same length"));
+            let mut it = dead.iter();
+            self.vel.retain(|_| !*it.next().expect("same length"));
+            let mut it = dead.iter();
+            self.touch.retain(|_| !*it.next().expect("same length"));
+            let mut it = dead.iter();
+            self.rest.retain(|_| !*it.next().expect("same length"));
+        }
         if let Some((lo, hi)) = self.bounds {
             let keep: Vec<bool> = self
                 .pos
@@ -525,6 +698,10 @@ impl Fluid3 {
                 self.pos.retain(|_| *it.next().expect("same length"));
                 let mut it = keep.iter();
                 self.vel.retain(|_| *it.next().expect("same length"));
+                let mut it = keep.iter();
+                self.touch.retain(|_| *it.next().expect("same length"));
+                let mut it = keep.iter();
+                self.rest.retain(|_| *it.next().expect("same length"));
             }
         }
     }

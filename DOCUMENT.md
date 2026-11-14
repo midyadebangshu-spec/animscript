@@ -2302,11 +2302,39 @@ scene "s" for 8.seconds:
 - **3D or 2D:** a fluid is 3D when its `fill` is a `box(x, y, z, w, h, d)` or a mesh shape (its inside is filled), or when it says `space: "3d"` (a fluid that is only poured). A 3D fluid goes with mesh bodies (§13t) and the 3D camera; a scene's fluids may be 2D or 3D but not both kinds in one scene.
 - **Settings** are those of §13e (`spacing`, `density`, `viscosity`, `surface_tension`, `foam`, `smoothness`, `color`, `color_end`, `max`) plus `space`. `spacing` defaults to 12 px in 3D. `render: "dots"` draws every particle as a small ball instead of the surface. All fluids together hold at most 20000 particles.
 - **Operations:** `pour(at: (x, y, z), speed: (x, y, z), width:)` makes a jet whose cross-section is a disc `width` px across; `stop()`; `add(region)` drops in a block (`box(...)` or a mesh); `level(x, z)` is the surface height above that point (px, or none when there is no water there); `water.count` is the number of particles.
-- **Bodies:** containers are ordinary static bodies (cubes, planes; hide a wall you want to see through with `visible = false`, it still holds the water). Dynamic bodies are pushed and buoyed: give a body `density` below 1 to float it. Soft meshes are obstacles for water but are not pushed by it. A resting body keeps a thin layer of particles under it.
+- **Bodies:** containers are ordinary static bodies (cubes, planes; hide a wall you want to see through with `visible = false`, it still holds the water). Dynamic bodies are pushed and buoyed: give a body `density` below 1 to float it. Soft meshes are obstacles for water and are pushed by it (§13w). A resting body keeps a thin layer of particles under it.
 - **The picture:** the renderer fills the particles' density on a grid and extracts a triangle mesh from it (marching cubes), draws it over the opaque meshes with transparency (bodies show through, the colour deepens with the thickness of water, the surface is toon-lit and has an inked silhouette), and draws thin jets, droplets and foam as small spheres. Foam and spray are decorative: they never push anything and are seeded, so the same program always throws the same foam.
 - **Cost and threads:** a few thousand particles is normal (the example is 4 to 7 thousand: under a second a frame); halving `spacing` is eight times the particles. The solver's per-particle loops run on several threads in fixed contiguous chunks that are joined in order, and the surface field is summed in a fixed order, so the same program gives the same frames on one thread or many. In `world:` the settings `fluid_substeps` (4), `fluid_iterations` (3) and `fluid_threads` (0) tune it. Render many frames at once with `anim frames` (it simulates once).
 - **Errors:** `E-FLD-004` (a 3D fluid fills a `box(...)` or a mesh, a pour needs a speed, the fill region does not fit under `max`), `E-FLD-001` (a bad setting). Worked example: `examples/splash.anim`.
-- **Limits:** no refraction or reflections; a very fast body can pass through a thin wall (no continuous collision); a large static triangle mesh is slow to collide with, use cubes and planes for the tank; water does not push soft bodies; a fluid is not coupled to the wave fields of §13r.
+- **Limits:** reflection and refraction are screen-space (§13w); a very fast body can pass through a thin wall (no continuous collision); a large static triangle mesh is slow to collide with, use cubes and planes for the tank; a fluid can be coupled to a wave field (§13w).
+
+## 13w. Water that reflects, bends and pushes back (round W)
+
+Four additions to the 3D water of §13v and the wave fields of §13r.
+
+```anim
+stage3(sky: (#7fb9df, #dcedf0))         # the sky that mirrors and water reflect where nothing else is
+
+ocean.mirror(reflect: 0.5)               # a mesh that shows its surroundings
+pane.glass(opacity: 0.16, reflect: 0.3, refract: 0.9)   # a mesh you look through, bent
+
+fluid splash:
+    space: "3d"
+    field: sea                           # rest on, and make ripples in, this wave field
+    level: 520                           # the field's rest surface: y in px, the surface is level - h
+    channel: "h"                         # height channel (default: the first); "velocity:" the speed channel (default: "v")
+    ripple: 1                            # how strongly impacts ripple the field (0 = none)
+    absorb: true                         # water that reaches the field joins it (false: it rests on it as a pool)
+    reflect: 1                           # Fresnel strength of the water's surface, 0 to 1
+    refract: 1                           # how much it bends what is behind it, 0 to 1
+```
+
+- **Water pushes soft bodies.** Water that is stopped by a soft mesh (cloth, a balloon, jelly) gives it the momentum of the push, shared among the triangle's vertices by inverse mass, exactly as it already did for rigid bodies. A jet pushes a flag, water weighs on a hammock. Soft meshes still are not dragged along by water that merely flows past.
+- **Wave fields.** A fluid with `field:` treats the field as a floor with a velocity: water cannot sink below the surface `level - h(x, z)` (the same convention as `water.drive(y: "-sea_h", fields: [sea])` and `float`), slides along its slope and is carried by its velocity channel, so a wavemaker lifts the water above it. In the other direction, water that lands on the surface makes ripples: a real impact (faster than 0.5 m/s) presses the height channel down by 10 px per kg m/s around the point, and with `absorb: true` (the default) water that reaches the surface joins the field and raises it by its volume. A field-coupled fluid is a sea; set `absorb: false` for a pool that rests on the surface. Field values are clamped to +-150 px at an impact, and the field must be a stable wave field (see `substeps` in §13r: with `c2` in cell units, `c2 * dt^2` must stay below 0.5). Chain fields cannot carry water.
+- **Materials.** `mesh.mirror(reflect: 0.5)` makes an opaque surface that blends in what it reflects (0 to 1); `mesh.glass(opacity: 0.2, reflect: 0.25, refract: 1)` makes a transparent one that bends the picture behind it, tints it with the shape's `fill` and reflects by Fresnel; `mesh.matte()` removes either. (`mirror` is also a 2D editing operation of §13c; on a mesh it is the material.) They work on any mesh, including the water plane of a wave field. Glass is drawn after the water and does not hide what is behind it.
+- **Reflection and refraction.** Screen-space: a reflection ray marches against the depth of the opaque meshes and shows what it hits, or the sky (a gradient, `stage3(sky: (top, horizon))`, by default a bluer version of the project background above its horizon colour) with a glint of the light source; so only what is on screen and opaque is reflected (not glass, not other water, nothing behind the camera). Water refracts by Snell's law (index 1.33): it looks where the bent ray would come out and tints by how deep the water is (Beer's law style, the `color` to `color_end` blend); the reflected share is Schlick's Fresnel, small head-on and large at a grazing angle.
+- **Errors:** `E-MSH-001` for a bad material argument, `sky` that is not two colours, or `glass`/`mirror` on a shape that is not a mesh; `E-FLD-001` for `field:` without `level:`, an unknown channel, or `ripple`, `reflect`, `refract` out of range. Worked example: `examples/harbour.anim`.
+- **Limits:** no caustics (light patterns on the floor), no total internal reflection, reflections do not see glass or water, and a field must be a grid field.
 
 ## 14. Diagnostics, tracing and the command line
 
@@ -2340,7 +2368,7 @@ help: did you mean `over: 1.second`?
 | Properties | `E-CON-001` constraint cycle, `E-PRP-002` two locks on one component, `-003` overlapping keyframes |
 | Fields | `E-FLD-001` bad field declaration, `-002` size limit, `-003` value became infinite or NaN |
 | 3D meshes | `E-MSH-001` bad mesh or stage3 arguments |
-| 3D fluids | `E-FLD-004` bad 3D fluid region, pour or fill that does not fit |
+| 3D fluids | `E-FLD-004` bad 3D fluid region, pour or fill that does not fit; `E-FLD-001` also for a bad `field:` link |
 | 3D physics | `E-PHY-007` bad mesh body or `float`, `-008` bad 3D joint, `-009` bad soft mesh, pin or cut |
 | Equations | `E-MTH-001` equation syntax, `-002` construct not allowed in an equation, `-003` bad arguments, `-004` unknown or mixed drive property, `-005` non-finite value |
 | Camera / assets | `E-CAM-001` zoom outside [1, 8], `E-AST-001` asset file not found |

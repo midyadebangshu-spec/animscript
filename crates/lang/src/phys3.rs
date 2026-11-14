@@ -203,6 +203,10 @@ impl Physics3 {
 }
 
 impl Interp {
+    pub fn is_mesh_shape_value(&self, v: &Value) -> bool {
+        matches!(v, Value::Shape(sn) if self.is_mesh_shape(sn))
+    }
+
     pub fn is_mesh_shape(&self, sn: &str) -> bool {
         self.shapes.get(sn).is_some_and(|s| s.mesh.is_some())
     }
@@ -1062,6 +1066,9 @@ impl Interp {
             if soft.is_some() || fluid.is_some() {
                 let mut soft = soft;
                 let mut fluid = fluid;
+                if let Some(f) = fluid.as_mut() {
+                    self.couple_fluids_to_fields(f);
+                }
                 let has_soft = soft.is_some();
                 let (mut empty_s, mut empty_f) = (vec![], vec![]);
                 let bodies = soft.as_mut().map(|s| &mut s.bodies).unwrap_or(&mut empty_s);
@@ -1084,6 +1091,9 @@ impl Interp {
                     cfg.fluid_iterations,
                     cfg.fluid_substeps,
                 );
+                if let Some(f) = fluid.as_mut() {
+                    self.ripples_from_fluids(f);
+                }
                 self.soft3 = soft;
                 self.fluid3 = fluid;
             } else {

@@ -182,3 +182,186 @@ fn spray_is_seeded_and_never_pushes_the_water() {
     assert_eq!(a.foam.len(), b.foam.len());
     assert_eq!(a.state_hash(), none.state_hash(), "foam changed the water");
 }
+
+/// A square sheet in the yz plane at x = `x`, `n` x `n` vertices, `size` metres.
+fn sheet_yz(x: f64, n: usize, size: f64) -> (Vec<V3>, Vec<[usize; 3]>) {
+    let mut v = vec![];
+    for j in 0..n {
+        for i in 0..n {
+            v.push(v3(
+                x,
+                0.1 + size * i as f64 / (n - 1) as f64,
+                0.1 + size * j as f64 / (n - 1) as f64,
+            ));
+        }
+    }
+    let mut t = vec![];
+    for j in 0..n - 1 {
+        for i in 0..n - 1 {
+            let a = j * n + i;
+            t.push([a, a + 1, a + n]);
+            t.push([a + 1, a + n + 1, a + n]);
+        }
+    }
+    (v, t)
+}
+
+fn cloth_body(x: f64) -> SoftBody3 {
+    let (v, t) = sheet_yz(x, 9, 0.8);
+    let groups: Vec<usize> = (0..t.len()).collect();
+    SoftBody3::from_surface(
+        &v,
+        &t,
+        &groups,
+        &SurfaceSpec {
+            density: 0.05,
+            edge_compliance: 1e-6,
+            bend_compliance: 1e-2,
+            volume: None,
+        },
+        SoftParams {
+            radius: 0.02,
+            ..SoftParams::default()
+        },
+    )
+}
+
+fn hit_cloth(threads: usize) -> (SoftBody3, Fluid3) {
+    let mut w = World::new(V3::ZERO);
+    let mut cloth = [cloth_body(1.0)];
+    let mut f = fluid(threads);
+    let pts: Vec<(V3, V3)> = block(0.3, 0.1, 0.1, 4, 8, 8)
+        .into_iter()
+        .map(|p| (p, v3(3.0, 0.0, 0.0)))
+        .collect();
+    f.add_with_velocity(&pts);
+    for _ in 0..24 {
+        coupled_step3(
+            &mut w,
+            &mut cloth,
+            std::slice::from_mut(&mut f),
+            DT,
+            16,
+            4,
+            3,
+            4,
+        );
+    }
+    let [c] = cloth;
+    (c, f)
+}
+
+#[test]
+fn a_jet_of_water_pushes_a_free_cloth() {
+    let (cloth, _) = hit_cloth(0);
+    let n = cloth.pos.len() as f64;
+    let mean_x = cloth.pos.iter().map(|p| p.x).sum::<f64>() / n;
+    let mean_vx = cloth.vel.iter().map(|v| v.x).sum::<f64>() / n;
+    // before the water the cloth sat at x = 1.0 and did not move at all
+    assert!(mean_x > 1.1, "the cloth was not pushed: x = {mean_x}");
+    assert!(mean_vx > 0.2, "the cloth has no velocity: {mean_vx}");
+}
+
+#[test]
+fn the_push_on_soft_bodies_does_not_depend_on_the_thread_count() {
+    let hash = |c: &SoftBody3| {
+        c.pos.iter().fold(0u64, |h, p| {
+            h.wrapping_mul(1_000_003)
+                ^ p.x.to_bits()
+                ^ p.y.to_bits().rotate_left(13)
+                ^ p.z.to_bits().rotate_left(29)
+        })
+    };
+    let (a, fa) = hit_cloth(1);
+    let (b, fb) = hit_cloth(4);
+    assert_eq!(hash(&a), hash(&b));
+    assert_eq!(fa.state_hash(), fb.state_hash());
+}
+
+#[derive(Debug)]
+struct Flat {
+    y: f64,
+    vy: f64,
+    inside: (f64, f64),
+}
+
+impl Surface for Flat {
+    fn sample(&self, x: f64, _z: f64) -> Option<SurfaceSample> {
+        if x < self.inside.0 || x > self.inside.1 {
+            return None;
+        }
+        Some(SurfaceSample {
+            y: self.y,
+            vy: self.vy,
+            gx: 0.0,
+            gz: 0.0,
+        })
+    }
+}
+
+/// Four walls and no floor: the surface is the only thing under the water.
+fn walls(wd: f64, dp: f64) -> World {
+    let mut w = World::new(v3(0.0, 9.8, 0.0));
+    plane(&mut w, v3(1.0, 0.0, 0.0), 0.0);
+    plane(&mut w, v3(-1.0, 0.0, 0.0), -wd);
+    plane(&mut w, v3(0.0, 0.0, 1.0), 0.0);
+    plane(&mut w, v3(0.0, 0.0, -1.0), -dp);
+    w
+}
+
+fn surf(y: f64, vy: f64, inside: (f64, f64)) -> Option<std::sync::Arc<dyn Surface>> {
+    Some(std::sync::Arc::new(Flat { y, vy, inside }))
+}
+
+#[test]
+fn water_rests_on_a_surface_and_reports_what_fell_on_it() {
+    let mut w = walls(1.0, 1.0);
+    let mut f = fluid(0);
+    f.set_surface(surf(1.0, 0.0, (-5.0, 5.0)));
+    f.add(&block(0.1, 0.0, 0.1, 8, 4, 8));
+    run(&mut w, &mut f, 2.0);
+    let lowest = f.pos.iter().map(|p| p.y).fold(f64::MIN, f64::max);
+    assert!(lowest < 1.01, "water fell through the surface: {lowest}");
+    assert!(lowest > 0.85, "water floats above the surface: {lowest}");
+    let impacts = f.take_impacts();
+    // the block fell about a metre, hitting at over 4 m/s
+    assert!(!impacts.is_empty(), "no impacts were reported");
+    assert!(impacts.iter().map(|i| i.momentum).sum::<f64>() > 0.0);
+    assert!(f.take_impacts().is_empty(), "impacts must be taken once");
+}
+
+#[test]
+fn a_rising_surface_lifts_the_water() {
+    let mut w = walls(1.0, 1.0);
+    let mut f = fluid(0);
+    f.add(&block(0.1, 0.5, 0.1, 8, 3, 8));
+    f.set_surface(surf(1.0, 0.0, (-5.0, 5.0)));
+    run(&mut w, &mut f, 1.0);
+    let before = f.pos.iter().map(|p| p.y).sum::<f64>() / f.len() as f64;
+    // a wavemaker: the surface rises 0.3 m in half a second
+    for k in 0..12 {
+        f.set_surface(surf(1.0 - 0.3 * (k + 1) as f64 / 12.0, -0.6, (-5.0, 5.0)));
+        run(&mut w, &mut f, DT);
+    }
+    let after = f.pos.iter().map(|p| p.y).sum::<f64>() / f.len() as f64;
+    assert!(
+        after < before - 0.2,
+        "the water did not rise: {before} -> {after}"
+    );
+}
+
+#[test]
+fn outside_the_surface_there_is_none() {
+    let mut w = World::new(v3(0.0, 9.8, 0.0));
+    let mut f = fluid(0);
+    f.set_surface(surf(1.0, 0.0, (0.0, 0.5)));
+    f.add(&block(2.0, 0.0, 0.2, 3, 3, 3));
+    run(&mut w, &mut f, 1.0);
+    // beyond x = 0.5 nothing holds it: it falls past y = 1
+    let fallen = f.pos.iter().filter(|p| p.y > 1.2).count();
+    assert!(
+        fallen as f64 > 0.9 * f.len() as f64,
+        "the water stayed up: {fallen} of {}",
+        f.len()
+    );
+}

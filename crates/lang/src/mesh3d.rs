@@ -31,6 +31,8 @@ pub struct Stage3 {
     pub crease: f64,
     /// Shading is smooth across edges between faces turned by less than this many degrees (0: flat facets).
     pub smooth: f64,
+    /// The sky mirrors and water reflect where nothing else is: (top, horizon). Default: from the background.
+    pub sky: Option<([u8; 4], [u8; 4])>,
 }
 
 impl Default for Stage3 {
@@ -44,6 +46,7 @@ impl Default for Stage3 {
             bands: 3,
             crease: 40.0,
             smooth: 50.0,
+            sky: None,
         }
     }
 }
@@ -290,7 +293,9 @@ impl Interp {
                 let m = self.bind(
                     name,
                     args,
-                    &["fov", "light", "ambient", "bands", "crease", "smooth"],
+                    &[
+                        "fov", "light", "ambient", "bands", "crease", "smooth", "sky",
+                    ],
                     &[],
                 )?;
                 let mut st = self.stage3.clone();
@@ -351,11 +356,74 @@ impl Interp {
                         return Err(msh("`smooth` is between 0 and 180 degrees"));
                     }
                 }
+                if let Some(v) = m.get("sky") {
+                    let (Value::Tuple(t), true) = (v, matches!(v, Value::Tuple(t) if t.len() == 2))
+                    else {
+                        return Err(msh(
+                            "`sky` must be two colours (top, horizon), like `(#8fc7e6, #d9ecee)`",
+                        ));
+                    };
+                    match (&t[0], &t[1]) {
+                        (Value::Color(a), Value::Color(b)) => st.sky = Some((*a, *b)),
+                        _ => return Err(msh(
+                            "`sky` must be two colours (top, horizon), like `(#8fc7e6, #d9ecee)`",
+                        )),
+                    }
+                }
                 self.stage3 = st;
                 Ok(Value::None)
             }
             _ => unreachable!("dispatched by name"),
         }
+    }
+
+    pub fn is_material_method(name: &str) -> bool {
+        matches!(name, "glass" | "mirror" | "matte")
+    }
+
+    /// `glass(opacity:, reflect:, refract:)`, `mirror(reflect:)` and `matte()` on a mesh shape.
+    pub fn material_method(&mut self, sn: &str, name: &str, args: Args) -> Res<Value> {
+        if !self.is_mesh_shape(sn) {
+            return Err(msh(format!(
+                "`{name}` is for 3D meshes, and `{sn}` is not one"
+            )));
+        }
+        let unit = |this: &Interp, m: &HashMap<&'static str, Value>, k: &str, d: f64| -> Res<f64> {
+            let v = match m.get(k) {
+                Some(v) => this.num(v, &format!("`{k}`"))?,
+                None => d,
+            };
+            if !(0.0..=1.0).contains(&v) {
+                return Err(msh(format!("`{k}` is between 0 and 1")));
+            }
+            Ok(v)
+        };
+        let material = match name {
+            "glass" => {
+                let m = self.bind(name, args, &["opacity", "reflect", "refract"], &[])?;
+                Some(MeshMaterial {
+                    kind: "glass".into(),
+                    opacity: unit(self, &m, "opacity", 0.2)?,
+                    reflect: unit(self, &m, "reflect", 0.25)?,
+                    refract: unit(self, &m, "refract", 1.0)?,
+                })
+            }
+            "mirror" => {
+                let m = self.bind(name, args, &["reflect"], &[])?;
+                Some(MeshMaterial {
+                    kind: "mirror".into(),
+                    opacity: 1.0,
+                    reflect: unit(self, &m, "reflect", 0.5)?,
+                    refract: 0.0,
+                })
+            }
+            _ => {
+                self.bind(name, args, &[], &[])?;
+                None
+            }
+        };
+        self.shapes.get_mut(sn).expect("shape").material = material;
+        Ok(Value::None)
     }
 
     pub fn any_visible_mesh(&self) -> bool {
@@ -404,7 +472,11 @@ impl Interp {
 
     pub fn light3_json(&self) -> J {
         let s = &self.stage3;
-        json!({"dir": s.light, "ambient": s.ambient, "bands": s.bands, "crease": s.crease, "smooth": s.smooth})
+        let mut j = json!({"dir": s.light, "ambient": s.ambient, "bands": s.bands, "crease": s.crease, "smooth": s.smooth});
+        if let Some((top, horizon)) = s.sky {
+            j["sky"] = json!([crate::color::hex(top), crate::color::hex(horizon)]);
+        }
+        j
     }
 }
 
@@ -435,5 +507,9 @@ pub fn mesh_json(
         .enumerate()
         .map(|(i, v)| json!(t.apply(over.and_then(|o| o.get(&(i as u32))).copied().unwrap_or(*v))))
         .collect();
-    json!({"verts": verts, "faces": mesh.faces, "double_sided": mesh.double_sided, "fill": fill, "outline": outline, "width": width})
+    let mut j = json!({"verts": verts, "faces": mesh.faces, "double_sided": mesh.double_sided, "fill": fill, "outline": outline, "width": width});
+    if let Some(m) = &sh.material {
+        j["material"] = json!({"kind": m.kind, "reflect": m.reflect, "refract": m.refract, "opacity": m.opacity});
+    }
+    j
 }

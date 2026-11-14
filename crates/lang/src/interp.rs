@@ -2616,6 +2616,15 @@ impl Interp {
         if TOPOLOGY_METHODS.contains(&name) {
             self.guard_topology(mode, name)?;
         }
+        // `mirror` is also a 2D editing operation: on a mesh it is the material
+        if let (Value::Shape(sn), true) = (
+            &obj,
+            Interp::is_material_method(name)
+                && (name != "mirror" || self.is_mesh_shape_value(&obj)),
+        ) {
+            let sn = sn.clone();
+            return self.material_method(&sn, name, args);
+        }
         if let (Value::Shape(sn), true) = (&obj, Interp::is_body_method(name)) {
             let sn = sn.clone();
             return self.body_method(&sn, name, args, mode);
