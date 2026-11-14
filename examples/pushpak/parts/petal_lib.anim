@@ -26,3 +26,11 @@ fn petal_ring(x: Number, base_y: Number, height: Number, r0: Number, lean: Numbe
 # it out and up); the width runs across z the whole way.
 fn petal_arc_ring(x: Number, base_y: Number, r0: Number, length: Number, half_w: Number, cup: Number, count: Int, phase: Angle) -> Shape:
     return sheet(spine: (0..14).map(i -> (x + r0 + length * i / 14, base_y, 0)), width: (0..14).map(i -> petal_width(half_w, i / 14)), cup: cup, across: 8, side: (0, 0, 1), curl: 0.25.turns, toward: (0, -1, 0), around: count, about: (x, 0), phase: phase)
+
+# like petal_arc_ring, but the petal first lies flat along the base for `flat` px and only then curls up in one
+# quarter-turn arc of radius `radius` (so its tip is `radius` above the base and points straight up).
+fn petal_flat_arc_spine(x: Number, base_y: Number, r0: Number, flat: Number, radius: Number, n: Int) -> List:
+    return (0..n).map(i -> (x + r0 + min(i / n * (flat + radius * 1.5708), flat) + radius * sin(min(max(i / n * (flat + radius * 1.5708) - flat, 0) / radius / 6.2832, 0.25) * 1.turns), base_y - radius * (1 - cos(min(max(i / n * (flat + radius * 1.5708) - flat, 0) / radius / 6.2832, 0.25) * 1.turns)), 0))
+
+fn petal_flat_arc_ring(x: Number, base_y: Number, r0: Number, flat: Number, radius: Number, half_w: Number, cup: Number, count: Int, phase: Angle) -> Shape:
+    return sheet(spine: petal_flat_arc_spine(x, base_y, r0, flat, radius, 20), width: (0..20).map(i -> petal_width(half_w, i / 20)), cup: cup, across: 8, side: (0, 0, 1), around: count, about: (x, 0), phase: phase)

@@ -1,16 +1,17 @@
-## Pushpak Viman: the second layer of petals, `petals_mid`. Each comes out of the base flat, heading outwards, and
-## curls up in ONE curve until its tip points straight up. They stand between the inner petals (the ring is turned half a
+## Pushpak Viman: the second layer of petals, `petals_mid`. Each comes out of the base and lies flat along it, heading
+## outwards, then curls up in ONE curve until its tip points straight up. They stand between the inner petals (the ring is turned half a
 ## step), a translucent lavender membrane with a dark lace frame, a vein and ribs.
 import "petal_lib"
 
 param axis_x = 640
 param base_y = 506
 param r_base = 100
-param length = 160
-param half_w = 36
+param flat = 150
+param radius = 100
+param half_w = 40
 param count = 11
 
-shape petals_mid = petal_arc_ring(axis_x, base_y, r_base, length, half_w, -0.2, count, 0.04545.turns)
+shape petals_mid = petal_flat_arc_ring(axis_x, base_y, r_base, flat, radius, half_w, -0.2, count, 0.04545.turns)
 petals_mid.fill = #c9a7d8
 petals_mid.opacity = 0.62
 petals_mid.surface(roughness: 0.4, metallic: 0.3, emissive: 0.1, transmission: 2.2)
