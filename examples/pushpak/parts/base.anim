@@ -1,0 +1,35 @@
+## Pushpak Viman: the base, a round walkway (deck) below the dome with a rim and a railing of balusters. The petals
+## grow from its edge and the dome floats above it with a gap between (where the gondola goes).
+## Shapes: deck, rim, railing.
+import "std/3d"
+
+param axis_x = 640
+param deck_y = 602
+param deck_r = 205
+
+shape deck = lathe(profile: [(0, 0), (deck_r, 0), (deck_r + 8, 5), (deck_r + 8, 12), (deck_r, 18), (0, 18)], segments: 96, at: (axis_x, deck_y, 0))
+deck.fill = #8a5a2a
+deck.surface(roughness: 0.45, metallic: 0.5, emissive: 0.1)
+shape rim = lathe(profile: [(deck_r - 8, 0), (deck_r - 3, 4), (deck_r - 3, 9), (deck_r - 8, 13)], segments: 96, at: (axis_x, deck_y - 15, 0), double_sided: true)
+rim.fill = #e9c25a
+rim.surface(roughness: 0.3, metallic: 1, emissive: 0.3)
+# a railing: a thin wall with its gaps cut out, leaving balusters between a rail at the top and a rail at the foot
+shape railing = lathe(profile: [(deck_r - 14, 0), (deck_r - 14, 40)], segments: 96, at: (axis_x, deck_y - 38, 0), double_sided: true)
+railing.fill = #e9c25a
+railing.surface(roughness: 0.3, metallic: 1, emissive: 0.3)
+railing.pattern(hole: "(fract(u * 64) > 0.3) && v > 0.1 && v < 0.88")
+
+project "Pushpak base":
+    anim_version: "0.1"
+    canvas: 1280x720
+    fps: 24
+    background: #f0b070
+
+preview:
+    stage3(fov: 40, exposure: 1.1, bloom: 0.2, quality: "medium", smooth: 55.deg, crease: 38.deg)
+    shape sun = sun_light(dir: (-0.5, 0.5, 0.8), color: #ffd9a0, intensity: 2.2, size: 3)
+    shape sky = ambient_light(color: #ffb27a, ground: #5a3a2a, intensity: 0.5)
+
+scene "preview" for 3.seconds:
+    main:
+        camera3.orbit(turns: 0.1, over: 3.seconds)

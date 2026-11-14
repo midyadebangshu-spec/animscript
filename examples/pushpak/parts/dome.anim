@@ -5,15 +5,14 @@
 import "std/3d"
 
 param dome_x = 640
-param dome_top = 190
-param dome_h = 300
-param dome_r = 158
+param dome_top = 150
+param dome_h = 340
+param dome_r = 172
 
 # the outline: t = 0 at the top of the body, 1 at the bottom. Fullest about a third of the way down, narrowing to the neck.
 # (A lathe profile is (radius, height) with height going UP, so the screen y is negated in `strip`.)
 fn egg(t: Number) -> Number:
-    let u = 1.35 * t - 0.35 * t * t
-    return dome_r * sqrt(sin(u * 0.5.turns)) * (1.1 - 0.12 * t)
+    return dome_r * sin(0.5.turns * t) * (1.03 - 0.06 * t)
 
 fn egg_y(t: Number) -> Number:
     return dome_top + dome_h * t

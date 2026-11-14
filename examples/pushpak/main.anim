@@ -8,6 +8,7 @@ project "Pushpak Viman":
 
 import "std/3d"
 import "parts/dome"
+import "parts/base"
 import "parts/petals_inner"
 import "parts/petals_mid"
 import "parts/petals_outer"
