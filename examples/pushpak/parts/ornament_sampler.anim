@@ -1,0 +1,40 @@
+## A flat preview of the henna border designs in parts/ornament.anim: black ink on white, one strip per design.
+import "std/3d"
+import "ornament"
+
+# a strip `w` px wide and `h` px tall at (640, y) holding `cells` repeats of its design; ink is black on white
+fn strip_of(design: String, y: Number, w: Number, h: Number) -> Shape:
+    return sheet(spine: [(640, y + h / 2, 0), (640, y - h / 2, 0)], width: [w / 2, w / 2], facing: (0, 0, -1), across: 1)
+
+shape s1 = strip_of(lace_edge, 90, 1200, 133)
+s1.fill = #ffffff
+s1.pattern(mask: lace_edge, color: #000000, n: 9, a: 1.0)
+shape s2 = strip_of(shells, 238, 1200, 157)
+s2.fill = #ffffff
+s2.pattern(mask: shells, color: #000000, n: 8, a: 1.05)
+shape s3 = strip_of(tulips, 342, 1200, 52)
+s3.fill = #ffffff
+s3.pattern(mask: tulips, color: #000000, n: 14, a: 0.6)
+shape s4 = strip_of(rainbow, 408, 1200, 40)
+s4.fill = #ffffff
+s4.pattern(mask: rainbow, color: #000000, n: 18, a: 0.6)
+shape s5 = strip_of(fans, 530, 1200, 204)
+s5.fill = #ffffff
+s5.pattern(mask: fans, color: #000000, n: 5, a: 0.85)
+shape s6 = strip_of(stripes, 664, 1200, 28)
+s6.fill = #ffffff
+s6.pattern(mask: stripes, color: #000000, n: 24, a: 0.55)
+
+project "Ornament sampler":
+    anim_version: "0.1"
+    canvas: 1280x720
+    fps: 24
+    background: #ffffff
+
+preview:
+    stage3(fov: 40, exposure: 1.0, quality: "low")
+    shape flat_light = ambient_light(color: #ffffff, intensity: 1.0)
+
+scene "preview" for 2.frames:
+    main:
+        wait 1.frame
