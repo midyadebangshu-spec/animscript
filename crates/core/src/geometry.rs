@@ -272,6 +272,8 @@ pub struct Pattern {
     pub hole: Option<String>,
     pub color: Option<String>,
     pub glow: f64,
+    /// The opacity where the mask is 1 (so lines can stay solid on a see-through mesh); `None`: the mesh's own opacity.
+    pub alpha: Option<f64>,
     /// Named numbers the equations may use (`pattern(mask: "fract(u * n)", n: 12)`).
     pub consts: Vec<(String, f64)>,
 }

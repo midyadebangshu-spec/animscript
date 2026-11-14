@@ -14,6 +14,8 @@ use tiny_skia::{
 
 const SS: usize = 2;
 const NEAR: f64 = 1.0;
+/// How many translucent surfaces deep a pixel is resolved.
+const LAYERS: usize = 4;
 
 type V3 = [f64; 3];
 
@@ -63,6 +65,8 @@ struct Pat {
     hole: Option<animscript_math::Program>,
     color: [f32; 3],
     glow: f64,
+    /// The opacity where the mask is 1 (`None`: the mesh's own opacity).
+    alpha: Option<f32>,
 }
 
 /// What `triangle` needs to texture one polygon.
@@ -108,6 +112,7 @@ fn pat_of(m: &Value) -> Option<Pat> {
         hole,
         color: [c.red(), c.green(), c.blue()],
         glow: p["glow"].as_f64().unwrap_or(0.0),
+        alpha: p["alpha"].as_f64().map(|a| a.clamp(0.0, 1.0) as f32),
     })
 }
 
@@ -210,9 +215,29 @@ struct Buffers {
     cpos: Vec<[f32; 3]>,
     alb: Vec<[f32; 4]>,
     mat: Vec<[f32; 3]>,
+    /// Depth peeling for translucent layers: only surfaces further than `gate_near` (the layer in front of this one)
+    /// and nearer than `gate_far` (the opaque picture) are kept. Empty = no limit.
+    gate_near: Vec<f32>,
+    gate_far: Vec<f32>,
 }
 
 impl Buffers {
+    fn new(w: usize, h: usize) -> Buffers {
+        Buffers {
+            w,
+            h,
+            depth: vec![f32::INFINITY; w * h],
+            rgba: vec![[0.0; 4]; w * h],
+            refl: vec![0.0; w * h],
+            nrm: vec![[0.0; 3]; w * h],
+            cpos: vec![[0.0; 3]; w * h],
+            alb: vec![[0.0; 4]; w * h],
+            mat: vec![[0.0; 3]; w * h],
+            gate_near: vec![],
+            gate_far: vec![],
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn triangle(
         &mut self,
@@ -271,6 +296,12 @@ impl Buffers {
                 let (a0, a1, a2) = (w0 * inv_z[0], w1 * inv_z[1], w2 * inv_z[2]);
                 let zz = (1.0 / (a0 + a1 + a2)) as f32;
                 let i = y * self.w + x;
+                if !self.gate_far.is_empty() && zz >= self.gate_far[i] {
+                    continue;
+                }
+                if !self.gate_near.is_empty() && zz <= self.gate_near[i] * (1.0 + 1e-4) {
+                    continue;
+                }
                 if zz < self.depth[i] {
                     let mut base = base;
                     let mut mat = mat;
@@ -290,6 +321,9 @@ impl Buffers {
                             let w = m.eval_scalar(&at, &mut regs).clamp(0.0, 1.0) as f32;
                             for (b, c) in base.iter_mut().zip(t.pat.color) {
                                 *b += (c - *b) * w;
+                            }
+                            if let Some(a) = t.pat.alpha {
+                                base[3] += (a - base[3]) * w;
                             }
                             mat[2] += (t.pat.glow * w as f64) as f32;
                         }
@@ -467,17 +501,7 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View, occ: &[crate:
     }
     let (w, h) = (pm.width() as usize * SS, pm.height() as usize * SS);
     let screen = Screen { cam, tf: view.tf };
-    let mut buf = Buffers {
-        w,
-        h,
-        depth: vec![f32::INFINITY; w * h],
-        rgba: vec![[0.0; 4]; w * h],
-        refl: vec![0.0; w * h],
-        nrm: vec![[0.0; 3]; w * h],
-        cpos: vec![[0.0; 3]; w * h],
-        alb: vec![[0.0; 4]; w * h],
-        mat: vec![[0.0; 3]; w * h],
-    };
+    let mut buf = Buffers::new(w, h);
 
     // faces: cull, shade, clip, rasterize
     let mut facing: Vec<Vec<bool>> = vec![];
@@ -501,135 +525,146 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View, occ: &[crate:
         normals.push(ns);
     }
     let smooth_cos = light.smooth.to_radians().cos();
-    for (mi, m) in meshes.iter().enumerate() {
-        // the faces around each vertex, for normals that are smooth across gentle edges
-        let mut around: Vec<Vec<usize>> = vec![vec![]; m.verts.len()];
-        for (fi, f) in m.faces.iter().enumerate() {
-            if f.len() >= 3 && f.iter().all(|i| *i < m.verts.len()) {
-                for &v in f {
-                    around[v].push(fi);
-                }
-            }
-        }
-        for (fi, f) in m.faces.iter().enumerate() {
-            if f.len() < 3 || f.iter().any(|i| *i >= m.verts.len()) {
+    // rasterize the meshes `pick` chooses into a buffer
+    let raster = |buf: &mut Buffers, pick: &dyn Fn(&Mesh) -> bool| {
+        for (mi, m) in meshes.iter().enumerate() {
+            if !pick(m) {
                 continue;
             }
-            let flip = !facing[mi][fi];
-            if flip && !m.double_sided {
-                continue;
-            }
-            let sign = if flip { -1.0 } else { 1.0 };
-            let fnorm = normals[mi][fi];
-            // a normal per corner: the average of the faces around it that are within the smoothing angle
-            let corner: Vec<V3> = f
-                .iter()
-                .map(|&v| {
-                    let mut acc = fnorm;
-                    if light.smooth > 0.0 {
-                        acc = [0.0; 3];
-                        for &g in &around[v] {
-                            if dot(fnorm, normals[mi][g]) >= smooth_cos {
-                                let ng = normals[mi][g];
-                                acc = [acc[0] + ng[0], acc[1] + ng[1], acc[2] + ng[2]];
-                            }
-                        }
-                        acc = unit(acc);
+            // the faces around each vertex, for normals that are smooth across gentle edges
+            let mut around: Vec<Vec<usize>> = vec![vec![]; m.verts.len()];
+            for (fi, f) in m.faces.iter().enumerate() {
+                if f.len() >= 3 && f.iter().all(|i| *i < m.verts.len()) {
+                    for &v in f {
+                        around[v].push(fi);
                     }
-                    [acc[0] * sign, acc[1] * sign, acc[2] * sign]
-                })
-                .collect();
-            let a = (m.fill.alpha() as f64 * m.opacity) as f32;
-            let base = [m.fill.red(), m.fill.green(), m.fill.blue(), a];
-            // clip the polygon to the near plane, carrying the corner normals along
-            let cam: Vec<V3> = f.iter().map(|i| screen.to_camera(m.verts[*i])).collect();
-            let corner_uv: Vec<[f64; 2]> = match m.uv.get(fi) {
-                Some(c) if c.len() == f.len() && m.pat.is_some() => c.clone(),
-                _ => vec![[0.0; 2]; f.len()],
-            };
-            let mut poly: Vec<(V3, V3, [f64; 2])> = vec![];
-            for i in 0..cam.len() {
-                let (p, q) = (i, (i + 1) % cam.len());
-                let (ina, inb) = (cam[p][2] >= NEAR, cam[q][2] >= NEAR);
-                if ina {
-                    poly.push((cam[p], corner[p], corner_uv[p]));
-                }
-                if ina != inb {
-                    let t = (NEAR - cam[p][2]) / (cam[q][2] - cam[p][2]);
-                    let pos = [
-                        cam[p][0] + (cam[q][0] - cam[p][0]) * t,
-                        cam[p][1] + (cam[q][1] - cam[p][1]) * t,
-                        NEAR,
-                    ];
-                    let nrm = unit([
-                        corner[p][0] + (corner[q][0] - corner[p][0]) * t,
-                        corner[p][1] + (corner[q][1] - corner[p][1]) * t,
-                        corner[p][2] + (corner[q][2] - corner[p][2]) * t,
-                    ]);
-                    let uv = [
-                        corner_uv[p][0] + (corner_uv[q][0] - corner_uv[p][0]) * t,
-                        corner_uv[p][1] + (corner_uv[q][1] - corner_uv[p][1]) * t,
-                    ];
-                    poly.push((pos, nrm, uv));
                 }
             }
-            if poly.len() < 3 {
-                continue;
-            }
-            let pts: Vec<[f64; 2]> = poly.iter().map(|(c, _, _)| screen.project(*c)).collect();
-            for k in 1..poly.len() - 1 {
-                buf.triangle(
-                    [pts[0], pts[k], pts[k + 1]],
-                    [poly[0].0[2], poly[k].0[2], poly[k + 1].0[2]],
-                    [poly[0].1, poly[k].1, poly[k + 1].1],
-                    [poly[0].0, poly[k].0, poly[k + 1].0],
-                    base,
-                    [
-                        m.surface[0] as f32,
-                        m.surface[1] as f32,
-                        m.surface[2] as f32,
-                    ],
-                    m.reflect as f32,
-                    &light,
-                    m.pat.as_ref().map(|pat| PatTri {
-                        pat,
-                        uv: [poly[0].2, poly[k].2, poly[k + 1].2],
-                    }),
-                );
+            for (fi, f) in m.faces.iter().enumerate() {
+                if f.len() < 3 || f.iter().any(|i| *i >= m.verts.len()) {
+                    continue;
+                }
+                let flip = !facing[mi][fi];
+                if flip && !m.double_sided {
+                    continue;
+                }
+                let sign = if flip { -1.0 } else { 1.0 };
+                let fnorm = normals[mi][fi];
+                // a normal per corner: the average of the faces around it that are within the smoothing angle
+                let corner: Vec<V3> = f
+                    .iter()
+                    .map(|&v| {
+                        let mut acc = fnorm;
+                        if light.smooth > 0.0 {
+                            acc = [0.0; 3];
+                            for &g in &around[v] {
+                                if dot(fnorm, normals[mi][g]) >= smooth_cos {
+                                    let ng = normals[mi][g];
+                                    acc = [acc[0] + ng[0], acc[1] + ng[1], acc[2] + ng[2]];
+                                }
+                            }
+                            acc = unit(acc);
+                        }
+                        [acc[0] * sign, acc[1] * sign, acc[2] * sign]
+                    })
+                    .collect();
+                let a = (m.fill.alpha() as f64 * m.opacity) as f32;
+                let base = [m.fill.red(), m.fill.green(), m.fill.blue(), a];
+                // clip the polygon to the near plane, carrying the corner normals along
+                let cam: Vec<V3> = f.iter().map(|i| screen.to_camera(m.verts[*i])).collect();
+                let corner_uv: Vec<[f64; 2]> = match m.uv.get(fi) {
+                    Some(c) if c.len() == f.len() && m.pat.is_some() => c.clone(),
+                    _ => vec![[0.0; 2]; f.len()],
+                };
+                let mut poly: Vec<(V3, V3, [f64; 2])> = vec![];
+                for i in 0..cam.len() {
+                    let (p, q) = (i, (i + 1) % cam.len());
+                    let (ina, inb) = (cam[p][2] >= NEAR, cam[q][2] >= NEAR);
+                    if ina {
+                        poly.push((cam[p], corner[p], corner_uv[p]));
+                    }
+                    if ina != inb {
+                        let t = (NEAR - cam[p][2]) / (cam[q][2] - cam[p][2]);
+                        let pos = [
+                            cam[p][0] + (cam[q][0] - cam[p][0]) * t,
+                            cam[p][1] + (cam[q][1] - cam[p][1]) * t,
+                            NEAR,
+                        ];
+                        let nrm = unit([
+                            corner[p][0] + (corner[q][0] - corner[p][0]) * t,
+                            corner[p][1] + (corner[q][1] - corner[p][1]) * t,
+                            corner[p][2] + (corner[q][2] - corner[p][2]) * t,
+                        ]);
+                        let uv = [
+                            corner_uv[p][0] + (corner_uv[q][0] - corner_uv[p][0]) * t,
+                            corner_uv[p][1] + (corner_uv[q][1] - corner_uv[p][1]) * t,
+                        ];
+                        poly.push((pos, nrm, uv));
+                    }
+                }
+                if poly.len() < 3 {
+                    continue;
+                }
+                let pts: Vec<[f64; 2]> = poly.iter().map(|(c, _, _)| screen.project(*c)).collect();
+                for k in 1..poly.len() - 1 {
+                    buf.triangle(
+                        [pts[0], pts[k], pts[k + 1]],
+                        [poly[0].0[2], poly[k].0[2], poly[k + 1].0[2]],
+                        [poly[0].1, poly[k].1, poly[k + 1].1],
+                        [poly[0].0, poly[k].0, poly[k + 1].0],
+                        base,
+                        [
+                            m.surface[0] as f32,
+                            m.surface[1] as f32,
+                            m.surface[2] as f32,
+                        ],
+                        m.reflect as f32,
+                        &light,
+                        m.pat.as_ref().map(|pat| PatTri {
+                            pat,
+                            uv: [poly[0].2, poly[k].2, poly[k + 1].2],
+                        }),
+                    );
+                }
             }
         }
-    }
+    };
+    raster(&mut buf, &|m| m.opacity >= 0.999);
 
     // photographic lighting replaces the toon shading when the scene has lights
     let lights = crate::light::parse_lights(snapshot);
-    if !lights.is_empty() {
-        let exposure = snapshot["light3"]["exposure"].as_f64().unwrap_or(1.0);
-        let samples = match snapshot["light3"]["quality"].as_str() {
-            Some("low") => 4,
-            Some("high") => 16,
-            _ => 8,
-        };
-        let ao_radius = snapshot["light3"]["ao"].as_f64().unwrap_or(60.0);
-        let ao_on = ao_radius > 0.0 && lights.iter().any(|l| l.kind == crate::light::Kind::Ambient);
-        // every opaque mesh casts shadows and occludes
-        let mut tris: Vec<[V3; 3]> = vec![];
-        if ao_on
-            || lights
-                .iter()
-                .any(|l| l.shadows && l.kind != crate::light::Kind::Ambient)
-        {
-            for m in meshes.iter().filter(|m| m.opacity >= 0.5) {
-                for f in &m.faces {
-                    if f.len() < 3 || f.iter().any(|i| *i >= m.verts.len()) {
-                        continue;
-                    }
-                    for k in 1..f.len() - 1 {
-                        tris.push([m.verts[f[0]], m.verts[f[k]], m.verts[f[k + 1]]]);
-                    }
+
+    let exposure = snapshot["light3"]["exposure"].as_f64().unwrap_or(1.0);
+    let samples = match snapshot["light3"]["quality"].as_str() {
+        Some("low") => 4,
+        Some("high") => 16,
+        _ => 8,
+    };
+    let ao_radius = snapshot["light3"]["ao"].as_f64().unwrap_or(60.0);
+    let ao_on = ao_radius > 0.0 && lights.iter().any(|l| l.kind == crate::light::Kind::Ambient);
+    // only fully opaque meshes cast shadows and occlude (a translucent one lets the light through)
+    let mut tris: Vec<[V3; 3]> = vec![];
+    if ao_on
+        || lights
+            .iter()
+            .any(|l| l.shadows && l.kind != crate::light::Kind::Ambient)
+    {
+        for m in meshes.iter().filter(|m| m.opacity >= 0.999) {
+            for f in &m.faces {
+                if f.len() < 3 || f.iter().any(|i| *i >= m.verts.len()) {
+                    continue;
+                }
+                for k in 1..f.len() - 1 {
+                    tris.push([m.verts[f[0]], m.verts[f[k]], m.verts[f[k + 1]]]);
                 }
             }
         }
-        let bvh = crate::bvh::Bvh::new(tris);
+    }
+    let bvh = crate::bvh::Bvh::new(tris);
+    let light_pass = |buf: &mut Buffers| {
+        if lights.is_empty() {
+            return;
+        }
         let cam = &screen.cam;
         let (alb, cpos, nrm, mat, depth) = (&buf.alb, &buf.cpos, &buf.nrm, &buf.mat, &buf.depth);
         let threads = std::thread::available_parallelism()
@@ -724,6 +759,34 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View, occ: &[crate:
                 });
             }
         });
+    };
+    light_pass(&mut buf);
+
+    // translucent meshes: peeled into layers from the nearest, each lit like the opaque picture, then blended over it
+    // from the furthest to the nearest, so they show through each other and what is behind them
+    let mut layers: Vec<Buffers> = vec![];
+    for _ in 0..LAYERS {
+        let mut lb = Buffers::new(w, h);
+        lb.gate_far = buf.depth.clone();
+        if let Some(prev) = layers.last() {
+            lb.gate_near = prev.depth.clone();
+        }
+        raster(&mut lb, &|m| m.opacity < 0.999);
+        if lb.depth.iter().all(|d| *d == f32::INFINITY) {
+            break;
+        }
+        light_pass(&mut lb);
+        layers.push(lb);
+    }
+    for lb in layers.iter().rev() {
+        for i in 0..w * h {
+            if lb.depth[i] != f32::INFINITY && lb.alb[i][3] > 0.0 {
+                let a = lb.rgba[i][3];
+                for k in 0..4 {
+                    buf.rgba[i][k] = lb.rgba[i][k] + buf.rgba[i][k] * (1.0 - a);
+                }
+            }
+        }
     }
 
     // the picture, averaged down from the supersampled buffer

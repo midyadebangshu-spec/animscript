@@ -189,3 +189,14 @@ fn a_sheet_wave_is_accepted_and_checked() {
         .unwrap();
     assert_eq!(e.code, "E-TYP-001");
 }
+
+#[test]
+fn a_pattern_can_have_its_own_opacity_for_the_mask() {
+    let r = run("shape p = plane(width: 100, depth: 100)\np.opacity = 0.4\np.pattern(mask: \"u\", color: #000000, alpha: 0.9)\n").ok().unwrap();
+    let pat = &r.snapshots[0]["shapes"][0]["mesh"]["pattern"];
+    assert_eq!(pat["alpha"], 0.9);
+    let e = run("shape p = plane(width: 100, depth: 100)\np.pattern(mask: \"u\", alpha: 3)\n")
+        .err()
+        .unwrap();
+    assert_eq!(e.code, "E-MSH-001");
+}

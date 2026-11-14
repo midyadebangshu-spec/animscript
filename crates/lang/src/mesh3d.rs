@@ -630,7 +630,7 @@ impl Interp {
         let (m, consts) = self.split_math_args(
             "pattern",
             args,
-            &["mask", "hole", "color", "glow"],
+            &["mask", "hole", "color", "glow", "alpha"],
             &["u", "v"],
         )?;
         let has_uv = self.shapes[sn]
@@ -685,6 +685,13 @@ impl Interp {
                 return Err(msh("`glow` is between 0 and 50"));
             }
             pat.glow = g;
+        }
+        if let Some(a) = m.get("alpha") {
+            let a = self.num(a, "`alpha`")?;
+            if !(0.0..=1.0).contains(&a) {
+                return Err(msh("`alpha` is between 0 and 1"));
+            }
+            pat.alpha = Some(a);
         }
         pat.consts = consts.into_iter().collect();
         self.shapes.get_mut(sn).expect("shape").pattern = Some(pat);
@@ -786,7 +793,7 @@ pub fn mesh_json(
         .collect();
     let mut j = json!({"verts": verts, "faces": mesh.faces, "double_sided": mesh.double_sided, "fill": fill, "outline": outline, "width": width});
     if let Some(p) = &sh.pattern {
-        j["pattern"] = json!({"mask": p.mask, "hole": p.hole, "color": p.color, "glow": p.glow, "consts": p.consts.iter().cloned().collect::<std::collections::BTreeMap<_, _>>()});
+        j["pattern"] = json!({"mask": p.mask, "hole": p.hole, "color": p.color, "glow": p.glow, "alpha": p.alpha, "consts": p.consts.iter().cloned().collect::<std::collections::BTreeMap<_, _>>()});
         j["uv"] = json!(mesh.uv);
     }
     if let Some(s) = &sh.surface {

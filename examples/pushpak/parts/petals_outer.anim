@@ -19,9 +19,10 @@ param half_w = 44
 
 shape petals_outer = petal_ring(axis_x, base_y, height, r_base, lean, bulge, flare, spin, s_bend, sway, wave, waves, half_w, -0.2, count, 0.0.turns)
 petals_outer.fill = #5b4129
+petals_outer.opacity = 0.55
 petals_outer.surface(roughness: 0.5, metallic: 0.3, emissive: 0.2)
 # gold glowing edges and a pale vein; fine veins sweep out from the centre
-petals_outer.pattern(mask: "(abs(u - 0.5) * 2 > 0.9) || (abs(u - 0.5) * 2 < 0.03) || (abs(fract(v * 16 + abs(u - 0.5) * 3) - 0.5) > 0.47 && abs(u - 0.5) * 2 < 0.9)", color: #f2c65a, glow: 1.6)
+petals_outer.pattern(mask: "(abs(u - 0.5) * 2 > 0.9) || (abs(u - 0.5) * 2 < 0.03) || (abs(fract(v * 16 + abs(u - 0.5) * 3) - 0.5) > 0.47 && abs(u - 0.5) * 2 < 0.9)", color: #f2c65a, glow: 1.6, alpha: 0.95)
 
 project "Pushpak outer petals":
     anim_version: "0.1"
