@@ -140,6 +140,7 @@ pub fn light_layer(
                         rough,
                         metal,
                         emissive,
+                        transmit: 0.0,
                         ao: 1.0,
                     };
                     let rad = light::radiance(lights, &surf, &|li| {

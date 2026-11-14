@@ -576,12 +576,18 @@ impl Interp {
             return self.pattern_method(sn, args);
         }
         if name == "surface" {
-            let m = self.bind(name, args, &["roughness", "metallic", "emissive"], &[])?;
+            let m = self.bind(
+                name,
+                args,
+                &["roughness", "metallic", "emissive", "transmission"],
+                &[],
+            )?;
             let mut s = Surface::default();
             for (k, slot, max) in [
                 ("roughness", &mut s.roughness, 1.0),
                 ("metallic", &mut s.metallic, 1.0),
                 ("emissive", &mut s.emissive, 50.0),
+                ("transmission", &mut s.transmission, 4.0),
             ] {
                 if let Some(v) = m.get(k) {
                     let x = self.num(v, &format!("`{k}`"))?;
@@ -797,7 +803,7 @@ pub fn mesh_json(
         j["uv"] = json!(mesh.uv);
     }
     if let Some(s) = &sh.surface {
-        j["surface"] = json!([s.roughness, s.metallic, s.emissive]);
+        j["surface"] = json!([s.roughness, s.metallic, s.emissive, s.transmission]);
     }
     if let Some(m) = &sh.material {
         j["material"] = json!({"kind": m.kind, "reflect": m.reflect, "refract": m.refract, "opacity": m.opacity});

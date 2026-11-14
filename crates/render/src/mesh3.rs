@@ -144,7 +144,7 @@ struct Mesh {
     /// A mirror's reflectance (0 = an ordinary surface).
     reflect: f64,
     /// Roughness, metalness and emission for photographic lighting.
-    surface: [f64; 3],
+    surface: [f64; 4],
 }
 
 struct Light {
@@ -214,7 +214,7 @@ struct Buffers {
     /// for the photographic lighting pass.
     cpos: Vec<[f32; 3]>,
     alb: Vec<[f32; 4]>,
-    mat: Vec<[f32; 3]>,
+    mat: Vec<[f32; 4]>,
     /// Depth peeling for translucent layers: only surfaces further than `gate_near` (the layer in front of this one)
     /// and nearer than `gate_far` (the opaque picture) are kept. Empty = no limit.
     gate_near: Vec<f32>,
@@ -232,7 +232,7 @@ impl Buffers {
             nrm: vec![[0.0; 3]; w * h],
             cpos: vec![[0.0; 3]; w * h],
             alb: vec![[0.0; 4]; w * h],
-            mat: vec![[0.0; 3]; w * h],
+            mat: vec![[0.0; 4]; w * h],
             gate_near: vec![],
             gate_far: vec![],
         }
@@ -246,7 +246,7 @@ impl Buffers {
         normals: [V3; 3],
         pc: [V3; 3],
         base: [f32; 4],
-        mat: [f32; 3],
+        mat: [f32; 4],
         refl: f32,
         light: &Light,
         tex: Option<PatTri>,
@@ -474,12 +474,13 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View, occ: &[crate:
                 })
                 .collect(),
             surface: match m["surface"].as_array() {
-                Some(a) if a.len() == 3 => [
+                Some(a) if a.len() >= 3 => [
                     a[0].as_f64().unwrap_or(0.6),
                     a[1].as_f64().unwrap_or(0.0),
                     a[2].as_f64().unwrap_or(0.0),
+                    a.get(3).and_then(|t| t.as_f64()).unwrap_or(0.0),
                 ],
-                _ => [0.6, 0.0, 0.0],
+                _ => [0.6, 0.0, 0.0, 0.0],
             },
             double_sided: m["double_sided"] == Value::Bool(true),
             fill: m["fill"]
@@ -617,6 +618,7 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View, occ: &[crate:
                             m.surface[0] as f32,
                             m.surface[1] as f32,
                             m.surface[2] as f32,
+                            m.surface[3] as f32,
                         ],
                         m.reflect as f32,
                         &light,
@@ -709,6 +711,7 @@ pub fn draw_meshes(pm: &mut Pixmap, snapshot: &Value, view: &View, occ: &[crate:
                             rough: mat[i][0] as f64,
                             metal: mat[i][1] as f64,
                             emissive: mat[i][2] as f64,
+                            transmit: mat[i][3] as f64,
                             ao: if ao_on {
                                 crate::light::occlusion(bvh, samples, ao_radius, pos, n, x, y)
                             } else {

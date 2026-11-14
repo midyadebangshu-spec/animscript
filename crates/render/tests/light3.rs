@@ -28,6 +28,7 @@ fn surf(pos: V3) -> Surf {
         rough: 0.6,
         metal: 0.0,
         emissive: 0.0,
+        transmit: 0.0,
         ao: 1.0,
     }
 }
@@ -236,4 +237,66 @@ fn lit_rendering_is_deterministic() {
     );
     let (a, b) = (render(&s), render(&s));
     assert_eq!(a.data(), b.data());
+}
+
+// ---- transmission: a translucent sheet glows when it is lit from behind
+
+fn sun_json(dir: [f64; 3], intensity: f64) -> Value {
+    json!({"id": "s", "kind": "sun", "pos": [0.0, 0.0, 0.0], "dir": dir, "color": [1.0, 1.0, 1.0], "intensity": intensity,
+        "reach": 300.0, "size": 0.0, "angle": 0.4, "softness": 0.2})
+}
+
+#[test]
+fn light_from_behind_passes_through_a_sheet_with_transmission() {
+    // the sheet faces the camera (at -z); the sun shines towards the camera, from behind the sheet
+    let lit = |transmission: f64| {
+        let mut sh = quad(100.0, "#e0c0ff", json!([0.6, 0.0, 0.0, transmission]));
+        sh["opacity"] = json!(0.7);
+        let s = snap(vec![sh], vec![sun_json([0.0, 0.0, -1.0], 3.0)]);
+        px(&render(&s), 100, 100)
+    };
+    let (dark, glowing) = (lit(0.0), lit(1.0));
+    assert!(
+        glowing.0 > dark.0 + 40 && glowing.2 > dark.2 + 40,
+        "{dark:?} {glowing:?}"
+    );
+    // the glow is the sheet's own colour: a lavender sheet is bluer than green
+    assert!(glowing.2 > glowing.1, "{glowing:?}");
+}
+
+#[test]
+fn transmission_does_not_light_the_side_facing_away_from_the_sun() {
+    // the sun shines from the camera's side, onto the front of the sheet: transmission adds nothing there
+    let at = |transmission: f64| {
+        let mut sh = quad(100.0, "#e0c0ff", json!([0.6, 0.0, 0.0, transmission]));
+        sh["opacity"] = json!(0.7);
+        let s = snap(vec![sh], vec![sun_json([0.0, 0.0, 1.0], 3.0)]);
+        px(&render(&s), 100, 100)
+    };
+    assert_eq!(at(0.0), at(1.0));
+}
+
+#[test]
+fn a_shadowing_wall_behind_blocks_the_transmitted_light() {
+    let mut sheet = quad(100.0, "#e0c0ff", json!([0.6, 0.0, 0.0, 1.0]));
+    sheet["opacity"] = json!(0.7);
+    let wall = quad(200.0, "#808080", Value::Null);
+    let s = snap(vec![sheet, wall], vec![sun_json([0.0, 0.0, -1.0], 3.0)]);
+    let open = px(
+        &render(&snap(
+            vec![{
+                let mut sh = quad(100.0, "#e0c0ff", json!([0.6, 0.0, 0.0, 1.0]));
+                sh["opacity"] = json!(0.7);
+                sh
+            }],
+            vec![sun_json([0.0, 0.0, -1.0], 3.0)],
+        )),
+        100,
+        100,
+    );
+    let blocked = px(&render(&s), 100, 100);
+    assert!(
+        open.0 > blocked.0 || open.2 > blocked.2,
+        "{open:?} {blocked:?}"
+    );
 }

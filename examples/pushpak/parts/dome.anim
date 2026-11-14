@@ -26,6 +26,8 @@ body.fill = #e8a24a
 body.fill = #e8b030
 body.surface(roughness: 0.28, metallic: 0.9, emissive: 0.9)
 body.mirror(reflect: 0.25)
+# the sun side glows: a warm emission strongest where the dome faces the low sun (behind and to the left)
+body.pattern(mask: "(0.5 + 0.5 * cos(tau * (u - 0.375))) ^ 2", color: #ffc060, glow: 2.4)
 
 # ---- ornament: dark lace over the glowing body ------------------------------------------------------------
 # A band is a lathe strip drawn in ink; `hole` cuts everything that is not ink, so the glowing body shows through.

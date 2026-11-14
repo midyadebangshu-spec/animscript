@@ -40,6 +40,8 @@ pub struct Surf {
     pub rough: f64,
     pub metal: f64,
     pub emissive: f64,
+    /// Light from the far side of a translucent sheet that comes through (0 = none).
+    pub transmit: f64,
     /// How much of the ambient light reaches the point (1 = all).
     pub ao: f64,
 }
@@ -184,6 +186,14 @@ pub fn radiance(lights: &[Lt], s: &Surf, visible: &dyn Fn(usize) -> f64) -> [f64
             }
             Some((to, _, e)) => {
                 let ndl = dot(s.n, to);
+                if ndl <= 0.0 && s.transmit > 0.0 && e > 0.0 {
+                    // the light is behind the sheet: some of it comes through, in the sheet's own colour
+                    let vis = visible(i);
+                    for c in 0..3 {
+                        out[c] += s.albedo[c] * s.transmit * (-ndl) * e * l.color[c] * vis;
+                    }
+                    continue;
+                }
                 if ndl <= 0.0 || e <= 0.0 {
                     continue;
                 }

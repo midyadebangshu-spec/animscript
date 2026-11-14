@@ -1,0 +1,7 @@
+## Pushpak Viman: sunset lighting. A low warm sun behind and to the left rims the dome and shines through the
+## translucent petals; a weak cool fill from the camera side keeps the shadows from going black; the sky above is
+## warm and the ground below dark. Import it after the parts.
+stage3(sky: (#ffe3b0, #e8924a), fov: 40, exposure: 1.0, bloom: 0.55, ao: 80, quality: "medium", smooth: 55.deg, crease: 38.deg)
+shape sunset = sun_light(dir: (0.6, 0.12, -0.8), color: #ffb05c, intensity: 6, size: 5)
+shape fill = sun_light(dir: (-0.35, 0.3, 0.9), color: #8d9ad6, intensity: 0.55, size: 8)
+shape skylight = ambient_light(color: #ff9c58, ground: #4a2a30, intensity: 0.5)

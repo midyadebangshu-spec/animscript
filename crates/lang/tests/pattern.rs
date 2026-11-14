@@ -200,3 +200,18 @@ fn a_pattern_can_have_its_own_opacity_for_the_mask() {
         .unwrap();
     assert_eq!(e.code, "E-MSH-001");
 }
+
+#[test]
+fn surface_takes_a_transmission() {
+    let r = run(
+        "shape p = plane(width: 100, depth: 100)\np.surface(roughness: 0.5, transmission: 0.8)\n",
+    )
+    .ok()
+    .unwrap();
+    let s = &r.snapshots[0]["shapes"][0]["mesh"]["surface"];
+    assert_eq!(s[3], 0.8);
+    let e = run("shape p = plane(width: 100, depth: 100)\np.surface(transmission: 9)\n")
+        .err()
+        .unwrap();
+    assert_eq!(e.code, "E-LIT-002");
+}

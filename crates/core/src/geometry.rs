@@ -284,6 +284,8 @@ pub struct Surface {
     pub roughness: f64,
     pub metallic: f64,
     pub emissive: f64,
+    /// How much light arriving from behind a see-through sheet comes through (0 = none): it glows when backlit.
+    pub transmission: f64,
 }
 
 impl Default for Surface {
@@ -292,6 +294,7 @@ impl Default for Surface {
             roughness: 0.6,
             metallic: 0.0,
             emissive: 0.0,
+            transmission: 0.0,
         }
     }
 }
