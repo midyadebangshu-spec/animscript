@@ -6,9 +6,9 @@ import "petal_lib"
 param axis_x = 640
 param base_y = 596
 param height = 250
-param r_base = 185
-param lean = 62
-param s_bend = 12
+param r_base = 170
+param lean = 150
+param s_bend = 16
 param count = 10
 param half_w = 50
 
