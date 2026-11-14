@@ -119,7 +119,7 @@ project "Pushpak sky":
     anim_version: "0.1"
     canvas: 1280x720
     fps: 24
-    background: #b85a30
+    background: #eba878
 
 preview:
     stage3(fov: 40, exposure: 1.0, bloom: 0.55, quality: "low", smooth: 55.deg, crease: 38.deg)

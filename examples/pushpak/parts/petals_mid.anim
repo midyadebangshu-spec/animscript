@@ -13,7 +13,7 @@ param count = 11
 
 shape petals_mid = petal_flat_arc_ring(axis_x, base_y, r_base, flat, radius, half_w, -0.2, count, 0.04545.turns)
 petals_mid.fill = #c9a7d8
-petals_mid.opacity = 0.62
+petals_mid.opacity = 0.85
 petals_mid.surface(roughness: 0.4, metallic: 0.3, emissive: 0.1, transmission: 2.2)
 petals_mid.pattern(mask: "(abs(u - 0.5) * 2 > 0.86) || (abs(u - 0.5) * 2 < 0.035) || (abs(fract(v * 11 + abs(u - 0.5) * 2 + abs(u - 0.5) * abs(u - 0.5) * 2.4) - 0.5) > 0.455 && abs(u - 0.5) * 2 < 0.86)", color: #3a2414, alpha: 0.95)
 petals_mid.stroke_width = 0.35
