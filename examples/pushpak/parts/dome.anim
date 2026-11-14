@@ -5,15 +5,15 @@
 import "std/3d"
 
 param dome_x = 640
-param dome_top = 200
-param dome_h = 380
-param dome_r = 175
+param dome_top = 190
+param dome_h = 300
+param dome_r = 158
 
 # the outline: t = 0 at the top of the body, 1 at the bottom. Fullest about a third of the way down, narrowing to the neck.
 # (A lathe profile is (radius, height) with height going UP, so the screen y is negated in `strip`.)
 fn egg(t: Number) -> Number:
     let u = 1.35 * t - 0.35 * t * t
-    return dome_r * sqrt(sin(u * 0.5.turns)) * (1.12 - 0.28 * t)
+    return dome_r * sqrt(sin(u * 0.5.turns)) * (1.1 - 0.12 * t)
 
 fn egg_y(t: Number) -> Number:
     return dome_top + dome_h * t
@@ -73,10 +73,10 @@ belt.pattern(hole: lattice, n: 30, a: aspect(0.80, 0.97, 30))
 belt.surface(roughness: 0.6, emissive: 0.05)
 
 # the crown: three stacked tiers and a spike
-shape crown_a = lathe(profile: [(0, 0), (50, 0), (34, 14), (46, 22), (30, 40), (0, 44)], segments: 24, at: (dome_x, dome_top - 22, 0))
-shape crown_b = lathe(profile: [(0, 0), (34, 0), (22, 14), (30, 20), (16, 38), (0, 46)], segments: 24, at: (dome_x, dome_top - 66, 0))
-shape crown_c = lathe(profile: [(0, 0), (16, 0), (8, 14), (14, 24), (8, 42), (0, 52)], segments: 24, at: (dome_x, dome_top - 112, 0))
-shape tip = lathe(profile: [(0, 0), (6, 0), (3, 24), (0, 36)], segments: 12, at: (dome_x, dome_top - 150, 0))
+shape crown_a = lathe(profile: [(0, 0), (31, 0), (21.1, 8.7), (28.5, 13.6), (18.6, 24.8), (0, 27.3)], segments: 24, at: (dome_x, dome_top - 13.6, 0))
+shape crown_b = lathe(profile: [(0, 0), (21.1, 0), (13.6, 8.7), (18.6, 12.4), (9.9, 23.6), (0, 28.5)], segments: 24, at: (dome_x, dome_top - 40.9, 0))
+shape crown_c = lathe(profile: [(0, 0), (9.9, 0), (5, 8.7), (8.7, 14.9), (5, 26), (0, 32.2)], segments: 24, at: (dome_x, dome_top - 69.4, 0))
+shape tip = lathe(profile: [(0, 0), (3.7, 0), (1.9, 14.9), (0, 22.3)], segments: 12, at: (dome_x, dome_top - 93, 0))
 crown_a.fill = #d8a63e
 crown_b.fill = #e9c25a
 crown_c.fill = #d8a63e

@@ -4,18 +4,18 @@
 import "petal_lib"
 
 param axis_x = 640
-param base_y = 660
-param height = 340
-param r_base = 55
-param r_top = 165
-param count = 8
-param half_w = 64
+param base_y = 600
+param height = 300
+param r_base = 125
+param r_top = 215
+param count = 7
+param half_w = 104
 
-shape petals_inner = petal_ring(axis_x, base_y, height, r_base, r_top, 1.6, half_w, -0.3, count, 0.turns)
+shape petals_inner = petal_ring(axis_x, base_y, height, r_base, r_top, -0.8, 55, half_w, -0.22, count, 0.turns)
 petals_inner.fill = #d8c2b4
 petals_inner.surface(roughness: 0.55, emissive: 0.5)
 # the lace: a frame along the edges, a central vein and ribs that sweep up from the vein
-petals_inner.pattern(mask: "(abs(u - 0.5) * 2 > 0.86) || (abs(u - 0.5) * 2 < 0.035) || (abs(fract(v * 13 + abs(u - 0.5) * 2.6) - 0.5) > 0.455 && abs(u - 0.5) * 2 < 0.86)", color: #3a2414)
+petals_inner.pattern(mask: "(abs(u - 0.5) * 2 > 0.86) || (abs(u - 0.5) * 2 < 0.035) || (abs(fract(v * 11 + abs(u - 0.5) * 2 + abs(u - 0.5) * abs(u - 0.5) * 2.4) - 0.5) > 0.455 && abs(u - 0.5) * 2 < 0.86)", color: #3a2414)
 
 project "Pushpak inner petals":
     anim_version: "0.1"

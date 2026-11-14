@@ -10,7 +10,7 @@ param r_top = 450
 param count = 16
 param half_w = 52
 
-shape petals_outer = petal_ring(axis_x, base_y, height, r_base, r_top, -0.9, half_w, -0.15, count, 0.0.turns)
+shape petals_outer = petal_ring(axis_x, base_y, height, r_base, r_top, -0.9, 0, half_w, -0.15, count, 0.0.turns)
 petals_outer.fill = #5b4129
 petals_outer.surface(roughness: 0.5, metallic: 0.3, emissive: 0.2)
 # gold glowing edges and a pale vein; fine veins sweep out from the centre

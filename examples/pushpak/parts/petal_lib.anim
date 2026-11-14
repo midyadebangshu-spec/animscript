@@ -3,13 +3,14 @@
 import "std/3d"
 
 # the spine of one petal in the plane z = 0 to the right of the axis: it leans from radius r0 to r1 and `curl` bends the tip
-fn petal_spine(x: Number, base_y: Number, height: Number, r0: Number, r1: Number, curl: Number, n: Int) -> List:
-    return (0..n).map(i -> (x + r0 + (r1 - r0) * ((1 + curl) * i / n - curl * i / n * i / n), base_y - height * i / n, 0))
+fn petal_spine(x: Number, base_y: Number, height: Number, r0: Number, r1: Number, curl: Number, flick: Number, n: Int) -> List:
+    return (0..n).map(i -> (x + r0 + (r1 - r0) * ((1 + curl) * i / n - curl * i / n * i / n) + flick * max(0, i / n - 0.78) * max(0, i / n - 0.78) / 0.0484, base_y - height * i / n, 0))
 
 # half the width of the petal at t (0 at the base, 1 at the tip): broad low down, pointed at the tip
 fn petal_width(half_w: Number, t: Number) -> Number:
-    return half_w * (0.3 * (1 - t) * (1 - t) + sin(0.5.turns * sqrt(t))) * (1 - 0.15 * t)
+    let sn = sin(0.5.turns * sqrt(t) * sqrt(sqrt(t)))
+    return half_w * (0.2 * (1 - t) * (1 - t) + sqrt(sn) * sqrt(sqrt(sn)))
 
 # one ring of `count` petals about the vertical line through x; `sag` droops the tip (a spine that bends down)
-fn petal_ring(x: Number, base_y: Number, height: Number, r0: Number, r1: Number, curl: Number, half_w: Number, cup: Number, count: Int, phase: Angle) -> Shape:
-    return sheet(spine: petal_spine(x, base_y, height, r0, r1, curl, 14), width: (0..14).map(i -> petal_width(half_w, i / 14)), cup: cup, across: 8, facing: (1, 0, 0), around: count, about: (x, 0), phase: phase)
+fn petal_ring(x: Number, base_y: Number, height: Number, r0: Number, r1: Number, curl: Number, flick: Number, half_w: Number, cup: Number, count: Int, phase: Angle) -> Shape:
+    return sheet(spine: petal_spine(x, base_y, height, r0, r1, curl, flick, 14), width: (0..14).map(i -> petal_width(half_w, i / 14)), cup: cup, across: 8, facing: (1, 0, 0), around: count, about: (x, 0), phase: phase)

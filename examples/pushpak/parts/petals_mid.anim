@@ -10,7 +10,7 @@ param r_top = 300
 param count = 12
 param half_w = 66
 
-shape petals_mid = petal_ring(axis_x, base_y, height, r_base, r_top, -0.6, half_w, -0.25, count, 0.04.turns)
+shape petals_mid = petal_ring(axis_x, base_y, height, r_base, r_top, -0.6, 0, half_w, -0.25, count, 0.04.turns)
 petals_mid.fill = #c9b0a4
 petals_mid.surface(roughness: 0.55, emissive: 0.45)
 petals_mid.pattern(mask: "(abs(u - 0.5) * 2 > 0.84) || (abs(u - 0.5) * 2 < 0.03) || (abs(fract(v * 11 + abs(u - 0.5) * 3) - 0.5) > 0.46 && abs(u - 0.5) * 2 < 0.84)", color: #34200f)
