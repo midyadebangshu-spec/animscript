@@ -25,8 +25,8 @@ shape body = lathe(profile: strip(0.02, 0.98, 32, 1), segments: 64, at: (dome_x,
 body.fill = #e8a24a
 body.fill = #e8b030
 body.opacity = 0.9
-body.surface(roughness: 0.28, metallic: 0.9, emissive: 0.9, transmission: 1.2)
-body.mirror(reflect: 0.25)
+body.surface(roughness: 0.3, metallic: 0.9, emissive: 0.45, transmission: 1.2)
+body.mirror(reflect: 0.12)
 # the sun side glows: a warm emission strongest where the dome faces the low sun (behind and to the left)
 body.pattern(mask: "(0.5 + 0.5 * cos(tau * (u - 0.375))) ^ 2", color: #ffc060, glow: 2.4)
 

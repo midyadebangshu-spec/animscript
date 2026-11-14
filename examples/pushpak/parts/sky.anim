@@ -62,6 +62,59 @@ sea.pattern(mask: "smoothstep(-0.1, 0.5, 0.6 * noise(u * 18, v * 18) + 0.3 * noi
 sea.surface(roughness: 1, emissive: 1.2)
 sea.stroke_width = 0
 
+
+# a wall facing the camera at depth z, `w` by `h` px, centred on the view
+fn sky_wall_at(z: Number, w: Number, h: Number) -> Shape:
+    return sheet(spine: [(sky_x, 360 + h / 2, z), (sky_x, 360 - h / 2, z)], width: [w / 2, w / 2], facing: (0, 0, -1), across: 1)
+
+# ---- atmosphere: depth haze, light shafts and glare --------------------------------------------------------------
+# where the sun is on the screen (px) with the default camera; a sheet at depth z is centred on the line from the eye
+# through that point so the effects stay on the sun
+let focal = 989.4
+let sun_screen_x = 147
+let sun_screen_y = 502
+
+fn on_sun_x(z: Number) -> Number:
+    return 640 + (sun_screen_x - 640) * (focal + z) / focal
+
+fn on_sun_y(z: Number) -> Number:
+    return 360 + (sun_screen_y - 360) * (focal + z) / focal
+
+# a wall facing the camera at depth z, `w` by `h` px, centred on the sun
+fn sun_wall(z: Number, w: Number, h: Number) -> Shape:
+    return sheet(spine: [(on_sun_x(z), on_sun_y(z) + h / 2, z), (on_sun_x(z), on_sun_y(z) - h / 2, z)], width: [w / 2, w / 2], facing: (0, 0, -1), across: 1)
+
+# depth haze: warm air that thickens towards the horizon, in two layers, so far things are paler and pinker than near
+shape haze_far = sky_wall_at(1300, 7000, 3400)
+haze_far.fill = #ffc58a
+haze_far.opacity = 0.002
+haze_far.pattern(mask: "exp(-((v - 0.4) * (v - 0.4)) / 0.03)", color: #ffc58a, alpha: 0.55, glow: 0.8)
+haze_far.surface(roughness: 1, emissive: 0.9)
+haze_far.stroke_width = 0
+shape haze_near = sky_wall_at(500, 3000, 1700)
+haze_near.fill = #ffd0a0
+haze_near.opacity = 0.002
+haze_near.pattern(mask: "exp(-((v - 0.36) * (v - 0.36)) / 0.02)", color: #ffd0a0, alpha: 0.3, glow: 0.6)
+haze_near.surface(roughness: 1, emissive: 0.9)
+haze_near.stroke_width = 0
+
+# light shafts (crepuscular rays) fanning from the sun, and the glare: a long horizontal streak and two diagonal ones
+# through it, a bright star at its centre. One sheet, in front of the clouds: rays n of them, uneven with noise.
+let rx = "(u - 0.5) * w"
+let ry = "(v - 0.5) * h"
+let dist = "sqrt(" + rx + " * " + rx + " + " + ry + " * " + ry + ")"
+let rays = "(0.5 + 0.5 * sin(atan2(" + ry + ", " + rx + ") * 22 + 3 * noise(atan2(" + ry + ", " + rx + ") * 6, 1.3))) ^ 4 * exp(-" + dist + " / 520) * 0.55"
+let streak = "exp(-((" + ry + " / 7) ^ 2)) * exp(-abs(" + rx + ") / 330)"
+let diag1 = "exp(-((((" + ry + ") * 0.866 - (" + rx + ") * 0.5) / 5) ^ 2)) * exp(-" + dist + " / 150)"
+let diag2 = "exp(-((((" + ry + ") * 0.866 + (" + rx + ") * 0.5) / 5) ^ 2)) * exp(-" + dist + " / 150)"
+let star = "exp(-" + dist + " / 38)"
+shape glare = sun_wall(450, 3400, 1900)
+glare.fill = #ffe6b0
+glare.opacity = 0.002
+glare.pattern(mask: "min(1, " + rays + " + " + streak + " + " + diag1 + " + " + diag2 + " + " + star + ")", color: #fff0c8, alpha: 0.85, glow: 7, w: 3400, h: 1900)
+glare.surface(roughness: 1, emissive: 1)
+glare.stroke_width = 0
+
 project "Pushpak sky":
     anim_version: "0.1"
     canvas: 1280x720

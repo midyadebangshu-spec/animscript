@@ -15,7 +15,7 @@ use tiny_skia::{
 const SS: usize = 2;
 const NEAR: f64 = 1.0;
 /// How many translucent surfaces deep a pixel is resolved.
-const LAYERS: usize = 4;
+const LAYERS: usize = 8;
 
 type V3 = [f64; 3];
 
