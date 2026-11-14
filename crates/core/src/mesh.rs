@@ -187,6 +187,9 @@ impl Mesh {
     /// vertices, so the creases of a cube stay sharp; soft bodies weld them again.
     pub fn subdivided(&self, n: usize) -> Mesh {
         let n = n.max(1);
+        if n == 1 {
+            return self.clone();
+        }
         let mut verts: Vec<[f64; 3]> = vec![];
         let mut faces: Vec<Vec<u32>> = vec![];
         for f in &self.faces {
