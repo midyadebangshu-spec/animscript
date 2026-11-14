@@ -1,0 +1,77 @@
+## Pushpak Viman: the sky and the clouds. All of it is flat sheets with equations on them (nothing is a texture):
+##   sky        a tall wall far behind everything, a sunset gradient from warm orange to dusty red
+##   sun        a soft bright glow low on the left, where the sun that lights the scene is
+##   banks      three walls of backlit cloud at different distances (bright rims, dark cores)
+##   floor      a sea of cloud far below, seen when the camera looks down
+## A cloud is fractal noise thresholded into a soft edge; where it is thin it is bright and see-through, where it is
+## thick it is dark, which is how a cloud looks with the sun behind it.
+import "std/3d"
+
+param sky_x = 640
+param sky_z = 1900
+param sky_w = 9000
+param sky_h = 5200
+
+shape sky = sheet(spine: [(sky_x, 360 + sky_h / 2, sky_z), (sky_x, 360 - sky_h / 2, sky_z)], width: [sky_w / 2, sky_w / 2], facing: (0, 0, -1), across: 1)
+sky.fill = #ff9a4a
+sky.pattern(mask: "smoothstep(0.3, 0.95, v)", color: #8a3a4a)
+sky.surface(roughness: 1, emissive: 1.5)
+sky.stroke_width = 0
+
+# the sun: a glow, brightest at its centre, a little in front of the sky
+shape sun_glow = sheet(spine: [(sky_x, 360 + sky_h / 2, sky_z - 40), (sky_x, 360 - sky_h / 2, sky_z - 40)], width: [sky_w / 2, sky_w / 2], facing: (0, 0, -1), across: 1)
+sun_glow.fill = #fff0c8
+sun_glow.opacity = 0.002
+sun_glow.pattern(mask: "exp(-((((u - 0.34) * 1.73) ^ 2 + (v - 0.42) ^ 2) / 0.0035)) + 0.35 * exp(-((((u - 0.34) * 1.73) ^ 2 + (v - 0.42) ^ 2) / 0.05))", color: #fff0c8, glow: 9, alpha: 1)
+sun_glow.surface(roughness: 1, emissive: 1)
+sun_glow.stroke_width = 0
+
+# fractal noise from three octaves, scaled by `s` (bigger s = smaller clouds)
+let fbm = "(0.55 * noise(u * s, v * s * 0.58) + 0.28 * noise(u * s * 2.1 + 5, v * s * 1.2 + 3) + 0.14 * noise(u * s * 4.3 + 9, v * s * 2.5 + 7))"
+let bank = "smoothstep(lo, lo + 0.35, " + fbm + " + bias - abs(v - mid) * fall)"
+
+fn cloud_wall(z: Number, w: Number, h: Number, y: Number) -> Shape:
+    return sheet(spine: [(sky_x, y + h / 2, z), (sky_x, y - h / 2, z)], width: [w / 2, w / 2], facing: (0, 0, -1), across: 1)
+
+shape clouds_far = cloud_wall(1700, 8000, 1500, 520)
+clouds_far.fill = #ffbe7c
+clouds_far.opacity = 0.002
+clouds_far.pattern(mask: bank, color: #a06470, alpha: 0.8, s: 14, lo: -0.02, bias: 0.2, mid: 0.4, fall: 1.5)
+clouds_far.surface(roughness: 1, emissive: 1.3)
+clouds_far.stroke_width = 0
+
+shape clouds_mid = cloud_wall(1100, 5600, 1100, 560)
+clouds_mid.fill = #ffb070
+clouds_mid.opacity = 0.002
+clouds_mid.pattern(mask: bank, color: #8a5062, alpha: 0.88, s: 19, lo: 0.0, bias: 0.17, mid: 0.36, fall: 1.9)
+clouds_mid.surface(roughness: 1, emissive: 1.2)
+clouds_mid.stroke_width = 0
+
+shape clouds_near = cloud_wall(650, 3600, 900, 640)
+clouds_near.fill = #ff9a60
+clouds_near.opacity = 0.002
+clouds_near.pattern(mask: bank, color: #704055, alpha: 0.9, s: 24, lo: 0.02, bias: 0.14, mid: 0.3, fall: 2.3)
+clouds_near.surface(roughness: 1, emissive: 1.1)
+clouds_near.stroke_width = 0
+
+# a sea of cloud far below
+shape sea = sheet(spine: [(sky_x, 900, -200), (sky_x, 900, 3600)], width: [5000, 5000], facing: (0, -1, 0), across: 1)
+sea.fill = #ffb87a
+sea.opacity = 0.002
+sea.pattern(mask: "smoothstep(-0.1, 0.5, 0.6 * noise(u * 18, v * 18) + 0.3 * noise(u * 40 + 5, v * 40 + 3) + 0.1 * noise(u * 90 + 9, v * 90 + 7) + 0.2)", color: #9a6068, alpha: 0.9)
+sea.surface(roughness: 1, emissive: 1.2)
+sea.stroke_width = 0
+
+project "Pushpak sky":
+    anim_version: "0.1"
+    canvas: 1280x720
+    fps: 24
+    background: #b85a30
+
+preview:
+    stage3(fov: 40, exposure: 1.0, bloom: 0.55, quality: "low", smooth: 55.deg, crease: 38.deg)
+    shape fill_light = sun_light(dir: (-0.35, 0.3, 0.9), color: #8d9ad6, intensity: 0.4, size: 8)
+
+scene "preview" for 3.seconds:
+    main:
+        camera3.crane(height: 160, pitch: 0.06, over: 3.seconds)
