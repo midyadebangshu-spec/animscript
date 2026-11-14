@@ -3,11 +3,11 @@
 import "petal_lib"
 
 param axis_x = 640
-param base_y = 612
-param height = 60
-param r_base = 235
-param lean = 230
-param bulge = 30
+param base_y = 514
+param height = 70
+param r_base = 100
+param lean = 330
+param bulge = 20
 param spin = 0.07.turns
 param s_bend = 0
 param sway = 0
