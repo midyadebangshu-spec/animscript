@@ -9,10 +9,11 @@ param r_base = 205
 param lean = 110
 param spin = 0.09.turns
 param s_bend = 10
+param sway = 18
 param count = 14
 param half_w = 52
 
-shape petals_mid = petal_ring(axis_x, base_y, height, r_base, lean, spin, s_bend, half_w, -0.2, count, 0.036.turns)
+shape petals_mid = petal_ring(axis_x, base_y, height, r_base, lean, spin, s_bend, sway, half_w, -0.2, count, 0.036.turns)
 petals_mid.fill = #c9b0a4
 petals_mid.surface(roughness: 0.55, emissive: 0.45)
 petals_mid.pattern(mask: "(abs(u - 0.5) * 2 > 0.84) || (abs(u - 0.5) * 2 < 0.03) || (abs(fract(v * 11 + abs(u - 0.5) * 3) - 0.5) > 0.46 && abs(u - 0.5) * 2 < 0.84)", color: #34200f)
