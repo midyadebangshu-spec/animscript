@@ -275,6 +275,8 @@ pub struct Interp {
     pub cur_span: Option<Span>,
     /// Lines of the program before imports were appended to it: spans beyond are in imported files.
     pub own_lines: u32,
+    /// True while the top-level statements run.
+    pub in_build: bool,
     pub keyset_spans: Vec<Option<Span>>,
     pub start_spans: Vec<Option<Span>>,
     pub journal: crate::journal::Journal,
@@ -403,6 +405,7 @@ impl Interp {
             pending_keysets: vec![],
             cur_span: None,
             own_lines: u32::MAX,
+            in_build: false,
             keyset_spans: vec![],
             start_spans: vec![],
             journal: Default::default(),
@@ -508,7 +511,10 @@ impl Interp {
         self.eval_scores()?;
         let block: Block = Rc::new(self.program.top.clone());
         let mut t = Task::new(0, block, Vars::new(), Mode::Build, false);
-        self.run_sync(&mut t)?;
+        self.in_build = true;
+        let done = self.run_sync(&mut t);
+        self.in_build = false;
+        done?;
         self.globals = t.vars.scopes[0].clone();
         self.freeze_pivots();
         self.eval_fields()?; // before the emitters, whose `fields:` may name them
@@ -718,6 +724,10 @@ impl Interp {
                         type_err("a new shape must be declared with `shape name = ...`")
                             .help("`let` cannot bind a freshly created shape"),
                     );
+                }
+                // a `fn` called later in the build phase reads the top-level names defined so far
+                if self.in_build && t.vars.scopes.len() == 1 {
+                    self.globals.insert(name.clone(), v.clone());
                 }
                 t.vars.define(name, v);
             }
@@ -2184,6 +2194,9 @@ impl Interp {
                 _ => {}
             }
         }
+        if let (List(x), List(y), "+") = (&a, &b, op) {
+            return Ok(List(x.iter().chain(y.iter()).cloned().collect()));
+        }
         let verb = match op {
             "+" => "add",
             "-" => "subtract",
@@ -3126,6 +3139,20 @@ impl Interp {
                 }
                 Ok(Value::List(out))
             }
+            "map" => {
+                let m = self.bind(name, args, &["f"], &["f"])?;
+                let Value::Lambda(l) = &m["f"] else {
+                    return Err(type_err(format!("`map` needs a lambda, found {}", m["f"].type_name()))
+                        .help("write it like `(0..8).map(i -> i * 10)` or `map((v, i) -> v + i)`"));
+                };
+                let l = Rc::clone(l);
+                let mut out = Vec::with_capacity(items.len());
+                for (i, item) in items.into_iter().enumerate() {
+                    let a = if l.params.len() == 1 { vec![item] } else { vec![item, Value::Int(i as i64)] };
+                    out.push(self.call_lambda(&l, a, mode)?);
+                }
+                Ok(Value::List(out))
+            }
             "nearest" => {
                 let m = self.bind(name, args, &["point", "n"], &["point"])?;
                 let target = self.point(&m["point"], "`point`")?;
@@ -3177,7 +3204,7 @@ impl Interp {
                 Ok(Value::None)
             }
             _ => Err(Diagnostic::new("E-NAM-003", format!("a list has no operation `{name}`")).help(
-                "selection methods: every, first, last, skip, reverse, where, nearest, union, except; operations: move_to, move_by, subdivide, extrude, bevel, round, dissolve, inset, delete, bend, set_handle, set_handles, straighten",
+                "selection methods: every, first, last, skip, reverse, where, nearest, union, except; `map(f)` computes a new list; operations: move_to, move_by, subdivide, extrude, bevel, round, dissolve, inset, delete, bend, set_handle, set_handles, straighten",
             )),
         }
     }

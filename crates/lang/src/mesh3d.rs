@@ -244,7 +244,7 @@ impl Interp {
                 let m = self.bind(
                     name,
                     args,
-                    &["profile", "segments", "at", "pivot"],
+                    &["profile", "segments", "at", "pivot", "double_sided"],
                     &["profile"],
                 )?;
                 let Value::List(items) = &m["profile"] else {
@@ -255,7 +255,18 @@ impl Interp {
                     .map(|p| self.point(p, "a profile point"))
                     .collect::<Res<_>>()?;
                 let s = self.count(&m, "segments", 32, 3)?;
-                let mesh = Mesh::lathe(&pts, s).map_err(msh)?;
+                let mut mesh = Mesh::lathe(&pts, s).map_err(msh)?;
+                // an open strip (a band, a ring, a bowl) can be seen from both sides
+                match m.get("double_sided") {
+                    None => {}
+                    Some(Value::Bool(b)) => mesh.double_sided = *b,
+                    Some(other) => {
+                        return Err(msh(format!(
+                            "`double_sided` must be true or false, found {}",
+                            other.type_name()
+                        )))
+                    }
+                }
                 Ok(self.mesh_shape(mesh, self.at3(&m)?, self.pivot3(&m)?))
             }
             "extrude" => {

@@ -1,0 +1,81 @@
+## Pushpak Viman: the dome (the balloon). An egg-shaped body, bands of ornament, a heavy waist band and a crown.
+## Opened on its own it previews itself; imported, the project and scene below are ignored.
+##   shapes: body, band_a .. band_e, waist, belt, crown_a, crown_b, crown_c, tip
+## `dome_x` and `dome_top` place it (the top of the body, in px) so the main file can move the whole dome.
+import "std/3d"
+
+param dome_x = 640
+param dome_top = 200
+param dome_h = 380
+param dome_r = 175
+
+# the outline: t = 0 at the top of the body, 1 at the bottom. Fullest about a third of the way down, narrowing to the neck.
+# (A lathe profile is (radius, height) with height going UP, so the screen y is negated in `strip`.)
+fn egg(t: Number) -> Number:
+    let u = 1.35 * t - 0.35 * t * t
+    return dome_r * sqrt(sin(u * 0.5.turns)) * (1.12 - 0.28 * t)
+
+fn egg_y(t: Number) -> Number:
+    return dome_top + dome_h * t
+
+# a strip of the outline between t0 and t1, `gain` times the body's radius (so a band sits just outside it)
+fn strip(t0: Number, t1: Number, n: Int, gain: Number) -> List:
+    return (0..n).map(i -> (egg(t0 + (t1 - t0) * i / n) * gain, -egg_y(t0 + (t1 - t0) * i / n)))
+
+shape body = lathe(profile: strip(0.02, 0.98, 32, 1), segments: 64, at: (dome_x, egg_y(0.5), 0))
+body.fill = #e8a24a
+body.surface(roughness: 0.6, emissive: 0.9)
+
+shape band_a = lathe(profile: strip(0.17, 0.31, 8, 1.012), segments: 64, at: (dome_x, egg_y(0.24), 0), double_sided: true)
+band_a.fill = #3b2314
+band_a.surface(roughness: 0.7, emissive: 0.05)
+band_a.opacity = 0.62
+shape band_b = lathe(profile: strip(0.33, 0.37, 4, 1.016), segments: 64, at: (dome_x, egg_y(0.35), 0), double_sided: true)
+band_b.fill = #f2c56b
+band_b.surface(roughness: 0.35, metallic: 0.6, emissive: 0.5)
+shape band_c = lathe(profile: strip(0.39, 0.52, 8, 1.012), segments: 64, at: (dome_x, egg_y(0.455), 0), double_sided: true)
+band_c.fill = #5a3418
+band_c.surface(roughness: 0.7, emissive: 0.05)
+band_c.opacity = 0.62
+shape band_d = lathe(profile: strip(0.54, 0.58, 4, 1.016), segments: 64, at: (dome_x, egg_y(0.56), 0), double_sided: true)
+band_d.fill = #f2c56b
+band_d.surface(roughness: 0.35, metallic: 0.6, emissive: 0.5)
+shape band_e = lathe(profile: strip(0.60, 0.74, 8, 1.012), segments: 64, at: (dome_x, egg_y(0.67), 0), double_sided: true)
+band_e.fill = #c9582a
+band_e.surface(roughness: 0.6, emissive: 0.6)
+
+# the waist: a gold band where the ropes hang, and the darker belt below it
+shape waist = lathe(profile: strip(0.755, 0.785, 3, 1.03), segments: 64, at: (dome_x, egg_y(0.77), 0), double_sided: true)
+waist.fill = #e9c25a
+waist.surface(roughness: 0.3, metallic: 0.7, emissive: 0.5)
+shape belt = lathe(profile: strip(0.80, 0.97, 8, 1.01), segments: 64, at: (dome_x, egg_y(0.885), 0), double_sided: true)
+belt.fill = #8a3a1c
+belt.surface(roughness: 0.6, emissive: 0.45)
+
+# the crown: three stacked tiers and a spike
+shape crown_a = lathe(profile: [(0, 0), (50, 0), (34, 14), (46, 22), (30, 40), (0, 44)], segments: 24, at: (dome_x, dome_top - 22, 0))
+shape crown_b = lathe(profile: [(0, 0), (34, 0), (22, 14), (30, 20), (16, 38), (0, 46)], segments: 24, at: (dome_x, dome_top - 66, 0))
+shape crown_c = lathe(profile: [(0, 0), (16, 0), (8, 14), (14, 24), (8, 42), (0, 52)], segments: 24, at: (dome_x, dome_top - 112, 0))
+shape tip = lathe(profile: [(0, 0), (6, 0), (3, 24), (0, 36)], segments: 12, at: (dome_x, dome_top - 150, 0))
+crown_a.fill = #d8a63e
+crown_b.fill = #e9c25a
+crown_c.fill = #d8a63e
+tip.fill = #f2d27a
+crown_a.surface(roughness: 0.3, metallic: 0.7, emissive: 0.4)
+crown_b.surface(roughness: 0.3, metallic: 0.7, emissive: 0.4)
+crown_c.surface(roughness: 0.3, metallic: 0.7, emissive: 0.4)
+tip.surface(roughness: 0.2, metallic: 0.7, emissive: 0.4)
+
+project "Pushpak dome":
+    anim_version: "0.1"
+    canvas: 1280x720
+    fps: 24
+    background: #f0b070
+
+stage3(fov: 40, exposure: 1.1, bloom: 0.25, quality: "medium", smooth: 55.deg, crease: 38.deg)
+shape sun = sun_light(dir: (-0.5, 0.5, 0.8), color: #ffd9a0, intensity: 2.2, size: 3)
+shape sky = ambient_light(color: #ffb27a, ground: #5a3a2a, intensity: 0.5)
+
+scene "preview" for 3.seconds:
+    main:
+        camera3.orbit(turns: 0.1, over: 3.seconds)

@@ -2038,6 +2038,15 @@ impl Parser {
             },
             T::Op("(") => {
                 let first = self.expr()?;
+                if self.eat_op("..") {
+                    // `(0..8)` is a list of the whole numbers from 0 to 8 (inclusive), so it takes `.map(...)`
+                    let hi = self.expr()?;
+                    let end = self.expect_op(")")?.span;
+                    return Ok(Expr {
+                        span: span.to(end),
+                        kind: ExprKind::Range(Box::new(first), Box::new(hi)),
+                    });
+                }
                 if self.at_op(",") {
                     let mut items = vec![first];
                     while self.eat_op(",") {

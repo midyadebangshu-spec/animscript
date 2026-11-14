@@ -2210,6 +2210,7 @@ camera3.orbit(turns: 0.1, over: 10.seconds)
 - **std/3d actions:** `spin(rate)`, `bob(amount, period)`, `sway(roll, nod, period)`, `orbit(turns, distance, over)`, `crane(height, pitch, over)`.
 - **Rendering:** a deterministic software rasterizer (z-buffer, 2x supersampling, toon bands, smoothed normals, inked outlines on silhouette, boundary and crease edges). All meshes draw together at the first mesh's z-order position; 2D shapes at other `z` values sit in front of or behind them.
 - **Errors:** `E-MSH-001` bad mesh arguments.
+- **Building profiles by computation.** Lists join with `+`, `list.map(v -> ...)` or `map((v, i) -> ...)` computes a new list, and `(0..8)` (in parentheses) is the whole numbers 0 to 8 inclusive, so a profile can be a formula: `lathe(profile: [(0, 0)] + (1..8).map(i -> (50 * sin(i / 8 * 0.25.turns), i * 10)))`. A `lathe` profile is `(radius, height)` with height going **up** (the screen's y goes down, so negate it when you work in screen y). `lathe` also takes `double_sided: true` for an open strip seen from both sides. A `fn` called while the top-level statements run reads the top-level `let`s defined above the call.
 - **Not yet:** 3D physics, glTF/OBJ import, mesh editing.
 
 ## 13t. 3D physics (round P3D)
