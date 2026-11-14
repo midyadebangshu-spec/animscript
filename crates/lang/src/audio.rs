@@ -20,6 +20,9 @@ fn e2(msg: impl Into<String>) -> Diagnostic {
 fn e3(msg: impl Into<String>) -> Diagnostic {
     Diagnostic::new("E-AUD-003", msg)
 }
+fn e5(msg: impl Into<String>) -> Diagnostic {
+    Diagnostic::new("E-AUD-005", msg)
+}
 fn e4(msg: impl Into<String>) -> Diagnostic {
     Diagnostic::new("E-AUD-004", msg)
 }
@@ -88,6 +91,12 @@ const TRACK_KEYS: &[&str] = &[
     "bars",
     "transpose",
     "sfz",
+    "humanize",
+    "volume_curve",
+    "pan_curve",
+    "cutoff_curve",
+    "brightness_curve",
+    "reverb_curve",
 ];
 
 impl Interp {
@@ -247,6 +256,8 @@ impl Interp {
         let (mut volume, mut pan, mut repeat, mut bars, mut transpose) =
             (1.0, 0.0, 1usize, 0u64, 0i32);
         let mut sfz = None;
+        let mut humanize = 0.0;
+        let mut auto = au::automation::Automation::default();
         let vars = crate::interp::Vars::new();
         for (k, e, span) in &t.attrs {
             if !TRACK_KEYS.contains(&k.as_str()) {
@@ -256,6 +267,32 @@ impl Interp {
             }
             match k.as_str() {
                 "instrument" => instrument = self.audio_str(k, e, *span)?,
+                "volume_curve" | "pan_curve" | "cutoff_curve" | "brightness_curve"
+                | "reverb_curve" => {
+                    let src = self.audio_str(k, e, *span)?;
+                    let (lo, hi) = match k.as_str() {
+                        "volume_curve" => (0.0, 4.0),
+                        "pan_curve" => (-1.0, 1.0),
+                        "cutoff_curve" => (0.05, 8.0),
+                        "brightness_curve" => (0.0, 1.0),
+                        _ => (0.0, 2.0),
+                    };
+                    let lane = au::automation::Lane::parse(
+                        &src,
+                        score.meter,
+                        lo,
+                        hi,
+                        &format!("track `{}` `{k}`", t.name),
+                    )
+                    .map_err(|p| e5(p.message).at(*span))?;
+                    match k.as_str() {
+                        "volume_curve" => auto.volume = Some(lane),
+                        "pan_curve" => auto.pan = Some(lane),
+                        "cutoff_curve" => auto.cutoff = Some(lane),
+                        "brightness_curve" => auto.brightness = Some(lane),
+                        _ => auto.reverb = Some(lane),
+                    }
+                }
                 "sfz" => sfz = Some(self.audio_str(k, e, *span)?),
                 "notes" | "chords" | "beat" => {
                     if kind.is_some() {
@@ -326,6 +363,12 @@ impl Interp {
                 _ => {
                     let v = self.audio_num(k, e, *span)?;
                     match k.as_str() {
+                        "humanize" => {
+                            if !(0.0..=1.0).contains(&v) {
+                                return Err(e1("`humanize` is between 0 (exact) and 1").at(*span));
+                            }
+                            humanize = v
+                        }
                         "strum" => strum = v.max(0.0) as u64,
                         "hold" => hold = v.clamp(0.05, 1.0),
                         "vel" => vel = v.clamp(0.0, 1.0),
@@ -417,9 +460,19 @@ impl Interp {
         for e in events.iter_mut() {
             e.start += bars * bar;
         }
+        if humanize > 0.0 {
+            // the seed is the names of the score and the track, so a render never depends on anything else
+            let seed = format!("{score_name}/{}", t.name)
+                .bytes()
+                .fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+                    (h ^ b as u64).wrapping_mul(0x100_0000_01b3)
+                });
+            au::humanize(&mut events, humanize, seed);
+        }
         let mut track = au::Track::new(&t.name, &instrument, events);
         track.volume = volume;
         track.pan = pan;
+        track.auto = auto;
         Ok((track, sfz))
     }
 

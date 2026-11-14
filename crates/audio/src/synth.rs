@@ -483,6 +483,158 @@ fn gm_drum(note: u8, rate: f64, vel: f64, seed: u64) -> Vec<f32> {
     out
 }
 
+/// One note of a voice, in seconds from the start of the voice: when it is held (`start` to `end`), its pitch in
+/// MIDI units (fractional: detune is already added), the pitch it slides to over its length, and its velocity.
+#[derive(Clone, Copy, Debug)]
+pub struct Seg {
+    pub start: f64,
+    pub end: f64,
+    pub note: f64,
+    pub slide_to: Option<f64>,
+    pub vel: f64,
+}
+
+impl Seg {
+    pub fn single(note: u8, vel: f64, hold: f64, cents: f64, slide: Option<u8>) -> Seg {
+        Seg {
+            start: 0.0,
+            end: hold,
+            note: note as f64 + cents / 100.0,
+            slide_to: slide.map(|s| s as f64 + cents / 100.0),
+            vel,
+        }
+    }
+    fn last_pitch(&self) -> f64 {
+        self.slide_to.unwrap_or(self.note)
+    }
+}
+
+/// The time a pitch takes to glide from one slurred note to the next.
+pub const GLIDE: f64 = 0.05;
+
+/// The pitch (MIDI units) and velocity at time `t` of a phrase of notes: within a note it follows the note's
+/// slide; the first `GLIDE` seconds of a slurred follow-on note glide from where the previous one ended.
+fn pitch_at(segs: &[Seg], t: f64) -> (f64, f64) {
+    let k = segs.iter().rposition(|s| s.start <= t).unwrap_or(0);
+    let s = &segs[k];
+    let span = (s.end - s.start).max(1e-9);
+    let p = ((t - s.start) / span).clamp(0.0, 1.0);
+    let here = match s.slide_to {
+        Some(to) => s.note + (to - s.note) * p,
+        None => s.note,
+    };
+    if k > 0 && t < s.start + GLIDE {
+        let prev = &segs[k - 1];
+        let w = ((t - s.start) / GLIDE).clamp(0.0, 1.0);
+        let w = w * w * (3.0 - 2.0 * w);
+        return (
+            prev.last_pitch() + (here - prev.last_pitch()) * w,
+            prev.vel + (s.vel - prev.vel) * w,
+        );
+    }
+    (here, s.vel)
+}
+
+/// A subtractive voice playing a phrase: one envelope for the whole phrase (attacked once, released after the
+/// last note), pitch and velocity following the notes (so slurred notes glide instead of retriggering).
+fn render_sub(
+    d: &SubDef,
+    segs: &[Seg],
+    rate: f64,
+    seed: u64,
+    tone: &dyn Fn(f64) -> f64,
+    t0: f64,
+) -> Vec<f32> {
+    let hold_end = segs.last().map_or(0.0, |s| s.end);
+    let n = ((hold_end + d.amp.r) * rate).ceil() as usize;
+    let mut out = Vec::with_capacity(n);
+    let mut phases = vec![0.0f64; d.layers.len()];
+    let mut lp = Lowpass::new();
+    let mut noise = Noise::new(seed);
+    let mut vib_ph = 0.0;
+    for i in 0..n {
+        let t = i as f64 / rate;
+        let (midi, vel) = pitch_at(segs, t);
+        let hz = midi_hz(midi);
+        let vib = if d.vib_cents > 0.0 && t >= d.vib_delay {
+            vib_ph += d.vib_rate / rate;
+            (vib_ph * TAU).sin() * d.vib_cents * ((t - d.vib_delay) / 0.3).min(1.0)
+        } else {
+            0.0
+        };
+        let mut s = 0.0;
+        for (k, ly) in d.layers.iter().enumerate() {
+            let f = hz * 2f64.powf(ly.octave as f64 + (ly.detune_cents + vib) / 1200.0);
+            let dt = f / rate;
+            phases[k] = (phases[k] + dt) % 1.0;
+            s += osc(ly.wave, phases[k], dt) * ly.gain;
+        }
+        s += noise.next() * d.noise;
+        let env = d.amp.level(t, hold_end);
+        let fe = d.filt_adsr.level(t, hold_end);
+        // a harder note is brighter: the cutoff opens by up to about an octave
+        let bright = 2f64.powf((vel - 0.7) * 1.6);
+        let cutoff = d.cutoff
+            * (hz / 261.63).powf(d.key_track)
+            * 2f64.powf(d.filt_env * (fe - 0.5) * 2.0)
+            * bright
+            * tone(t0 + t);
+        let y = lp.process(s, cutoff.clamp(40.0, rate * 0.45), d.q, rate);
+        out.push((y * env * vel.clamp(0.0, 1.0).powf(1.2) * 0.5) as f32);
+    }
+    out
+}
+
+/// Can this instrument play a slurred phrase as one voice?
+pub fn is_legato_capable(inst: &Instrument) -> bool {
+    matches!(inst, Instrument::Sub(_))
+}
+
+/// Render a slurred phrase on a monophonic instrument as a single voice. `segs` are in seconds from the start of
+/// the phrase. Other instruments render each note on its own (see `render_note_spec`).
+pub fn render_phrase(inst: &Instrument, segs: &[Seg], rate: f64, seed: u64) -> Vec<f32> {
+    render_phrase_tone(inst, segs, rate, seed, &|_| 1.0, 0.0)
+}
+
+/// `render_phrase` with a tone multiplier `tone(seconds)` that opens or closes the filter over time; `t0` is where
+/// the phrase starts on that clock.
+pub fn render_phrase_tone(
+    inst: &Instrument,
+    segs: &[Seg],
+    rate: f64,
+    seed: u64,
+    tone: &dyn Fn(f64) -> f64,
+    t0: f64,
+) -> Vec<f32> {
+    match inst {
+        Instrument::Sub(d) => render_sub(d, segs, rate, seed, tone, t0),
+        _ => vec![],
+    }
+}
+
+/// What a single note asks of a voice besides its pitch.
+#[derive(Clone, Copy, Debug)]
+pub struct NoteSpec {
+    pub note: u8,
+    pub vel: f64,
+    /// Seconds the key is held (the written length times the gate).
+    pub hold: f64,
+    pub cents: f64,
+    pub slide: Option<u8>,
+}
+
+impl NoteSpec {
+    pub fn plain(note: u8, vel: f64, hold: f64) -> NoteSpec {
+        NoteSpec {
+            note,
+            vel,
+            hold,
+            cents: 0.0,
+            slide: None,
+        }
+    }
+}
+
 /// Render one note (`len` seconds held) to a mono buffer, including its release.
 pub fn render_note(
     inst: &Instrument,
@@ -492,47 +644,46 @@ pub fn render_note(
     rate: f64,
     seed: u64,
 ) -> Vec<f32> {
-    let hz = midi_hz(note as f64);
+    render_note_spec(inst, &NoteSpec::plain(note, vel, len), rate, seed)
+}
+
+/// Render one articulated note: held for `hold` seconds, detuned by `cents`, sliding to `slide` over its length.
+pub fn render_note_spec(inst: &Instrument, sp: &NoteSpec, rate: f64, seed: u64) -> Vec<f32> {
+    render_note_tone(inst, sp, rate, seed, &|_| 1.0, 0.0)
+}
+
+/// `render_note_spec` with a tone multiplier `tone(seconds)` (`t0` is the note's start on that clock): continuous on
+/// subtractive voices, taken once at the start of the note on the others (FM index, additive spectrum).
+pub fn render_note_tone(
+    inst: &Instrument,
+    sp: &NoteSpec,
+    rate: f64,
+    seed: u64,
+    tone: &dyn Fn(f64) -> f64,
+    t0: f64,
+) -> Vec<f32> {
+    let (note, vel, len) = (sp.note, sp.vel, sp.hold);
+    let seg = Seg::single(note, vel, len, sp.cents, sp.slide);
+    let hz0 = midi_hz(seg.note);
     let amp_vel = vel.clamp(0.0, 1.0).powf(1.2);
+    // the pitch at time t, for the voices that glide
+    let hz_at = |t: f64| midi_hz(pitch_at(std::slice::from_ref(&seg), t).0);
     match inst {
         Instrument::Drums => gm_drum(note, rate, amp_vel, seed),
-        Instrument::Sampled(set) => set.render(note, vel, len, rate),
-        Instrument::Sub(d) => {
-            let total = len + d.amp.r;
-            let n = (total * rate).ceil() as usize;
-            let mut out = Vec::with_capacity(n);
-            let mut phases = vec![0.0f64; d.layers.len()];
-            let mut lp = Lowpass::new();
-            let mut noise = Noise::new(seed);
-            let mut vib_ph = 0.0;
-            for i in 0..n {
-                let t = i as f64 / rate;
-                let vib = if d.vib_cents > 0.0 && t >= d.vib_delay {
-                    vib_ph += d.vib_rate / rate;
-                    (vib_ph * TAU).sin() * d.vib_cents * ((t - d.vib_delay) / 0.3).min(1.0)
-                } else {
-                    0.0
-                };
-                let mut s = 0.0;
-                for (k, ly) in d.layers.iter().enumerate() {
-                    let f = hz * 2f64.powf(ly.octave as f64 + (ly.detune_cents + vib) / 1200.0);
-                    let dt = f / rate;
-                    phases[k] = (phases[k] + dt) % 1.0;
-                    s += osc(ly.wave, phases[k], dt) * ly.gain;
-                }
-                s += noise.next() * d.noise;
-                let env = d.amp.level(t, len);
-                let fe = d.filt_adsr.level(t, len);
-                let cutoff = d.cutoff
-                    * (hz / 261.63).powf(d.key_track)
-                    * 2f64.powf(d.filt_env * (fe - 0.5) * 2.0);
-                let y = lp.process(s, cutoff.clamp(40.0, rate * 0.45), d.q, rate);
-                out.push((y * env * amp_vel * 0.5) as f32);
-            }
-            out
+        Instrument::Sampled(set) => {
+            let ratio = 2f64.powf(sp.cents / 1200.0);
+            set.render_pitched(
+                note,
+                vel,
+                len,
+                rate,
+                ratio,
+                sp.slide.map(|s| s as f64 - note as f64),
+            )
         }
+        Instrument::Sub(d) => render_sub(d, &[seg], rate, seed, tone, t0),
         Instrument::Pluck { decay, bright } => {
-            let period = ((rate / hz).round() as usize).max(2);
+            let period = ((rate / hz0).round() as usize).max(2);
             let mut noise = Noise::new(seed);
             let mut line: Vec<f64> = (0..period).map(|_| noise.next()).collect();
             let total = ((len + 0.3) * rate).ceil() as usize;
@@ -560,8 +711,11 @@ pub fn render_note(
             let n = ((len + amp.r) * rate).ceil() as usize;
             let (mut pc, mut pm) = (0.0, 0.0);
             let mut out = Vec::with_capacity(n);
+            // a harder note has a brighter spectrum
+            let index = index * (0.4 + vel.clamp(0.0, 1.0) * 0.9) * tone(t0).clamp(0.25, 4.0);
             for i in 0..n {
                 let t = i as f64 / rate;
+                let hz = hz_at(t.min(len));
                 pm += hz * ratio / rate;
                 pc += hz / rate;
                 let idx = index * (-t / fade.max(1e-3)).exp();
@@ -575,8 +729,10 @@ pub fn render_note(
             let mut phases = vec![0.0f64; partials.len()];
             let mut out = Vec::with_capacity(n);
             let norm: f64 = partials.iter().map(|p| p.1).sum::<f64>().max(1.0);
+            let tilt = (0.35 + vel.clamp(0.0, 1.0) * 0.9) * tone(t0).clamp(0.25, 4.0).sqrt();
             for i in 0..n {
                 let t = i as f64 / rate;
+                let hz = hz_at(t.min(len));
                 let mut s = 0.0;
                 for (k, (mult, gain, dec)) in partials.iter().enumerate() {
                     let f = hz * mult;
@@ -585,7 +741,7 @@ pub fn render_note(
                     }
                     phases[k] = (phases[k] + f / rate) % 1.0;
                     let env = if *dec > 0.0 { (-t / dec).exp() } else { 1.0 };
-                    s += (phases[k] * TAU).sin() * gain * env;
+                    s += (phases[k] * TAU).sin() * gain * tilt.powf(mult.log2().max(0.0)) * env;
                 }
                 out.push((s / norm * amp.level(t, len) * amp_vel * 0.6) as f32);
             }

@@ -1,0 +1,52 @@
+project "Etude":
+    anim_version: "0.1"
+    canvas: 1280x720
+    fps: 24
+    background: #10121f
+
+# Per-note control and curves. The violin line shows dynamics (`p mp f`), crescendo and decrescendo hairpins
+# (`<` `>`), slurs `( )`, staccato `'`, a gate `@0.7`, a glissando `A4~D5` and a grace note `{E5}D5`. The pad's filter
+# opens and closes with `cutoff_curve`, the bells brighten and pan across with `brightness_curve` and `pan_curve`,
+# the reverb send of the pad fades in, and `humanize` loosens the timing a little (from a fixed seed, so every
+# render is the same). Curves count bars from the start of the score.
+score etude:
+    tempo: 120, meter: "4/4", key: "D minor", reverb: 0.35, room: 0.7
+    track violin: instrument: "violin", volume: 0.9, humanize: 0.2, notes: ["p (D4:1/2 F4:1/4 A4:1/4)", "< (D5:1/2 C5:1/4 Bb4:1/4)", "f A4~D5:1/2 {E5}D5:1/4 C5:1/4", "> D5:1/4' A4:1/4' F4:1/4' D4:1/4'", "p (D4:1/4 F4 A4 D5)", "mp A4~D4:1/2 D4:1/2@0.7", "pp [D4 F4 A4]:1"]
+    track pad: instrument: "pad", chords: "i | VII | VI | V | i | VI | i", volume: 0.5, cutoff_curve: "0:0.3 3:2.5s 7:0.5", reverb_curve: "0:0.2 4:1.5"
+    track bells: instrument: "bell", chords: "i | i | VI | VII | i | VI | i", style: "arp_up", rate: "1/8", octave: 5, vel: 0.5, volume: 0.3, humanize: 0.15, brightness_curve: "0:0.3 3.5:0.9 7:0.2", pan_curve: "0:-0.6 7:0.6"
+    track bass: instrument: "synth_bass", notes: "D2:1 | C2:1 | Bb1:1 | A1:1 | D2:1 | Bb1:1 | D2:1", volume: 0.6, volume_curve: "0:0.2 3:0.9 7:0.3"
+
+shape glow = circle(n: 64, radius: 260, at: (640, 360))
+glow.fill = #3a2a7a
+glow.stroke_width = 0
+glow.opacity = 0.1
+
+shape moon = circle(n: 64, radius: 110, at: (640, 330))
+moon.fill = #f3e6c4
+moon.stroke_width = 0
+
+shape horizon = rectangle(width: 1400, height: 160, at: (640, 640))
+horizon.fill = #07080f
+horizon.stroke_width = 0
+
+shape bar_pad = rectangle(width: 120, height: 20, at: (400, 600))
+bar_pad.fill = #5a7aff
+bar_pad.stroke_width = 0
+shape bar_bells = rectangle(width: 120, height: 20, at: (640, 600))
+bar_bells.fill = #7fe0c0
+bar_bells.stroke_width = 0
+shape bar_bass = rectangle(width: 120, height: 20, at: (880, 600))
+bar_bass.fill = #ff9a5a
+bar_bass.stroke_width = 0
+
+scene "Etude" for 15.seconds:
+    main:
+        play(etude, fade_in: 0.5.seconds)
+        for f in 0..(15 * 24):
+            moon.scale = 1 + 0.25 * etude.violin
+            moon.opacity = 0.55 + 0.45 * etude.violin
+            glow.opacity = 0.1 + 0.4 * etude.pad
+            bar_pad.scale = (1 + 0.1 * etude.pad, 1 + 5 * etude.pad)
+            bar_bells.scale = (1 + 0.1 * etude.bells, 1 + 5 * etude.bells)
+            bar_bass.scale = (1 + 0.1 * etude.bass, 1 + 5 * etude.bass)
+            wait 1.frame

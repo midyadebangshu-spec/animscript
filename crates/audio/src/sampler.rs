@@ -49,10 +49,25 @@ impl SampleSet {
     }
 
     pub fn render(&self, note: u8, vel: f64, len: f64, rate: f64) -> Vec<f32> {
+        self.render_pitched(note, vel, len, rate, 1.0, None)
+    }
+
+    /// Like `render`, with the pitch scaled by `ratio` (detune) and optionally sliding up by `slide` semitones over the
+    /// held length.
+    pub fn render_pitched(
+        &self,
+        note: u8,
+        vel: f64,
+        len: f64,
+        rate: f64,
+        ratio: f64,
+        slide: Option<f64>,
+    ) -> Vec<f32> {
         let Some(z) = self.pick(note, vel) else {
             return vec![];
         };
-        let step = 2f64.powf((note as f64 - z.root as f64) / 12.0) * z.rate as f64 / rate;
+        let base_step =
+            2f64.powf((note as f64 - z.root as f64) / 12.0) * z.rate as f64 / rate * ratio;
         let total = ((len + self.release) * rate).ceil() as usize;
         let gain = vel.clamp(0.0, 1.0).powf(1.2) * z.gain;
         let n = z.data.len();
@@ -77,7 +92,8 @@ impl SampleSet {
                 (1.0 - (t - len) / self.release.max(1e-3)).max(0.0)
             };
             out.push(s * (env * gain) as f32);
-            pos += step;
+            let semis = slide.map_or(0.0, |s| s * (t / len.max(1e-9)).min(1.0));
+            pos += base_step * 2f64.powf(semis / 12.0);
         }
         out
     }

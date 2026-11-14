@@ -1,7 +1,9 @@
 //! Mixing a score down to stereo: every note of every track is synthesised (or sampled), panned and
 //! summed, the reverb and delay are added and the result is soft-limited. A pure function of its inputs.
 use crate::fx::{delay, Reverb};
-use crate::synth::{builtin, render_note, Instrument};
+use crate::synth::{
+    builtin, is_legato_capable, render_note_tone, render_phrase_tone, Instrument, NoteSpec, Seg,
+};
 use crate::{ticks_to_seconds, Score};
 use std::collections::BTreeMap;
 
@@ -84,6 +86,13 @@ pub fn render_score(score: &Score, mix: &Mix, bank: &Bank) -> Result<Stereo, Str
     };
     let n = ((score.length_seconds() + tail) * rate).ceil() as usize;
     let (mut l, mut r) = (vec![0.0f32; n], vec![0.0f32; n]);
+    // a separate feed for the reverb exists only when some track automates its send
+    let sends = score.tracks.iter().any(|t| t.auto.reverb.is_some());
+    let (mut sl, mut sr) = if sends {
+        (vec![0.0f32; n], vec![0.0f32; n])
+    } else {
+        (vec![], vec![])
+    };
     for (ti, tr) in score.tracks.iter().enumerate() {
         let inst = bank.get(&tr.instrument).ok_or_else(|| {
             format!(
@@ -92,24 +101,105 @@ pub fn render_score(score: &Score, mix: &Mix, bank: &Bank) -> Result<Stereo, Str
                 bank.names().join(", ")
             )
         })?;
-        let ang = (tr.pan.clamp(-1.0, 1.0) + 1.0) * std::f64::consts::FRAC_PI_4;
-        let (gl, gr) = (
-            (ang.cos() * tr.volume * 0.9) as f32,
-            (ang.sin() * tr.volume * 0.9) as f32,
-        );
-        for (ei, e) in tr.events.iter().enumerate() {
-            let start = (ticks_to_seconds(e.start, score.tempo) * rate).round() as usize;
-            let len = ticks_to_seconds(e.len, score.tempo);
-            let seed = (ti as u64) << 32 | ei as u64;
-            let note = render_note(&inst, e.note, e.vel, len, rate, seed);
-            for (k, s) in note.iter().enumerate() {
-                let i = start + k;
+        let auto = &tr.auto;
+        let moving = auto.volume.is_some() || auto.pan.is_some();
+        let gains = |sample: usize| -> (f32, f32) {
+            let t = sample as f64 / rate;
+            let vol = tr.volume
+                * auto
+                    .volume
+                    .as_ref()
+                    .map_or(1.0, |lane| lane.at_secs(t, score.tempo));
+            let pan = auto
+                .pan
+                .as_ref()
+                .map_or(tr.pan, |lane| lane.at_secs(t, score.tempo));
+            let ang = (pan.clamp(-1.0, 1.0) + 1.0) * std::f64::consts::FRAC_PI_4;
+            (
+                (ang.cos() * vol * 0.9) as f32,
+                (ang.sin() * vol * 0.9) as f32,
+            )
+        };
+        let (cl, cr) = gains(0);
+        let evs = &tr.events;
+        let secs = |ticks: u64| ticks_to_seconds(ticks, score.tempo);
+        let mut put = |buf: &[f32], at: usize| {
+            for (k, s) in buf.iter().enumerate() {
+                let i = at + k;
                 if i >= n {
                     break;
                 }
+                let (gl, gr) = if moving { gains(i) } else { (cl, cr) };
                 l[i] += s * gl;
                 r[i] += s * gr;
+                if sends {
+                    let send = auto
+                        .reverb
+                        .as_ref()
+                        .map_or(1.0, |lane| lane.at_secs(i as f64 / rate, score.tempo))
+                        as f32;
+                    sl[i] += s * gl * send;
+                    sr[i] += s * gr * send;
+                }
             }
+        };
+        let tone = |t: f64| auto.tone_at(t, score.tempo);
+        let mut ei = 0;
+        while ei < evs.len() {
+            let e = &evs[ei];
+            let seed = (ti as u64) << 32 | ei as u64;
+            let start = (secs(e.start) * rate).round() as usize;
+            // slurred notes on a monophonic voice are one voice that glides from note to note
+            if e.legato
+                && is_legato_capable(&inst)
+                && ei + 1 < evs.len()
+                && evs[ei + 1].start > e.start
+            {
+                let mut group = vec![ei];
+                let mut k = ei;
+                while evs[k].legato && k + 1 < evs.len() && evs[k + 1].start > evs[k].start {
+                    k += 1;
+                    group.push(k);
+                }
+                let t0 = secs(e.start);
+                let segs: Vec<Seg> = group
+                    .iter()
+                    .enumerate()
+                    .map(|(gi, &ix)| {
+                        let ev = &evs[ix];
+                        let st = secs(ev.start) - t0;
+                        let end = match group.get(gi + 1) {
+                            Some(&nx) => secs(evs[nx].start) - t0,
+                            None => st + secs(ev.len) * ev.gate,
+                        };
+                        Seg {
+                            start: st,
+                            end,
+                            note: ev.note as f64 + ev.cents / 100.0,
+                            slide_to: ev.slide.map(|s| s as f64 + ev.cents / 100.0),
+                            vel: ev.vel,
+                        }
+                    })
+                    .collect();
+                put(
+                    &render_phrase_tone(&inst, &segs, rate, seed, &tone, t0),
+                    start,
+                );
+                ei = k + 1;
+                continue;
+            }
+            let spec = NoteSpec {
+                note: e.note,
+                vel: e.vel,
+                hold: secs(e.len) * e.gate,
+                cents: e.cents,
+                slide: e.slide,
+            };
+            put(
+                &render_note_tone(&inst, &spec, rate, seed, &tone, secs(e.start)),
+                start,
+            );
+            ei += 1;
         }
     }
     if mix.delay > 0.0 {
@@ -120,11 +210,19 @@ pub fn render_score(score: &Score, mix: &Mix, bank: &Bank) -> Result<Stereo, Str
         for i in 0..n {
             l[i] += dl[i] * mix.delay as f32;
             r[i] += dr[i] * mix.delay as f32;
+            if sends {
+                sl[i] += dl[i] * mix.delay as f32;
+                sr[i] += dr[i] * mix.delay as f32;
+            }
         }
     }
     if mix.reverb > 0.0 {
         let mut rv = Reverb::new(rate, mix.room, 0.3);
-        let (wl, wr) = rv.process(&l, &r);
+        let (wl, wr) = if sends {
+            rv.process(&sl, &sr)
+        } else {
+            rv.process(&l, &r)
+        };
         for i in 0..n {
             l[i] += wl[i] * mix.reverb as f32 * 3.0;
             r[i] += wr[i] * mix.reverb as f32 * 3.0;

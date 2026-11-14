@@ -10,6 +10,7 @@
 )]
 use std::fmt;
 
+pub mod automation;
 pub mod fx;
 pub mod mixer;
 pub mod render;
@@ -54,13 +55,43 @@ impl Meter {
     }
 }
 
-/// One note: where it starts and how long it lasts (ticks), its MIDI number and velocity (0 to 1).
+/// One note: where it starts and how long it lasts (ticks), its MIDI number and velocity (0 to 1), and how it
+/// is articulated.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ev {
     pub start: u64,
     pub len: u64,
     pub note: u8,
     pub vel: f64,
+    /// The share of `len` the note is held before its release (1 = the full written length).
+    pub gate: f64,
+    /// Slurred to the next note: they overlap, and on a monophonic instrument the voice is not retriggered.
+    pub legato: bool,
+    /// Glide to this key over the note's length (glissando).
+    pub slide: Option<u8>,
+    /// Detune in cents (-100 to 100).
+    pub cents: f64,
+}
+impl Ev {
+    pub const PLAIN: Ev = Ev {
+        start: 0,
+        len: 0,
+        note: 0,
+        vel: 0.0,
+        gate: 1.0,
+        legato: false,
+        slide: None,
+        cents: 0.0,
+    };
+    pub fn new(start: u64, len: u64, note: u8, vel: f64) -> Ev {
+        Ev {
+            start,
+            len,
+            note,
+            vel,
+            ..Ev::PLAIN
+        }
+    }
 }
 
 // ---- pitch and key ------------------------------------------------------------------------
@@ -203,62 +234,205 @@ fn parse_dur(s: &str) -> PRes<u64> {
     Ok(num / den)
 }
 
-struct Token<'a> {
-    head: &'a str,
-    dur: Option<u64>,
-    vel: Option<f64>,
-    accent: bool,
-}
-
 const DEFAULT_VEL: f64 = 0.7;
-const ACCENT_VEL: f64 = 0.95;
+/// How much louder an accent (`^`) is than the current level.
+const ACCENT_BOOST: f64 = 0.2;
+/// The length of a grace note (ticks): a thirty-second note.
+const GRACE: u64 = 120;
 
-/// `head[:dur][!vel][^]`
-fn split_token(tok: &str) -> PRes<Token<'_>> {
-    let mut rest = tok;
-    let accent = if let Some(r) = rest.strip_suffix('^') {
-        rest = r;
-        true
-    } else {
-        false
-    };
-    let mut vel = None;
-    if let Some((r, v)) = rest.split_once('!') {
-        let n: u32 = v
-            .parse()
-            .map_err(|_| ParseError::new(format!("`{tok}`: velocity must be a number 1 to 127")))?;
-        if !(1..=127).contains(&n) {
-            return Err(ParseError::new(format!(
-                "`{tok}`: velocity must be between 1 and 127"
-            )));
-        }
-        vel = Some(n as f64 / 127.0);
-        rest = r;
-    }
-    let (head, dur) = match rest.split_once(':') {
-        Some((h, d)) => (
-            h,
-            Some(parse_dur(d).map_err(|e| ParseError::new(format!("`{tok}`: {e}")))?),
-        ),
-        None => (rest, None),
-    };
-    Ok(Token {
-        head,
-        dur,
-        vel,
-        accent,
+/// A dynamic mark as a velocity: `ppp pp p mp mf f ff`.
+pub fn dynamic(s: &str) -> Option<f64> {
+    Some(match s {
+        "ppp" => 0.15,
+        "pp" => 0.25,
+        "p" => 0.4,
+        "mp" => 0.55,
+        "mf" => 0.7,
+        "f" => 0.85,
+        "ff" => 0.98,
+        _ => return None,
     })
 }
 
-/// Notes separated by spaces: `C4:1/4 E4 [C4 E4 G4]:1/2 .:1/4 | G4:1`. `.` or `r` is a rest, `|` a bar line
-/// (checked against the meter), `!90` sets a velocity and `^` accents.
+struct NoteTok {
+    /// The pitch text, or `.` / `r` for a rest.
+    head: String,
+    slide_to: Option<String>,
+    dur: Option<u64>,
+    vel: Option<f64>,
+    accent: bool,
+    gate: Option<f64>,
+    staccato: bool,
+    tenuto: bool,
+    cents: f64,
+}
+
+/// The pitch at the start of `s` (`C4`, `F#3`, `Bb-1`): its text and the rest of the string.
+fn take_pitch(s: &str) -> Option<(&str, &str)> {
+    let b = s.as_bytes();
+    if b.is_empty() || !matches!(b[0], b'A'..=b'G') {
+        return None;
+    }
+    let mut i = 1;
+    if i < b.len() && (b[i] == b'#' || b[i] == b'b') {
+        i += 1;
+    }
+    if i < b.len() && b[i] == b'-' {
+        i += 1;
+    }
+    let d = i;
+    while i < b.len() && b[i].is_ascii_digit() {
+        i += 1;
+    }
+    (i > d).then(|| s.split_at(i))
+}
+
+/// `pitch[~pitch][:dur]` followed by any of `!vel`, `@gate`, `'` (staccato), `_` (tenuto), `^` (accent) and
+/// `+20c` / `-20c` (cents), in any order. A rest is `.` or `r` with an optional `:dur`.
+fn parse_note_tok(tok: &str) -> PRes<NoteTok> {
+    let bad = |m: String| ParseError::new(format!("`{tok}`: {m}"));
+    let mut t = NoteTok {
+        head: String::new(),
+        slide_to: None,
+        dur: None,
+        vel: None,
+        accent: false,
+        gate: None,
+        staccato: false,
+        tenuto: false,
+        cents: 0.0,
+    };
+    let mut rest: &str;
+    if let Some(r) = tok.strip_prefix('.') {
+        t.head = ".".into();
+        rest = r;
+    } else if let Some(r) = tok.strip_prefix('r') {
+        t.head = "r".into();
+        rest = r;
+    } else {
+        let (p, r) = take_pitch(tok).ok_or_else(|| {
+            ParseError::new(format!("`{tok}` is not a pitch (like C4, F#3, Bb2)"))
+        })?;
+        t.head = p.to_string();
+        rest = r;
+        if let Some(r2) = rest.strip_prefix('~') {
+            let (p2, r3) = take_pitch(r2)
+                .ok_or_else(|| bad("a glissando `~` needs a second pitch, like C4~E4".into()))?;
+            t.slide_to = Some(p2.to_string());
+            rest = r3;
+        }
+    }
+    while let Some(c) = rest.chars().next() {
+        let tail = &rest[1..];
+        match c {
+            ':' => {
+                let end = tail
+                    .find(['!', '@', '\'', '_', '^', '+', '-'])
+                    .unwrap_or(tail.len());
+                t.dur = Some(parse_dur(&tail[..end]).map_err(|e| bad(e.message))?);
+                rest = &tail[end..];
+            }
+            '!' => {
+                let end = tail
+                    .find(|c: char| !c.is_ascii_digit())
+                    .unwrap_or(tail.len());
+                let n: u32 = tail[..end]
+                    .parse()
+                    .map_err(|_| bad("velocity must be a number 1 to 127".into()))?;
+                if !(1..=127).contains(&n) {
+                    return Err(bad("velocity must be between 1 and 127".into()));
+                }
+                t.vel = Some(n as f64 / 127.0);
+                rest = &tail[end..];
+            }
+            '@' => {
+                let end = tail
+                    .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+                    .unwrap_or(tail.len());
+                let g: f64 = tail[..end].parse().map_err(|_| {
+                    bad("`@` is followed by a gate between 0 and 1, like @0.7".into())
+                })?;
+                if !(g > 0.0 && g <= 1.0) {
+                    return Err(bad("a gate is above 0 and at most 1".into()));
+                }
+                t.gate = Some(g);
+                rest = &tail[end..];
+            }
+            '\'' => {
+                t.staccato = true;
+                rest = tail;
+            }
+            '_' => {
+                t.tenuto = true;
+                rest = tail;
+            }
+            '^' => {
+                t.accent = true;
+                rest = tail;
+            }
+            '+' | '-' => {
+                let end = tail
+                    .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+                    .unwrap_or(tail.len());
+                let n: f64 = tail[..end]
+                    .parse()
+                    .map_err(|_| bad("a detune is like +20c or -35c".into()))?;
+                if !tail[end..].starts_with('c') {
+                    return Err(bad("a detune ends in `c` (cents), like +20c".into()));
+                }
+                if n > 100.0 {
+                    return Err(bad("a detune is at most 100 cents".into()));
+                }
+                t.cents = if c == '-' { -n } else { n };
+                rest = &tail[end + 1..];
+            }
+            other => return Err(bad(format!("unexpected `{other}`"))),
+        }
+    }
+    Ok(t)
+}
+
+fn key_of_pitch(p: &str) -> PRes<u8> {
+    pitch(p).ok_or_else(|| ParseError::new(format!("`{p}` is not a pitch (like C4, F#3, Bb2)")))
+}
+
+/// Notes separated by spaces. A note is `C4:1/4` with optional marks: `!90` velocity, `^` accent, `'` staccato,
+/// `_` tenuto, `@0.7` gate, `+20c` detune, `C4~E4:1/2` glissando, `{D4}C4` grace note. `.` or `r` rests;
+/// `[C4 E4 G4]:1/2` plays together; `( ... )` slurs; `|` is a bar line (checked against the meter). `pp p mp mf f ff`
+/// set the dynamic level and `<` / `>` ramp the velocity of the notes between them and the next mark.
 pub fn parse_notes(src: &str, meter: Meter) -> PRes<Vec<Ev>> {
     let bar = meter.bar_ticks();
     let chars: Vec<char> = src.chars().collect();
     let mut i = 0;
     let (mut pos, mut last) = (0u64, PPQ);
     let mut bars_done = 0usize;
-    let mut out = vec![];
+    let mut vel_now = DEFAULT_VEL;
+    let mut out: Vec<Ev> = vec![];
+    // a slur in progress: the steps (first and one past the last event index) it contains
+    let mut slur: Option<Vec<(usize, usize)>> = None;
+    // a hairpin in progress: its starting velocity, direction and the event groups it covers
+    let mut hairpin: Option<(f64, bool, Vec<Vec<usize>>)> = None;
+    fn finish_hairpin(out: &mut [Ev], h: (f64, bool, Vec<Vec<usize>>), target: f64) -> PRes<()> {
+        let (start, up, steps) = h;
+        if (up && target < start) || (!up && target > start) {
+            return Err(ParseError::new(format!(
+                "a {} ends {} than it starts: check the dynamic mark after it",
+                if up {
+                    "crescendo `<`"
+                } else {
+                    "decrescendo `>`"
+                },
+                if up { "softer" } else { "louder" }
+            )));
+        }
+        let n = steps.len().max(1) as f64;
+        for (k, group) in steps.iter().enumerate() {
+            for &ix in group {
+                out[ix].vel = start + (target - start) * k as f64 / n;
+            }
+        }
+        Ok(())
+    }
     while i < chars.len() {
         let c = chars[i];
         if c.is_whitespace() {
@@ -280,7 +454,34 @@ pub fn parse_notes(src: &str, meter: Meter) -> PRes<Vec<Ev>> {
             i += 1;
             continue;
         }
-        // a token: a bracketed group, or up to the next space
+        if c == '(' {
+            if slur.is_some() {
+                return Err(ParseError::new(
+                    "slurs cannot be nested: a `(` is already open",
+                ));
+            }
+            slur = Some(vec![]);
+            i += 1;
+            continue;
+        }
+        if c == ')' {
+            let Some(steps) = slur.take() else {
+                return Err(ParseError::new(
+                    "a `)` closes a slur that was never opened with `(`",
+                ));
+            };
+            let n = steps.len();
+            for (k, (a, b)) in steps.iter().enumerate() {
+                if k + 1 < n {
+                    for e in &mut out[*a..*b] {
+                        e.legato = true;
+                    }
+                }
+            }
+            i += 1;
+            continue;
+        }
+        // a token: a bracketed group, a grace note and its note, or up to the next space or bar line
         let mut j = i;
         if c == '[' {
             while j < chars.len() && chars[j] != ']' {
@@ -290,34 +491,74 @@ pub fn parse_notes(src: &str, meter: Meter) -> PRes<Vec<Ev>> {
                 return Err(ParseError::new("a chord group `[` is not closed with `]`"));
             }
             j += 1;
-            while j < chars.len() && !chars[j].is_whitespace() {
+            while j < chars.len()
+                && !chars[j].is_whitespace()
+                && !matches!(chars[j], '|' | ')' | '(')
+            {
                 j += 1;
             }
         } else {
-            while j < chars.len() && !chars[j].is_whitespace() && chars[j] != '|' {
+            if c == '{' {
+                while j < chars.len() && chars[j] != '}' {
+                    j += 1;
+                }
+                if j >= chars.len() {
+                    return Err(ParseError::new("a grace note `{` is not closed with `}`"));
+                }
+            }
+            while j < chars.len()
+                && !chars[j].is_whitespace()
+                && !matches!(chars[j], '|' | ')' | '(')
+            {
                 j += 1;
             }
         }
         let tok: String = chars[i..j].iter().collect();
         i = j;
+        // dynamics and hairpins
+        if let Some(v) = dynamic(&tok) {
+            if let Some(h) = hairpin.take() {
+                finish_hairpin(&mut out, h, v)?;
+            }
+            vel_now = v;
+            continue;
+        }
+        if tok == "<" || tok == ">" {
+            if hairpin.is_some() {
+                return Err(ParseError::new(format!(
+                    "a hairpin `{tok}` starts inside another: end the first with a dynamic mark"
+                )));
+            }
+            hairpin = Some((vel_now, tok == "<", vec![]));
+            continue;
+        }
+        let first = out.len();
+        let make = |t: &NoteTok, len: u64, vel_now: f64| -> (f64, f64) {
+            let vel = t.vel.unwrap_or(if t.accent {
+                (vel_now + ACCENT_BOOST).min(1.0)
+            } else {
+                vel_now
+            });
+            let gate = t.gate.unwrap_or(if t.staccato { 0.5 } else { 1.0 });
+            let _ = len;
+            (vel, gate)
+        };
         if let Some(inner) = tok.strip_prefix('[') {
             let (list, after) = inner.split_once(']').expect("checked");
-            let wrapped = format!("x{after}");
-            let t = split_token(&wrapped)?;
+            let t = parse_note_tok(&format!("C4{after}"))?;
             let len = t.dur.unwrap_or(last);
-            let vel = t
-                .vel
-                .unwrap_or(if t.accent { ACCENT_VEL } else { DEFAULT_VEL });
+            let (vel, gate) = make(&t, len, vel_now);
             let mut any = false;
             for p in list.split_whitespace() {
-                let n = pitch(p).ok_or_else(|| {
-                    ParseError::new(format!("`{p}` is not a pitch (like C4, F#3, Bb2)"))
-                })?;
+                let n = key_of_pitch(p)?;
                 out.push(Ev {
                     start: pos,
                     len,
                     note: n,
                     vel,
+                    gate,
+                    cents: t.cents,
+                    ..Ev::PLAIN
                 });
                 any = true;
             }
@@ -326,29 +567,98 @@ pub fn parse_notes(src: &str, meter: Meter) -> PRes<Vec<Ev>> {
             }
             last = len;
             pos += len;
-            continue;
-        }
-        let t = split_token(&tok)?;
-        let len = t.dur.unwrap_or(last);
-        last = len;
-        if t.head == "." || t.head == "r" {
+        } else {
+            let (grace, body) = match tok.strip_prefix('{') {
+                Some(r) => {
+                    let (g, b) = r.split_once('}').expect("checked");
+                    (Some(key_of_pitch(g.trim())?), b.to_string())
+                }
+                None => (None, tok.clone()),
+            };
+            let t = parse_note_tok(&body)?;
+            let len = t.dur.unwrap_or(last);
+            last = len;
+            if t.head == "." || t.head == "r" {
+                if grace.is_some() {
+                    return Err(ParseError::new(format!(
+                        "`{tok}`: a rest cannot have a grace note"
+                    )));
+                }
+                pos += len;
+                continue;
+            }
+            let n = key_of_pitch(&t.head)?;
+            let (vel, gate) = make(&t, len, vel_now);
+            let (mut start, mut nlen) = (pos, len);
+            if let Some(g) = grace {
+                let gl = GRACE.min(len / 2);
+                out.push(Ev {
+                    start: pos,
+                    len: gl,
+                    note: g,
+                    vel: (vel * 0.8).min(1.0),
+                    gate: 1.0,
+                    ..Ev::PLAIN
+                });
+                start += gl;
+                nlen -= gl;
+            }
+            let slide = t.slide_to.as_deref().map(key_of_pitch).transpose()?;
+            out.push(Ev {
+                start,
+                len: nlen,
+                note: n,
+                vel,
+                gate,
+                slide,
+                cents: t.cents,
+                ..Ev::PLAIN
+            });
             pos += len;
-            continue;
         }
-        let n = pitch(t.head).ok_or_else(|| {
-            ParseError::new(format!("`{}` is not a pitch (like C4, F#3, Bb2)", t.head))
-        })?;
-        out.push(Ev {
-            start: pos,
-            len,
-            note: n,
-            vel: t
-                .vel
-                .unwrap_or(if t.accent { ACCENT_VEL } else { DEFAULT_VEL }),
-        });
-        pos += len;
+        let explicit = tok.contains('!') || tok.contains('^');
+        if let Some(s) = slur.as_mut() {
+            s.push((first, out.len()));
+        }
+        if let Some(h) = hairpin.as_mut() {
+            if !explicit {
+                // the grace note keeps its own velocity; the main notes of the step ramp
+                let ids: Vec<usize> = (first..out.len())
+                    .filter(|ix| !(tok.starts_with('{') && *ix == first))
+                    .collect();
+                h.2.push(ids);
+            }
+        }
+    }
+    if slur.is_some() {
+        return Err(ParseError::new("a slur `(` is never closed with `)`"));
+    }
+    if hairpin.is_some() {
+        return Err(ParseError::new(
+            "a hairpin `<` or `>` needs a dynamic mark (such as `f`) after the notes it covers",
+        ));
     }
     Ok(out)
+}
+
+/// Humanise a track: every start moves by up to `amount * 40` ticks and every velocity by up to `amount * 0.15`,
+/// from a seeded sequence (the same events and seed always give the same result). Starts never go below 0.
+pub fn humanize(events: &mut [Ev], amount: f64, seed: u64) {
+    if amount <= 0.0 {
+        return;
+    }
+    let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
+    };
+    for e in events.iter_mut() {
+        let dt = (next() * amount * 40.0).round() as i64;
+        e.start = (e.start as i64 + dt).max(0) as u64;
+        e.vel = (e.vel + next() * amount * 0.15).clamp(0.05, 1.0);
+    }
 }
 
 // ---- chords -------------------------------------------------------------------------------
@@ -566,6 +876,7 @@ fn chord_events(notes: &[u8], start: u64, len: u64, st: &ChordStyle, out: &mut V
                     len: held,
                     note: n,
                     vel: st.vel,
+                    ..Ev::PLAIN
                 });
             }
         }
@@ -577,6 +888,7 @@ fn chord_events(notes: &[u8], start: u64, len: u64, st: &ChordStyle, out: &mut V
                     len: held.saturating_sub(off).max(1),
                     note: n,
                     vel: st.vel,
+                    ..Ev::PLAIN
                 });
             }
         }
@@ -594,6 +906,7 @@ fn chord_events(notes: &[u8], start: u64, len: u64, st: &ChordStyle, out: &mut V
                     len: (step as f64 * 0.9) as u64,
                     note: seq[k % seq.len()],
                     vel: st.vel,
+                    ..Ev::PLAIN
                 });
                 k += 1;
                 t += step;
@@ -702,7 +1015,8 @@ pub fn parse_beat(src: &str, steps: u32, meter: Meter) -> PRes<Vec<Ev>> {
                 start: bi as u64 * bar + si as u64 * step,
                 len: step.min(PPQ / 2),
                 note: n,
-                vel: if accent { ACCENT_VEL } else { 0.7 },
+                vel: if accent { 0.95 } else { 0.7 },
+                ..Ev::PLAIN
             });
         }
     }
@@ -742,6 +1056,8 @@ pub struct Track {
     pub volume: f64,
     /// -1 (left) to 1 (right).
     pub pan: f64,
+    /// Curves over time (volume, pan, filter cutoff, brightness, reverb send).
+    pub auto: automation::Automation,
 }
 impl Track {
     pub fn new(name: &str, instrument: &str, events: Vec<Ev>) -> Track {
@@ -751,6 +1067,7 @@ impl Track {
             events,
             volume: 1.0,
             pan: 0.0,
+            auto: automation::Automation::default(),
         }
     }
 }

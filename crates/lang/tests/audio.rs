@@ -306,3 +306,104 @@ fn unknown_score_members_are_errors() {
     assert_eq!(e.code, "E-NAM-003");
     assert!(e.message.contains("bogus"));
 }
+
+// ---- per-note control and curves
+
+#[test]
+fn articulation_dynamics_and_slurs_reach_the_events() {
+    let src = "score s:\n    tempo: 100\n    track t: instrument: \"violin\", notes: \"p (C4:1/4 D4 E4) < F4:1/4' G4:1/4@0.6 A4:1/4 f B4:1/4^\"\nscene \"x\" for 1.second:\n    main:\n        wait 1.second\n";
+    let r = go(src);
+    let ev = &r.audio.scores["s"].score.tracks[0].events;
+    assert_eq!(ev.len(), 7);
+    assert_eq!(
+        ev.iter().map(|e| e.legato).collect::<Vec<_>>(),
+        vec![true, true, false, false, false, false, false]
+    );
+    assert_eq!(ev[3].gate, 0.5);
+    assert_eq!(ev[4].gate, 0.6);
+    assert!(
+        ev[0].vel == 0.4 && ev[4].vel > ev[3].vel && ev[5].vel < 0.85,
+        "{:?}",
+        ev.iter().map(|e| e.vel).collect::<Vec<_>>()
+    );
+    assert!((ev[6].vel - 1.0).abs() < 1e-9); // an accent at forte
+}
+
+#[test]
+fn curves_become_automation_lanes() {
+    let src = "score s:\n    tempo: 120\n    track t: instrument: \"saw_lead\", notes: \"A3:1\", volume_curve: \"0:0.2 2:1\", pan_curve: \"0:-1 2:1s\", cutoff_curve: \"0:0.3 2:2\", brightness_curve: \"0:0.4\", reverb_curve: \"0:1 2:0\"\nscene \"x\" for 1.second:\n    main:\n        wait 1.second\n";
+    let r = go(src);
+    let a = &r.audio.scores["s"].score.tracks[0].auto;
+    assert_eq!(a.volume.as_ref().unwrap().points.len(), 2);
+    assert_eq!(
+        a.pan.as_ref().unwrap().points[1].2,
+        animscript_audio::automation::Ease::Smooth
+    );
+    assert!(a.cutoff.is_some() && a.brightness.is_some() && a.reverb.is_some());
+}
+
+#[test]
+fn humanize_is_deterministic_and_changes_the_events() {
+    let make = |h: &str| {
+        format!("score s:\n    tempo: 100\n    track t: instrument: \"piano\", notes: \"C4:1/4 D4 E4 F4\", {h}\nscene \"x\" for 1.second:\n    main:\n        wait 1.second\n")
+    };
+    let plain = go(&make("volume: 1")).audio.scores["s"].score.tracks[0]
+        .events
+        .clone();
+    let a = go(&make("humanize: 0.5")).audio.scores["s"].score.tracks[0]
+        .events
+        .clone();
+    let b = go(&make("humanize: 0.5")).audio.scores["s"].score.tracks[0]
+        .events
+        .clone();
+    assert_eq!(a, b);
+    assert_ne!(a, plain);
+    assert_eq!(a.len(), plain.len());
+}
+
+#[test]
+fn curve_and_humanize_errors() {
+    let bad = |attr: &str| {
+        err(&format!(
+            "score s:\n    track t: instrument: \"sine\", notes: \"C4\", {attr}\n"
+        ))
+    };
+    for a in [
+        "volume_curve: \"0:9\"",
+        "pan_curve: \"0:2\"",
+        "cutoff_curve: \"0:0\"",
+        "brightness_curve: \"0:2\"",
+        "reverb_curve: \"0:5\"",
+        "volume_curve: \"4:1 2:0\"",
+        "volume_curve: \"x\"",
+        "volume_curve: \"\"",
+    ] {
+        assert_eq!(bad(a).code, "E-AUD-005", "{a}");
+    }
+    assert_eq!(bad("humanize: 2").code, "E-AUD-001");
+    assert_eq!(bad("volume_curve: 3").code, "E-AUD-001");
+    // a mistake in a mark is a notation error naming the token
+    let e = err("score s:\n    track t: instrument: \"sine\", notes: \"C4@2\"\n");
+    assert_eq!(e.code, "E-AUD-002");
+    assert!(e.message.contains("gate"), "{}", e.message);
+}
+
+#[test]
+fn an_articulated_score_makes_the_soundtrack() {
+    let src = "score s:\n    tempo: 120, reverb: 0.2\n    track t: instrument: \"violin\", notes: \"mp (A3:1/4 C4 E4) {D5}A4~E5:1/2 f C5:1/4' r:1/4\", volume_curve: \"0:0.3 1:1\", reverb_curve: \"0:0 1:1\", humanize: 0.2\nscene \"x\" for 3.seconds:\n    main:\n        play(s)\n        wait 3.seconds\n";
+    let r = go(src);
+    let st = animscript_lang::audio::render_project_audio(
+        &r.audio,
+        std::path::Path::new("."),
+        Some(22050),
+    )
+    .unwrap();
+    assert!(st.rms(0.0, 2.5) > 0.005);
+    let again = animscript_lang::audio::render_project_audio(
+        &go(src).audio,
+        std::path::Path::new("."),
+        Some(22050),
+    )
+    .unwrap();
+    assert_eq!(st.to_wav(), again.to_wav());
+}
