@@ -238,3 +238,105 @@ fn sheet_curl_bends_the_spine_and_checks_its_arguments() {
         .unwrap();
     assert!(e.code == "E-MSH-001" || e.code == "E-TYP-001");
 }
+
+#[test]
+fn a_sheet_can_have_thickness() {
+    let r = run("shape thin = sheet(spine: [(0, 0, 0), (0, -50, 0), (0, -100, 0)], width: [10, 10, 0], across: 4)\nshape thick = sheet(spine: [(0, 0, 0), (0, -50, 0), (0, -100, 0)], width: [10, 10, 0], across: 4, thickness: 6)\nshape ring = sheet(spine: [(100, 0, 0), (100, -50, 0), (100, -100, 0)], width: [10, 10, 0], across: 4, thickness: 6, around: 5, about: (0, 0))\n").ok().unwrap();
+    let mesh = |i: usize| &r.snapshots[0]["shapes"][i]["mesh"];
+    let zs = |i: usize| {
+        mesh(i)["verts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v[2].as_f64().unwrap())
+            .fold((f64::MAX, f64::MIN), |m, z| (m.0.min(z), m.1.max(z)))
+    };
+    assert_eq!(zs(0), (0.0, 0.0));
+    let (lo, hi) = zs(1);
+    assert!(
+        (lo + 3.0).abs() < 1e-9 && (hi - 3.0).abs() < 1e-9,
+        "{lo} {hi}"
+    );
+    let faces = |i: usize| mesh(i)["faces"].as_array().unwrap().len();
+    assert!(faces(1) > 2 * faces(0));
+    assert_eq!(faces(2), 5 * faces(1));
+    // a thick sheet is a solid: no longer drawn from both sides
+    assert_eq!(mesh(0)["double_sided"], true);
+    assert!(mesh(1).get("double_sided").is_none_or(|d| d == false));
+    for bad in ["thickness: 0", "thickness: -2", "thickness: \"x\""] {
+        let e = run(&format!(
+            "shape p = sheet(spine: [(0, 0, 0), (0, -50, 0)], width: [5, 5], {bad})\n"
+        ))
+        .err()
+        .unwrap();
+        assert_eq!(e.code, "E-MSH-001", "{bad}: {}", e.message);
+    }
+}
+
+#[test]
+fn a_sheet_takes_a_pivot_to_turn_about() {
+    // a ring of three petals is not centred on its axis (its bounding box is lopsided), so it needs `pivot` to
+    // turn about the axis it was built round
+    let ring =
+        "sheet(spine: [(100, 0, 0), (100, -50, 0)], width: [10, 10], around: 3, about: (0, 0)";
+    let r = run(&format!(
+        "shape plain = {ring})\nshape pinned = {ring}, pivot: (0, 0, 0))\n"
+    ))
+    .ok()
+    .unwrap();
+    let xs = |r: &RunResult, i: usize| {
+        r.snapshots[0]["shapes"][i]["mesh"]["verts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v[0].as_f64().unwrap())
+            .fold((f64::MAX, f64::MIN), |m, x| (m.0.min(x), m.1.max(x)))
+    };
+    // the vertices are where the scene says either way
+    let (a, b) = (xs(&r, 0), xs(&r, 1));
+    assert!(
+        (a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9,
+        "{a:?} {b:?}"
+    );
+    let (lo, hi) = xs(&r, 0);
+    assert!(
+        (hi + lo).abs() > 20.0,
+        "the ring should be lopsided: {lo} {hi}"
+    );
+    // half a turn about the axis mirrors the ring through it
+    let src = format!("{PROJECT}shape pinned = {ring}, pivot: (0, 0, 0))\nscene \"s\" for 2.frames:\n    timeline:\n        at 0f:\n            pinned.rotation.y = 180.deg\n    main:\n        wait 1.frame\n");
+    let r = run_in(&src, &RunOptions::default(), Path::new("."))
+        .ok()
+        .unwrap();
+    let (lo2, hi2) = xs(&r, 0);
+    assert!(
+        (lo2 + hi).abs() < 1e-6 && (hi2 + lo).abs() < 1e-6,
+        "{lo2} {hi2} vs {lo} {hi}"
+    );
+}
+
+#[test]
+fn a_sheet_thickness_can_be_a_list_that_tapers() {
+    let r = run("shape leaf = sheet(spine: [(0, 0, 0), (0, -50, 0), (0, -100, 0)], width: [10, 10, 0], across: 4, thickness: [8, 5, 2])\n").ok().unwrap();
+    let half_at = |y: f64| {
+        r.snapshots[0]["shapes"][0]["mesh"]["verts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|v| (v[1].as_f64().unwrap() - y).abs() < 1e-9)
+            .fold(0.0f64, |h, v| h.max(v[2].as_f64().unwrap().abs()))
+    };
+    assert!((half_at(0.0) - 4.0).abs() < 1e-9);
+    assert!((half_at(-100.0) - 1.0).abs() < 1e-9);
+    for bad in ["[8, 2]", "[8, 0, 2]", "[8, \"x\", 2]"] {
+        let e = run(&format!("shape p = sheet(spine: [(0, 0, 0), (0, -50, 0), (0, -100, 0)], width: [5, 5, 5], thickness: {bad})\n"))
+            .err()
+            .unwrap();
+        assert!(
+            e.code == "E-MSH-001" || e.code == "E-TYP-001",
+            "{bad}: {} {}",
+            e.code,
+            e.message
+        );
+    }
+}

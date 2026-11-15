@@ -16,7 +16,55 @@ import "parts/sky"
 
 import "lighting"
 
-scene "Pushpak" for 4.seconds:
+## The shot: the camera starts below the craft looking up, rises past the petals to look down on the lotus, and
+## swings a little way round it. The craft floats (a slow bob) and its flag flutters in the wind. The inner petals
+## turn anticlockwise (seen from above) and the second layer clockwise; the outer layer and the rest stay still.
+action float(self: Shape, over: Duration = 6.seconds):
+    self.drive(pos_y: "7 * sin(tau * t / 3)") over over
+
+scene "Pushpak" for 6.seconds:
     main:
-        start camera3.crane(height: 120, pitch: 0.07, over: 4.seconds)
-        camera3.orbit(turns: 0.12, over: 4.seconds)
+        # rise from 170 px below the craft to 180 px above it, always looking at it (989.4 is the lens distance)
+        start camera3.drive(pos_y: "170 - 350 * smoothstep(0, 1, t / 6)", rot_x: "atan((170 - 350 * smoothstep(0, 1, t / 6)) / 989.4) / tau") over 6.seconds
+        # the flag: a wave that runs out along it from the pole, bigger towards the free end
+        start flag.drive(z: "10 * ((x - x0) / 80) * sin(tau * ((x - x0) / 60 - 1.5 * t))", x0: dome_x) over 6.seconds
+        # the sun's rim (parts/dome.anim) is drawn on the dome, so it would be left behind as the camera swings round.
+        # The parts that carry it are round, so turning them shows nothing but moves the rim: they turn with the
+        # camera (0.06 turns in 6 seconds) and the rim stays on the edge the camera sees.
+        start body.drive(rot_y: "-0.01 * t") over 6.seconds
+        start band_b.drive(rot_y: "-0.01 * t") over 6.seconds
+        start band_d.drive(rot_y: "-0.01 * t") over 6.seconds
+        start waist.drive(rot_y: "-0.01 * t") over 6.seconds
+        start collar.drive(rot_y: "-0.01 * t") over 6.seconds
+        start crown_a.drive(rot_y: "-0.01 * t") over 6.seconds
+        start crown_b.drive(rot_y: "-0.01 * t") over 6.seconds
+        start crown_c.drive(rot_y: "-0.01 * t") over 6.seconds
+        start tip.drive(rot_y: "-0.01 * t") over 6.seconds
+        start body.float()
+        start band_a.float()
+        start band_b.float()
+        start band_c.float()
+        start band_d.float()
+        start band_e.float()
+        start band_t.float()
+        start band_g.float()
+        start waist.float()
+        start belt.float()
+        start crown_a.float()
+        start crown_b.float()
+        start crown_c.float()
+        start tip.float()
+        start pole.float()
+        start knob.float()
+        start collar.float()
+        start flag.float()
+        start deck.float()
+        start rim.float()
+        start railing.float()
+        # the two inner rings turn against each other about the craft's axis (a positive rot_y is clockwise from above)
+        start petals_inner.drive(rot_y: "-0.03 * t") over 6.seconds
+        start petals_mid.drive(rot_y: "0.03 * t") over 6.seconds
+        start petals_inner.float()
+        start petals_mid.float()
+        start petals_outer.float()
+        camera3.orbit(turns: 0.06, over: 6.seconds)

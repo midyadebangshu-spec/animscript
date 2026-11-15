@@ -1,7 +1,11 @@
 ## Pushpak Viman: sunset lighting. A low warm sun behind and to the left rims the dome and shines through the
 ## translucent petals; a weak cool fill from the camera side keeps the shadows from going black; the sky above is
-## warm and the ground below dark. Import it after the parts.
-stage3(sky: (#ffe3b0, #e8924a), fov: 40, exposure: 1.0, bloom: 0.55, ao: 80, quality: "medium", smooth: 55.deg, crease: 38.deg)
-shape sunset = sun_light(dir: (0.6, 0.12, -0.8), color: #ffb05c, intensity: 6, size: 5)
-shape fill = sun_light(dir: (-0.35, 0.3, 0.9), color: #8d9ad6, intensity: 0.55, size: 8)
-shape skylight = ambient_light(color: #ff9c58, ground: #4a2a30, intensity: 0.5)
+## warm, and the bright sea of cloud below throws warm light back up under the petals and the dome. A lantern inside
+## the ring of inner petals lights them from within. The thin bright edge down the sun side of the dome and
+## crown is drawn by their patterns (`sun_rim` in parts/dome.anim), not by a light: a light from behind strong enough
+## to rim them also shines through every translucent part and washes the craft out. Import it after the parts.
+stage3(sky: (#ffe3b0, #e8924a), fov: 40, exposure: 1.0, bloom: 0.6, ao: 90, quality: "medium", smooth: 55.deg, crease: 38.deg)
+shape sunset = sun_light(dir: (0.6, 0.12, -0.8), color: #ffa850, intensity: 7, size: 5)
+shape fill = sun_light(dir: (-0.35, 0.3, 0.9), color: #7f88d8, intensity: 0.4, size: 8)
+shape skylight = ambient_light(color: #ff9c58, ground: #c47a58, intensity: 0.6)
+shape lantern = point_light(at: (640, 455, 0), color: #ffb466, intensity: 0.7, reach: 150, size: 10, shadows: false)

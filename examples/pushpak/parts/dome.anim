@@ -1,6 +1,6 @@
 ## Pushpak Viman: the dome (the balloon). An egg-shaped body, bands of ornament, a heavy waist band and a crown.
 ## Opened on its own it previews itself; imported, the project and scene below are ignored.
-##   shapes: body, band_a .. band_e, waist, belt, crown_a, crown_b, crown_c, tip
+##   shapes: body, band_a .. band_e, waist, belt, collar, crown_a, crown_b, crown_c, tip, pole, knob, flag
 ## `dome_x` and `dome_top` place it (the top of the body, in px) so the main file can move the whole dome.
 import "std/3d"
 import "ornament"
@@ -26,10 +26,16 @@ shape body = lathe(profile: strip(0.02, 0.98, 32, 1), segments: 64, at: (dome_x,
 body.fill = #e8a24a
 body.fill = #e8b030
 body.opacity = 0.9
-body.surface(roughness: 0.3, metallic: 0.9, emissive: 0.45, transmission: 1.2)
+body.surface(roughness: 0.3, metallic: 0.6, emissive: 0.28, transmission: 1.2)
 body.mirror(reflect: 0.12)
-# the sun side glows: a warm emission strongest where the dome faces the low sun (behind and to the left)
-body.pattern(mask: "(0.5 + 0.5 * cos(tau * (u - 0.375))) ^ 2", color: #ffc060, glow: 2.4)
+# the sun's rim: a bright edge down the left side of the dome, where the low sun behind it grazes the surface.
+# u goes once round the dome (0.375 faces the sun, behind and to the left; 0.5 is the far left). The edge the camera
+# sees is at u = 0.52 when the shot starts and 0.58 when it ends (perspective and the camera's swing), and the surface
+# there is seen almost edge-on, so a band from 0.5 to about 0.62 in u is only some 15 px wide on screen at the start
+# on screen: a rim, not a lit side. In the shot these parts turn with the camera so the rim stays on that edge.
+let sun_rim = "smoothstep(0.44, 0.5, u) * (1 - smoothstep(0.59, 0.655, u))"
+# the sun side also glows more broadly, strongest where the dome faces the sun; the rim stands out of that
+body.pattern(mask: "min(1, 0.22 * (0.5 + 0.5 * cos(tau * (u - 0.375))) ^ 2 + " + sun_rim + ")", color: #ffe6a8, glow: 6)
 
 # ---- ornament: henna-style borders (parts/ornament.anim) as dark lace over the glowing body -------------------
 # A band is a lathe strip drawn in ink; `hole` cuts everything that is not ink, so the gold body shows through.
@@ -47,14 +53,14 @@ band_a.pattern(hole: "1 - (" + fans + ")", n: cells(0.06, 0.34, 0.85), a: aspect
 band_a.surface(roughness: 0.35, metallic: 0.7, emissive: 0.1)
 shape band_b = lathe(profile: strip(0.34, 0.365, 3, 1.016), segments: 64, at: (dome_x, egg_y(0.35), 0), double_sided: true)
 band_b.fill = #f2c56b
-band_b.surface(roughness: 0.22, metallic: 1, emissive: 0.7)
+band_b.surface(roughness: 0.22, metallic: 0.55, emissive: 0.32)
 shape band_c = lathe(profile: strip(0.375, 0.5, 8, 1.012), segments: 128, at: (dome_x, egg_y(0.44), 0), double_sided: true)
 band_c.fill = #2c1608
 band_c.pattern(hole: "1 - (" + tulips + ")", n: cells(0.375, 0.5, 0.6), a: aspect(0.375, 0.5, cells(0.375, 0.5, 0.6)), lw: 0.6)
 band_c.surface(roughness: 0.35, metallic: 0.7, emissive: 0.1)
 shape band_d = lathe(profile: strip(0.51, 0.535, 3, 1.016), segments: 64, at: (dome_x, egg_y(0.52), 0), double_sided: true)
 band_d.fill = #f2c56b
-band_d.surface(roughness: 0.22, metallic: 1, emissive: 0.7)
+band_d.surface(roughness: 0.22, metallic: 0.55, emissive: 0.32)
 shape band_e = lathe(profile: strip(0.545, 0.72, 10, 1.012), segments: 128, at: (dome_x, egg_y(0.63), 0), double_sided: true)
 band_e.fill = #3a1a08
 band_e.pattern(hole: "1 - (" + shells + ")", n: cells(0.545, 0.72, 1.05), a: aspect(0.545, 0.72, cells(0.545, 0.72, 1.05)), lw: 0.8)
@@ -73,51 +79,72 @@ band_g.surface(roughness: 0.35, metallic: 0.7, emissive: 0.1)
 # the waist: a gold band where the ropes hang, and the darker belt below it
 shape waist = lathe(profile: strip(0.755, 0.785, 3, 1.03), segments: 64, at: (dome_x, egg_y(0.77), 0), double_sided: true)
 waist.fill = #e9c25a
-waist.surface(roughness: 0.22, metallic: 1, emissive: 0.7)
+waist.surface(roughness: 0.22, metallic: 0.55, emissive: 0.32)
 shape belt = lathe(profile: strip(0.80, 0.97, 8, 1.01), segments: 64, at: (dome_x, egg_y(0.885), 0), double_sided: true)
 belt.fill = #4a200c
 belt.pattern(hole: "1 - (" + lace_edge + ")", n: cells(0.8, 0.97, 1.0), a: aspect(0.8, 0.97, cells(0.8, 0.97, 1.0)), lw: 1)
 belt.surface(roughness: 0.35, metallic: 0.7, emissive: 0.1)
 
-# the crown: three stacked tiers and a spike
-shape crown_a = lathe(profile: [(0, 0), (31, 0), (21.1, 8.7), (28.5, 13.6), (18.6, 24.8), (0, 27.3)], segments: 24, at: (dome_x, dome_top - 13.6, 0))
-shape crown_b = lathe(profile: [(0, 0), (21.1, 0), (13.6, 8.7), (18.6, 12.4), (9.9, 23.6), (0, 28.5)], segments: 24, at: (dome_x, dome_top - 40.9, 0))
-shape crown_c = lathe(profile: [(0, 0), (9.9, 0), (5, 8.7), (8.7, 14.9), (5, 26), (0, 32.2)], segments: 24, at: (dome_x, dome_top - 69.4, 0))
-shape tip = lathe(profile: [(0, 0), (3.7, 0), (1.9, 14.9), (0, 22.3)], segments: 12, at: (dome_x, dome_top - 93, 0))
+# the crown: three stacked tiers and a spike. It sits down on the dome: `crown_y` is the level of its base, 18 px below
+# the very top of the body, where the body is nearly as wide as the crown's base, and a gold collar on the dome's
+# shoulder closes the join (the base used to hang in the air above the dome's narrow top).
+let crown_y = dome_top + 18
+shape collar = lathe(profile: strip(0.02, 0.105, 6, 1.03), segments: 64, at: (dome_x, egg_y(0.0625), 0), double_sided: true)
+collar.fill = #e9c25a
+collar.surface(roughness: 0.22, metallic: 0.55, emissive: 0.32)
+collar.stroke_width = 0
+collar.pattern(mask: sun_rim, color: #fff0c0, glow: 5)
+shape crown_a = lathe(profile: [(0, 0), (31, 0), (21.1, 8.7), (28.5, 13.6), (18.6, 24.8), (0, 27.3)], segments: 24, at: (dome_x, crown_y - 13.6, 0))
+shape crown_b = lathe(profile: [(0, 0), (21.1, 0), (13.6, 8.7), (18.6, 12.4), (9.9, 23.6), (0, 28.5)], segments: 24, at: (dome_x, crown_y - 40.9, 0))
+shape crown_c = lathe(profile: [(0, 0), (9.9, 0), (5, 8.7), (8.7, 14.9), (5, 26), (0, 32.2)], segments: 24, at: (dome_x, crown_y - 69.4, 0))
+shape tip = lathe(profile: [(0, 0), (3.7, 0), (1.9, 14.9), (0, 22.3)], segments: 12, at: (dome_x, crown_y - 93, 0))
 crown_a.fill = #d8a63e
 crown_b.fill = #e9c25a
 crown_c.fill = #d8a63e
 tip.fill = #f2d27a
-crown_a.surface(roughness: 0.3, metallic: 0.7, emissive: 1.1)
-crown_b.surface(roughness: 0.3, metallic: 0.7, emissive: 1.1)
-crown_c.surface(roughness: 0.3, metallic: 0.7, emissive: 1.1)
-tip.surface(roughness: 0.2, metallic: 0.7, emissive: 1.1)
+crown_a.surface(roughness: 0.3, metallic: 0.45, emissive: 0.5)
+crown_b.surface(roughness: 0.3, metallic: 0.45, emissive: 0.5)
+crown_c.surface(roughness: 0.3, metallic: 0.45, emissive: 0.5)
+tip.surface(roughness: 0.2, metallic: 0.45, emissive: 0.5)
 
 body.stroke_width = 0
 band_t.stroke_width = 0
 band_g.stroke_width = 0
 band_a.stroke_width = 0
 band_b.stroke_width = 0
+band_b.pattern(mask: sun_rim, color: #fff0c0, glow: 5)
 band_c.stroke_width = 0
 band_d.stroke_width = 0
+band_d.pattern(mask: sun_rim, color: #fff0c0, glow: 5)
 band_e.stroke_width = 0
 waist.stroke_width = 0
+waist.pattern(mask: sun_rim, color: #fff0c0, glow: 5)
 belt.stroke_width = 0
 crown_a.stroke_width = 0
+crown_a.pattern(mask: sun_rim, color: #fff0c0, glow: 5)
 crown_b.stroke_width = 0
+crown_b.pattern(mask: sun_rim, color: #fff0c0, glow: 5)
 crown_c.stroke_width = 0
+crown_c.pattern(mask: sun_rim, color: #fff0c0, glow: 5)
 tip.stroke_width = 0
+tip.pattern(mask: sun_rim, color: #fff0c0, glow: 5)
 
 # a red triangular flag on a thin pole at the very top: the pole stands on the crown's tip and the flag is a pennant, wide
-# at the pole and narrowing to a point, rippling a little
-shape pole = lathe(profile: [(2.2, 0), (2.2, 72)], segments: 8, at: (dome_x, dome_top - 104 - 36, 0))
+# at the pole and narrowing to a point, rippling a little. The flag leaves the pole level (its spine has no slope there,
+# so its first edge runs straight up the pole) and droops towards its free end; the pole stands a little above it and
+# ends in a small knob.
+shape pole = lathe(profile: [(2.2, 0), (2.2, 82)], segments: 8, at: (dome_x, crown_y - 104 - 41, 0))
 pole.fill = #e9c25a
-pole.surface(roughness: 0.3, metallic: 1, emissive: 0.6)
+pole.surface(roughness: 0.3, metallic: 0.55, emissive: 0.4)
 pole.stroke_width = 0
-shape flag = sheet(spine: (0..10).map(i -> (dome_x + 78 * i / 10, dome_top - 104 - 54 + 7 * sin(i / 10 * 0.5.turns), 0)), width: (0..10).map(i -> 19 * (1 - i / 10)), facing: (0, 0, -1), across: 1, wave: 7, waves: 1.5)
+shape knob = sphere(radius: 4.5, segments: 12, rings: 6, at: (dome_x, crown_y - 104 - 84, 0))
+knob.fill = #f2d27a
+knob.surface(roughness: 0.25, metallic: 0.45, emissive: 0.5)
+knob.stroke_width = 0
+shape flag = sheet(spine: (0..12).map(i -> (dome_x + 80 * i / 12, crown_y - 104 - 58 + 12 * (i / 12) * (i / 12), 0)), width: (0..12).map(i -> 19 * (1 - i / 12)), facing: (0, 0, -1), across: 2, wave: 5, waves: 1.5)
 flag.fill = #d4201c
 flag.opacity = 0.96
-flag.surface(roughness: 0.6, emissive: 0.7, transmission: 1.6)
+flag.surface(roughness: 0.6, emissive: 0.45, transmission: 1.6)
 flag.stroke_width = 0
 
 project "Pushpak dome":
