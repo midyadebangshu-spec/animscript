@@ -274,8 +274,24 @@ impl Interp {
                     name,
                     args,
                     &[
-                        "spine", "width", "twist", "cup", "across", "facing", "around", "about",
-                        "phase", "tilt", "spin", "wave", "waves", "curl", "toward", "side",
+                        "spine",
+                        "width",
+                        "twist",
+                        "cup",
+                        "across",
+                        "facing",
+                        "around",
+                        "about",
+                        "phase",
+                        "tilt",
+                        "spin",
+                        "wave",
+                        "waves",
+                        "curl",
+                        "toward",
+                        "side",
+                        "thickness",
+                        "pivot",
                     ],
                     &["spine", "width"],
                 )?;
@@ -347,7 +363,21 @@ impl Interp {
                 };
                 let toward = self.point3(&m, "toward")?.unwrap_or([0.0, -1.0, 0.0]);
                 let spine = Mesh::curl_spine(&spine, curl, toward).map_err(msh)?;
+                // `thickness` turns the ribbon into a solid (two skins and an edge): one number, or one per spine
+                // point for a ribbon that tapers
+                let thickness = match m.get("thickness") {
+                    None => vec![],
+                    Some(Value::List(_)) => nums(self, "thickness", false)?,
+                    Some(v @ (Value::Num(_) | Value::Int(_))) => vec![self.num(v, "`thickness`")?],
+                    Some(o) => {
+                        return Err(msh(format!(
+                            "`thickness` is a number of px or a list of them, found {}",
+                            o.type_name()
+                        )))
+                    }
+                };
                 let opts = animscript_core::mesh::SheetOpts {
+                    thickness,
                     wave,
                     waves,
                     side: self.point3(&m, "side")?,
@@ -408,7 +438,8 @@ impl Interp {
                     (lo[1] + hi[1]) / 2.0,
                     (lo[2] + hi[2]) / 2.0,
                 ];
-                Ok(self.mesh_shape(mesh, Some(centre), None))
+                // `pivot` is the scene point the sheet turns about (default: the middle of its bounding box)
+                Ok(self.mesh_shape(mesh, Some(centre), self.pivot3(&m)?))
             }
             "extrude" => {
                 let m = self.bind(name, args, &["of", "depth", "points", "at", "pivot"], &[])?;

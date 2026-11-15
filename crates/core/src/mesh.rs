@@ -5,7 +5,7 @@
 //! points out of the solid. Faces are convex (the builders triangulate anything concave).
 use crate::geometry::P;
 
-/// Extra options of `Mesh::sheet_opts`: a surface wave (`wave` px amplitude, `waves` cycles along the length) and a
+/// Extra options of `Mesh::sheet_opts`: a thickness, a surface wave (`wave` px amplitude, `waves` cycles along the length) and a
 /// fixed `side` direction for the width of the ribbon (kept perpendicular to the spine), so a ribbon whose spine
 /// turns keeps its width across the same axis.
 #[derive(Clone, Debug, Default)]
@@ -13,6 +13,9 @@ pub struct SheetOpts {
     pub wave: f64,
     pub waves: f64,
     pub side: Option<[f64; 3]>,
+    /// Empty: a surface with no thickness. One number: a solid that thick all along. One number per spine point:
+    /// a solid whose thickness changes along the spine (a leaf thick at the base and thin at the tip).
+    pub thickness: Vec<f64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -486,6 +489,16 @@ impl Mesh {
             ]
         };
         let face = unit(facing).ok_or("`facing` must not be a zero vector")?;
+        let thick_at = |i: usize| match opts.thickness.len() {
+            0 => Ok(0.0),
+            1 => Ok(opts.thickness[0]),
+            l if l == n => Ok(opts.thickness[i]),
+            l => Err(format!(
+                "`thickness` is one number, or one per spine point ({n}), found {l}"
+            )),
+        };
+        // the thickness at every vertex (that of its spine point)
+        let mut thick: Vec<f64> = vec![];
         let mut verts: Vec<[f64; 3]> = vec![];
         let mut rows: Vec<Vec<u32>> = vec![];
         for i in 0..n {
@@ -529,8 +542,10 @@ impl Mesh {
                 spine[i][1] + n2[1] * ripple,
                 spine[i][2] + n2[2] * ripple,
             ];
+            let th_i = thick_at(i)?;
             if w == 0.0 {
                 verts.push(p);
+                thick.push(th_i);
                 rows.push(vec![verts.len() as u32 - 1; across + 1]);
                 continue;
             }
@@ -543,6 +558,7 @@ impl Mesh {
                     p[1] + s2[1] * w * e + n2[1] * off,
                     p[2] + s2[2] * w * e + n2[2] * off,
                 ]);
+                thick.push(th_i);
                 row.push(verts.len() as u32 - 1);
             }
             rows.push(row);
@@ -569,10 +585,89 @@ impl Mesh {
                 }
             }
         }
-        Ok(Mesh {
+        let m = Mesh {
             verts,
             faces,
             double_sided: true,
+            uv,
+        };
+        if opts.thickness.is_empty() {
+            Ok(m)
+        } else {
+            m.thicken_by(&thick)
+        }
+    }
+
+    /// A surface given thickness: two skins, half of `thickness` each side of it along the surface normal, joined
+    /// round the open edge, so a sheet becomes a closed solid (drawn from outside only). Both skins and the edge
+    /// keep the surface coordinates of the point they came from.
+    pub fn thicken(&self, thickness: f64) -> Result<Mesh, String> {
+        self.thicken_by(&vec![thickness; self.verts.len()])
+    }
+
+    /// `thicken` with a thickness for every vertex, so the solid can taper.
+    pub fn thicken_by(&self, thickness: &[f64]) -> Result<Mesh, String> {
+        if thickness.len() != self.verts.len() {
+            return Err("`thickness` needs one number per vertex".into());
+        }
+        if thickness.iter().any(|t| !t.is_finite() || *t <= 0.0) {
+            return Err("`thickness` must be a positive number".into());
+        }
+        // a normal at every vertex: the sum of the normals of the faces around it
+        let mut nrm = vec![[0.0f64; 3]; self.verts.len()];
+        for f in 0..self.faces.len() {
+            let n = self.face_normal(f);
+            for &i in &self.faces[f] {
+                for k in 0..3 {
+                    nrm[i as usize][k] += n[k];
+                }
+            }
+        }
+        let nv = self.verts.len() as u32;
+        let mut verts = Vec::with_capacity(self.verts.len() * 2);
+        for sign in [1.0, -1.0] {
+            for ((v, n), t) in self.verts.iter().zip(&nrm).zip(thickness) {
+                let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+                let s = if l < 1e-12 { 0.0 } else { sign * t / 2.0 / l };
+                verts.push([v[0] + n[0] * s, v[1] + n[1] * s, v[2] + n[2] * s]);
+            }
+        }
+        let has_uv = self.uv.len() == self.faces.len();
+        let mut faces = self.faces.clone();
+        let mut uv = if has_uv { self.uv.clone() } else { vec![] };
+        // the other skin, wound the other way
+        for (f, fa) in self.faces.iter().enumerate() {
+            faces.push(fa.iter().rev().map(|i| i + nv).collect());
+            if has_uv {
+                uv.push(self.uv[f].iter().rev().cloned().collect());
+            }
+        }
+        // the edge: a wall along every edge that only one face uses
+        let mut used = std::collections::BTreeMap::new();
+        for fa in &self.faces {
+            for k in 0..fa.len() {
+                let (a, b) = (fa[k], fa[(k + 1) % fa.len()]);
+                *used.entry((a.min(b), a.max(b))).or_insert(0u32) += 1;
+            }
+        }
+        for (f, fa) in self.faces.iter().enumerate() {
+            for k in 0..fa.len() {
+                let k2 = (k + 1) % fa.len();
+                let (a, b) = (fa[k], fa[k2]);
+                if used[&(a.min(b), a.max(b))] != 1 {
+                    continue;
+                }
+                faces.push(vec![b, a, a + nv, b + nv]);
+                if has_uv {
+                    let (ua, ub) = (self.uv[f][k], self.uv[f][k2]);
+                    uv.push(vec![ub, ua, ua, ub]);
+                }
+            }
+        }
+        Ok(Mesh {
+            verts,
+            faces,
+            double_sided: false,
             uv,
         })
     }

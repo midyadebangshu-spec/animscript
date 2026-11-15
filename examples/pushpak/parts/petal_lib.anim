@@ -16,25 +16,29 @@ fn petal_width(half_w: Number, t: Number) -> Number:
     return half_w * (0.3 * (1 - t) * (1 - t) + sqrt(sn) * sqrt(sqrt(sn)))
 
 # a petal's surface can also wave: `wave` is the amplitude (px, out of the face) and `waves` the cycles from base to tip
+# every ring takes `thick` last: the petal's thickness in px at its base (`sheet(thickness: [...])`); it tapers
+# evenly to 15% of that at the tip, so a petal is a solid leaf, thick where it is rooted and fine at the point, with
+# an edge, not a surface with no thickness. A ring's `pivot` is on its axis, so `rot_y` turns it about the axis.
 # one ring of `count` petals about the vertical line through x; `spin` turns every petal about its own vertical axis
 # (through its base), so the ring becomes a pinwheel
-fn petal_ring(x: Number, base_y: Number, height: Number, r0: Number, lean: Number, bulge: Number, flare: Number, spin: Angle, s: Number, sway: Number, wave: Number, waves: Number, half_w: Number, cup: Number, count: Int, phase: Angle) -> Shape:
-    return sheet(spine: petal_spine(x, base_y, height, r0, lean, bulge, flare, s, sway, 14), width: (0..14).map(i -> petal_width(half_w, i / 14)), cup: cup, across: 8, facing: (1, 0, 0), around: count, about: (x, 0), phase: phase, spin: spin, wave: wave, waves: waves)
+fn petal_ring(x: Number, base_y: Number, height: Number, r0: Number, lean: Number, bulge: Number, flare: Number, spin: Angle, s: Number, sway: Number, wave: Number, waves: Number, half_w: Number, cup: Number, count: Int, phase: Angle, thick: Number) -> Shape:
+    return sheet(spine: petal_spine(x, base_y, height, r0, lean, bulge, flare, s, sway, 14), width: (0..14).map(i -> petal_width(half_w, i / 14)), cup: cup, across: 8, facing: (1, 0, 0), around: count, about: (x, 0), phase: phase, spin: spin, wave: wave, waves: waves, thickness: (0..14).map(i -> thick * (1 - 0.85 * i / 14)), pivot: (x, base_y, 0))
 
 # a ring of `count` petals that come out of the base flat and curl up in one curve: each starts at radius r0 heading
 # outwards and its tip points straight up. `length` is the petal's length along its curve (the tip ends about 0.64 of
 # it out and up); the width runs across z the whole way.
-fn petal_arc_ring(x: Number, base_y: Number, r0: Number, length: Number, half_w: Number, cup: Number, count: Int, phase: Angle) -> Shape:
-    return sheet(spine: (0..14).map(i -> (x + r0 + length * i / 14, base_y, 0)), width: (0..14).map(i -> petal_width(half_w, i / 14)), cup: cup, across: 8, side: (0, 0, 1), curl: 0.25.turns, toward: (0, -1, 0), around: count, about: (x, 0), phase: phase)
+fn petal_arc_ring(x: Number, base_y: Number, r0: Number, length: Number, half_w: Number, cup: Number, count: Int, phase: Angle, thick: Number) -> Shape:
+    return sheet(spine: (0..14).map(i -> (x + r0 + length * i / 14, base_y, 0)), width: (0..14).map(i -> petal_width(half_w, i / 14)), cup: cup, across: 8, side: (0, 0, 1), curl: 0.25.turns, toward: (0, -1, 0), around: count, about: (x, 0), phase: phase, thickness: (0..14).map(i -> thick * (1 - 0.85 * i / 14)), pivot: (x, base_y, 0))
 
 # like petal_arc_ring, but the petal first lies flat along the base for `flat` px and only then curls up in one
 # quarter-turn arc of radius `radius` (so its tip is `radius` above the base and points straight up).
 fn petal_flat_arc_spine(x: Number, base_y: Number, r0: Number, flat: Number, radius: Number, n: Int) -> List:
     return (0..n).map(i -> (x + r0 + min(i / n * (flat + radius * 1.5708), flat) + radius * sin(min(max(i / n * (flat + radius * 1.5708) - flat, 0) / radius / 6.2832, 0.25) * 1.turns), base_y - radius * (1 - cos(min(max(i / n * (flat + radius * 1.5708) - flat, 0) / radius / 6.2832, 0.25) * 1.turns)), 0))
 
-fn petal_flat_arc_ring(x: Number, base_y: Number, r0: Number, flat: Number, radius: Number, half_w: Number, cup: Number, count: Int, phase: Angle) -> Shape:
-    return sheet(spine: petal_flat_arc_spine(x, base_y, r0, flat, radius, 20), width: (0..20).map(i -> petal_width(half_w, i / 20)), cup: cup, across: 8, side: (0, 0, 1), around: count, about: (x, 0), phase: phase)
+fn petal_flat_arc_ring(x: Number, base_y: Number, r0: Number, flat: Number, radius: Number, half_w: Number, cup: Number, count: Int, phase: Angle, thick: Number) -> Shape:
+    return sheet(spine: petal_flat_arc_spine(x, base_y, r0, flat, radius, 20), width: (0..20).map(i -> petal_width(half_w, i / 20)), cup: cup, across: 8, side: (0, 0, 1), around: count, about: (x, 0), phase: phase, thickness: (0..20).map(i -> thick * (1 - 0.85 * i / 20)), pivot: (x, base_y, 0))
 
-# a ring of flat petals: straight blades lying along the base, `length` long, with no curl
-fn petal_flat_ring(x: Number, base_y: Number, r0: Number, length: Number, half_w: Number, cup: Number, count: Int, phase: Angle) -> Shape:
-    return sheet(spine: (0..16).map(i -> (x + r0 + length * i / 16, base_y, 0)), width: (0..16).map(i -> petal_width(half_w, i / 16)), cup: cup, across: 8, side: (0, 0, 1), around: count, about: (x, 0), phase: phase)
+# a ring of flat petals: straight blades lying along the base, `length` long, with no curl (40 steps along the
+# blade, so its outline is a smooth curve right to the point: with 16 the last step was a long straight needle)
+fn petal_flat_ring(x: Number, base_y: Number, r0: Number, length: Number, half_w: Number, cup: Number, count: Int, phase: Angle, thick: Number) -> Shape:
+    return sheet(spine: (0..40).map(i -> (x + r0 + length * i / 40, base_y, 0)), width: (0..40).map(i -> petal_width(half_w, i / 40)), cup: cup, across: 8, side: (0, 0, 1), around: count, about: (x, 0), phase: phase, thickness: (0..40).map(i -> thick * (1 - 0.85 * i / 40)), pivot: (x, base_y, 0))

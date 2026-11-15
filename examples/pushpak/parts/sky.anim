@@ -28,7 +28,8 @@ sun_glow.stroke_width = 0
 
 # fractal noise from three octaves, scaled by `s` (bigger s = smaller clouds)
 let fbm = "(0.55 * noise(u * s, v * s * 0.58) + 0.28 * noise(u * s * 2.1 + 5, v * s * 1.2 + 3) + 0.14 * noise(u * s * 4.3 + 9, v * s * 2.5 + 7))"
-let bank = "smoothstep(lo, lo + 0.35, " + fbm + " + bias - abs(v - mid) * fall)"
+# (a bank fades out towards the two ends of its wall, so the wall's edge never shows when the camera swings round)
+let bank = "smoothstep(lo, lo + 0.35, " + fbm + " + bias - abs(v - mid) * fall) * smoothstep(0, 0.08, u) * smoothstep(1, 0.92, u)"
 
 fn cloud_wall(z: Number, w: Number, h: Number, y: Number) -> Shape:
     return sheet(spine: [(sky_x, y + h / 2, z), (sky_x, y - h / 2, z)], width: [w / 2, w / 2], facing: (0, 0, -1), across: 1)
@@ -99,7 +100,7 @@ haze_near.surface(roughness: 1, emissive: 0.9)
 haze_near.stroke_width = 0
 
 # light shafts (crepuscular rays) fanning from the sun, and the glare: a long horizontal streak and two diagonal ones
-# through it, a bright star at its centre. One sheet, in front of the clouds: rays n of them, uneven with noise.
+# through it, a bright star at its centre. One sheet: rays n of them, uneven with noise.
 let rx = "(u - 0.5) * w"
 let ry = "(v - 0.5) * h"
 let dist = "sqrt(" + rx + " * " + rx + " + " + ry + " * " + ry + ")"
@@ -108,7 +109,10 @@ let streak = "exp(-((" + ry + " / 7) ^ 2)) * exp(-abs(" + rx + ") / 330)"
 let diag1 = "exp(-((((" + ry + ") * 0.866 - (" + rx + ") * 0.5) / 5) ^ 2)) * exp(-" + dist + " / 150)"
 let diag2 = "exp(-((((" + ry + ") * 0.866 + (" + rx + ") * 0.5) / 5) ^ 2)) * exp(-" + dist + " / 150)"
 let star = "exp(-" + dist + " / 38)"
-shape glare = sun_wall(450, 3400, 1900)
+# It sits far back, just in front of the far clouds and near the sun's own depth, so it stays on the sun when the
+# camera moves (close to the camera it slid off the sun). It is 1.834 times larger there to look the same size; the
+# equation still measures in the px it had at depth 450 (`w`, `h`).
+shape glare = sun_wall(1650, 3400 * 1.834, 1900 * 1.834)
 glare.fill = #ffe6b0
 glare.opacity = 0.002
 glare.pattern(mask: "min(1, " + rays + " + " + streak + " + " + diag1 + " + " + diag2 + " + " + star + ")", color: #fff0c8, alpha: 0.85, glow: 7, w: 3400, h: 1900)

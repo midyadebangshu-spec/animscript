@@ -565,3 +565,94 @@ fn a_sheet_can_keep_its_width_across_a_fixed_side_while_the_spine_turns() {
         );
     }
 }
+
+#[test]
+fn a_thickened_sheet_is_a_closed_solid_of_that_thickness() {
+    // a flat ribbon in the plane z = 0, pointed at the far end
+    let spine = [[0.0, 0.0, 0.0], [0.0, -50.0, 0.0], [0.0, -100.0, 0.0]];
+    let flat = Mesh::sheet(&spine, &[10.0, 10.0, 0.0], &[], 0.0, 4, [0.0, 0.0, -1.0]).unwrap();
+    let solid = flat.thicken(6.0).unwrap();
+    // two skins, half the thickness each side of the sheet
+    let (lo, hi) = solid
+        .verts
+        .iter()
+        .fold((f64::MAX, f64::MIN), |m, v| (m.0.min(v[2]), m.1.max(v[2])));
+    assert!(
+        (lo + 3.0).abs() < 1e-9 && (hi - 3.0).abs() < 1e-9,
+        "{lo} {hi}"
+    );
+    assert_eq!(solid.verts.len(), 2 * flat.verts.len());
+    // closed: every edge is shared by exactly two faces, in opposite directions
+    let mut edges = std::collections::BTreeMap::new();
+    for f in &solid.faces {
+        for k in 0..f.len() {
+            *edges.entry((f[k], f[(k + 1) % f.len()])).or_insert(0) += 1;
+        }
+    }
+    for ((a, b), n) in &edges {
+        assert_eq!(*n, 1, "edge {a}-{b} used {n} times one way");
+        assert_eq!(
+            edges.get(&(*b, *a)),
+            Some(&1),
+            "edge {a}-{b} has no partner"
+        );
+    }
+    // a solid: culled from behind, its faces point outwards, and it keeps surface coordinates
+    assert!(!solid.double_sided);
+    let c = [0.0, -50.0, 0.0];
+    for f in 0..solid.faces.len() {
+        let n = solid.face_normal(f);
+        let p = centroid(&solid, f);
+        let out = n[0] * (p[0] - c[0]) + n[2] * (p[2] - c[2]);
+        if n[2].abs() > 0.5 {
+            assert!(n[2] * p[2] > 0.0, "skin face {f} points inwards");
+        } else if n[0].abs() > 0.5 {
+            assert!(out > 0.0, "edge face {f} points inwards");
+        }
+    }
+    assert_eq!(solid.uv.len(), solid.faces.len());
+    // a thickness must be a positive finite number
+    assert!(flat.thicken(0.0).is_err());
+    assert!(flat.thicken(-1.0).is_err());
+    assert!(flat.thicken(f64::NAN).is_err());
+}
+
+#[test]
+fn a_sheet_can_taper_in_thickness_along_its_spine() {
+    // a flat ribbon in the plane z = 0: 8 thick at the base, 2 at the far end
+    let spine = [[0.0, 0.0, 0.0], [0.0, -50.0, 0.0], [0.0, -100.0, 0.0]];
+    let opts = SheetOpts {
+        thickness: vec![8.0, 5.0, 2.0],
+        ..Default::default()
+    };
+    let m = Mesh::sheet_opts(&spine, &[10.0; 3], &[], 0.0, 4, [0.0, 0.0, -1.0], &opts).unwrap();
+    assert!(!m.double_sided);
+    let half_at = |y: f64| {
+        m.verts
+            .iter()
+            .filter(|v| (v[1] - y).abs() < 1e-9)
+            .fold(0.0f64, |h, v| h.max(v[2].abs()))
+    };
+    assert!((half_at(0.0) - 4.0).abs() < 1e-9);
+    assert!((half_at(-50.0) - 2.5).abs() < 1e-9);
+    assert!((half_at(-100.0) - 1.0).abs() < 1e-9);
+    // one number is the same thickness all along
+    let even = SheetOpts {
+        thickness: vec![6.0],
+        ..Default::default()
+    };
+    let m = Mesh::sheet_opts(&spine, &[10.0; 3], &[], 0.0, 4, [0.0, 0.0, -1.0], &even).unwrap();
+    assert!(m.verts.iter().all(|v| (v[2].abs() - 3.0).abs() < 1e-9));
+    // one per spine point, all above zero
+    for bad in [
+        vec![8.0, 2.0],
+        vec![8.0, 0.0, 2.0],
+        vec![8.0, f64::NAN, 2.0],
+    ] {
+        let o = SheetOpts {
+            thickness: bad,
+            ..Default::default()
+        };
+        assert!(Mesh::sheet_opts(&spine, &[10.0; 3], &[], 0.0, 4, [0.0, 0.0, -1.0], &o).is_err());
+    }
+}

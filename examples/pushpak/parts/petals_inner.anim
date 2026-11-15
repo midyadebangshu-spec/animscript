@@ -16,9 +16,10 @@ param sway = 0
 param wave = 8
 param waves = 1
 param count = 11
+param thick = 6
 param half_w = 36
 
-shape petals_inner = petal_ring(axis_x, base_y, height, r_base, lean, bulge, flare, spin, s_bend, sway, wave, waves, half_w, -0.35, count, 0.turns)
+shape petals_inner = petal_ring(axis_x, base_y, height, r_base, lean, bulge, flare, spin, s_bend, sway, wave, waves, half_w, -0.35, count, 0.turns, thick)
 petals_inner.fill = #dca6b4
 petals_inner.opacity = 0.66
 petals_inner.surface(roughness: 0.4, metallic: 0.3, emissive: 0.1, transmission: 2.4)
